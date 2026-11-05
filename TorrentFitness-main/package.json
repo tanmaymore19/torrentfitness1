@@ -1,7 +1,7 @@
 {
   "name": "torrent-fitness",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -13,7 +13,9 @@
     "preview": "vite preview",
     "clean": "node -e \"const fs=require('fs'); if(fs.existsSync('dist')) fs.rmSync('dist',{recursive:true,force:true});\"",
     "lint": "tsc --noEmit",
-    "generate-secret": "node -e \"console.log('SESSION_SECRET=' + require('crypto').randomBytes(64).toString('hex'))\""
+    "generate-secret": "node -e \"console.log('SESSION_SECRET=' + require('crypto').randomBytes(64).toString('hex'))\"",
+    "android:patch-gradle": "node scripts/patch-android-build-gradle.js",
+    "android:build": "bun run build && npx cap sync android && cd android && .\\gradlew bundleRelease"
   },
   "dependencies": {
     "@capacitor/android": "^8.6.0",

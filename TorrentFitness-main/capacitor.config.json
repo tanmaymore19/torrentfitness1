@@ -1,0 +1,14 @@
+{
+  "appId": "com.torrentfitness.app",
+  "appName": "Torrent Fitness",
+  "webDir": "dist",
+  "android": {
+    "buildOptions": {
+      "keystorePath": "release.keystore",
+      "keystoreAlias": "torrentfitness"
+    }
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}
