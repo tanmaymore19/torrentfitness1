@@ -1,7 +1,7 @@
 {
   "name": "torrent-fitness",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -16,6 +16,9 @@
     "generate-secret": "node -e \"console.log('SESSION_SECRET=' + require('crypto').randomBytes(64).toString('hex'))\""
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/cli": "^7.6.10",
+    "@capacitor/core": "^8.6.0",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/compression": "^1.8.1",
