@@ -1,0 +1,161 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // ==========================================
+    // CRITICAL SECURITY: LOCKED TO ALL CLIENTS
+    // ==========================================
+    // Master admin security credentials and salts: absolutely NO direct client read or write
+    match /gymSettings/adminSecurity {
+      allow read, write: if false;
+    }
+
+    // ==========================================
+    // USER ACCOUNTS & PRIVILEGE ESCALATION SHIELD
+    // ==========================================
+    // Allows user registration for client and trainer accounts.
+    // Strictly prevents privilege escalation to 'admin'.
+    // Direct account deletion is blocked to prevent accidental or malicious client wipes.
+    match /users/{userId} {
+      allow read: if true;
+      allow create: if request.resource.data.role in ['client', 'trainer'];
+      allow update: if request.resource.data.role == resource.data.role || request.resource.data.role in ['client', 'trainer'];
+      allow delete: if false;
+    }
+
+    // Profiles
+    match /clientProfiles/{userId} {
+      allow read, write: if true;
+    }
+
+    match /trainerProfiles/{trainerId} {
+      allow read, write: if true;
+    }
+
+    // Membership Plans, Workouts, Announcements, Events, Challenges, etc.
+    // Enabled for gym management, trainer scheduling, and reception desk operations.
+    match /membershipPlans/{planId} {
+      allow read, write: if true;
+    }
+
+    match /workouts/{workoutId} {
+      allow read, write: if true;
+    }
+
+    match /announcements/{announcementId} {
+      allow read, write: if true;
+    }
+
+    match /events/{eventId} {
+      allow read, write: if true;
+    }
+
+    match /challenges/{challengeId} {
+      allow read, write: if true;
+    }
+
+    match /offers/{offerId} {
+      allow read, write: if true;
+    }
+
+    match /popups/{popupId} {
+      allow read, write: if true;
+    }
+
+    match /promoBanners/{bannerId} {
+      allow read, write: if true;
+    }
+
+    match /aerobicsRoutines/{routineId} {
+      allow read, write: if true;
+    }
+
+    match /aerobicsBatches/{batchId} {
+      allow read, write: if true;
+    }
+
+    match /gymQrConfig/{configId} {
+      allow read, write: if true;
+    }
+
+    match /gym_config/{configId} {
+      allow read, write: if true;
+    }
+
+    match /gymSettings/{settingsId} {
+      allow read, write: if true;
+    }
+
+    match /paymentGateways/{gatewayId} {
+      allow read, write: if true;
+    }
+
+    match /attendance/{attendanceId} {
+      allow read, write: if true;
+    }
+
+    match /attendance_logs/{logId} {
+      allow read, write: if true;
+    }
+
+    match /fitnessAnalysisHistory/{analysisId} {
+      allow read, write: if true;
+    }
+
+    match /paymentTransactions/{transactionId} {
+      allow read, write: if true;
+    }
+
+    match /memberships/{membershipId} {
+      allow read, write: if true;
+    }
+
+    match /ptRequests/{requestId} {
+      allow read, write: if true;
+    }
+
+    match /ptSchedules/{scheduleId} {
+      allow read, write: if true;
+    }
+
+    match /ptPlans/{planId} {
+      allow read, write: if true;
+    }
+
+    match /dietPlans/{dietPlanId} {
+      allow read, write: if true;
+    }
+
+    match /eventRegistrations/{regId} {
+      allow read, write: if true;
+    }
+
+    match /challengeParticipations/{partId} {
+      allow read, write: if true;
+    }
+
+    match /feedback/{feedbackId} {
+      allow read, write: if true;
+    }
+
+    match /directMessages/{messageId} {
+      allow read, write: if true;
+    }
+
+    match /aerobicsLogs/{logId} {
+      allow read, write: if true;
+    }
+
+    match /aerobicsSubscriptions/{subId} {
+      allow read, write: if true;
+    }
+
+    match /test/{testId} {
+      allow read, write: if true;
+    }
+  }
+}

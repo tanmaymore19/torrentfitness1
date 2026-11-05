@@ -1,0 +1,541 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Base user account profile",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "username": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "photoUrl": { "type": "string" },
+        "role": { "type": "string", "enum": ["client", "trainer", "admin"] },
+        "status": { "type": "string", "enum": ["active", "pending", "rejected"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "username", "role", "status", "photoUrl"]
+    },
+    "ClientProfile": {
+      "title": "ClientProfile",
+      "description": "Client fitness and membership profile",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoUrl": { "type": "string" },
+        "phone": { "type": "string" },
+        "age": { "type": "number" },
+        "height": { "type": "number" },
+        "weight": { "type": "number" },
+        "fitnessGoal": { "type": "string" },
+        "membershipStatus": { "type": "string", "enum": ["active", "inactive"] },
+        "membershipPlanName": { "type": "string" },
+        "membershipStartDate": { "type": "string" },
+        "membershipEndDate": { "type": "string" },
+        "assignedTrainerId": { "type": "string" },
+        "assignedTrainerName": { "type": "string" },
+        "ptStatus": { "type": "string", "enum": ["none", "pending", "active"] },
+        "lastAiAnalysisDate": { "type": "string" },
+        "latestAiAnalysis": { "type": "object" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "membershipStatus", "ptStatus"]
+    },
+    "TrainerProfile": {
+      "title": "TrainerProfile",
+      "description": "Gym trainer profile with badges and PT availability",
+      "type": "object",
+      "properties": {
+        "trainerId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoUrl": { "type": "string" },
+        "badge": { "type": "string", "enum": ["crown", "shield", "none"] },
+        "isOwner": { "type": "boolean" },
+        "isCoManager": { "type": "boolean" },
+        "bio": { "type": "string" },
+        "specializations": { "type": "string" },
+        "ptAvailable": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["pending", "active", "rejected"] },
+        "rating": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["trainerId", "displayName", "photoUrl", "status", "ptAvailable"]
+    },
+    "MembershipPlan": {
+      "title": "MembershipPlan",
+      "description": "Available gym membership plans",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "durationMonths": { "type": "number" },
+        "price": { "type": "number" },
+        "originalPrice": { "type": "number" },
+        "benefits": { "type": "string" },
+        "active": { "type": "boolean" },
+        "popular": { "type": "boolean" }
+      },
+      "required": ["name", "durationMonths", "price", "active"]
+    },
+    "Membership": {
+      "title": "Membership",
+      "description": "User active or historical gym membership record",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "planId": { "type": "string" },
+        "planName": { "type": "string" },
+        "durationMonths": { "type": "number" },
+        "amountPaid": { "type": "number" },
+        "paymentMode": { "type": "string", "enum": ["online", "cash"] },
+        "status": { "type": "string", "enum": ["active", "inactive", "expired", "cancelled"] },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "ptIncluded": { "type": "boolean" },
+        "ptTrainerId": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["clientId", "planName", "paymentMode", "status", "startDate", "endDate"]
+    },
+    "PtRequest": {
+      "title": "PtRequest",
+      "description": "Request for personal training from a member to a trainer",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "clientPhotoUrl": { "type": "string" },
+        "trainerId": { "type": "string" },
+        "trainerName": { "type": "string" },
+        "fee": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "rejected", "payment_pending", "active"] },
+        "requestedAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["clientId", "trainerId", "status"]
+    },
+    "PtSchedule": {
+      "title": "PtSchedule",
+      "description": "Recurring PT timing set by trainer",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "trainerId": { "type": "string" },
+        "recurringTime": { "type": "string" },
+        "daysOfWeek": { "type": "string" },
+        "notes": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["clientId", "trainerId", "recurringTime"]
+    },
+    "Workout": {
+      "title": "Workout",
+      "description": "General workout library or custom assigned workout",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "goal": { "type": "string" },
+        "bodyPart": { "type": "string" },
+        "clientId": { "type": "string" },
+        "trainerId": { "type": "string" },
+        "isGeneral": { "type": "boolean" },
+        "exercises": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "bodyPart", "isGeneral"]
+    },
+    "DietPlan": {
+      "title": "DietPlan",
+      "description": "Nutritional diet plan for PT client",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "trainerId": { "type": "string" },
+        "title": { "type": "string" },
+        "guidelines": { "type": "string" },
+        "mealsJson": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["clientId", "trainerId", "title"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Attendance log for gym entry via QR code",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "clientPhotoUrl": { "type": "string" },
+        "entryDate": { "type": "string" },
+        "entryTime": { "type": "string" },
+        "exitTime": { "type": "string" },
+        "sessionStatus": { "type": "string", "enum": ["active", "completed"] },
+        "sessionDurationMinutes": { "type": "number" },
+        "qrValidationToken": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["clientId", "entryDate", "entryTime", "sessionStatus"]
+    },
+    "FitnessAnalysisHistory": {
+      "title": "FitnessAnalysisHistory",
+      "description": "Result history of rule-based Fitness Analysis (photos deleted)",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "age": { "type": "number" },
+        "height": { "type": "number" },
+        "weight": { "type": "number" },
+        "bmi": { "type": "number" },
+        "fitnessFocus": { "type": "string" },
+        "recommendedGoal": { "type": "string" },
+        "recommendedWorkout": { "type": "string" },
+        "dietRecommendation": { "type": "string" },
+        "frontPhotoUrl": { "type": "string" },
+        "sidePhotoUrl": { "type": "string" },
+        "privacyMode": { "type": "boolean" },
+        "analysisDate": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["clientId", "recommendedGoal", "recommendedWorkout", "analysisDate"]
+    },
+    "Event": {
+      "title": "Event",
+      "description": "Gym event",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "eventDate": { "type": "string" },
+        "eventTime": { "type": "string" },
+        "location": { "type": "string" },
+        "registrationEnabled": { "type": "boolean" },
+        "registeredCount": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "eventDate", "registrationEnabled"]
+    },
+    "EventRegistration": {
+      "title": "EventRegistration",
+      "description": "Member registration for an event",
+      "type": "object",
+      "properties": {
+        "eventId": { "type": "string" },
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "registeredAt": { "type": "string" }
+      },
+      "required": ["eventId", "clientId", "registeredAt"]
+    },
+    "Challenge": {
+      "title": "Challenge",
+      "description": "Gym fitness challenge",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "target": { "type": "string" },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "participantsCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "completed"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "startDate", "endDate", "status"]
+    },
+    "ChallengeParticipation": {
+      "title": "ChallengeParticipation",
+      "description": "User enrollment in a gym challenge",
+      "type": "object",
+      "properties": {
+        "challengeId": { "type": "string" },
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "progress": { "type": "string" },
+        "status": { "type": "string", "enum": ["joined", "completed"] },
+        "joinedAt": { "type": "string" }
+      },
+      "required": ["challengeId", "clientId", "status"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Gym announcement from management",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "targetRole": { "type": "string", "enum": ["all", "clients", "trainers"] },
+        "priority": { "type": "string", "enum": ["normal", "high", "urgent"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "content", "targetRole", "createdAt"]
+    },
+    "Offer": {
+      "title": "Offer",
+      "description": "Promotional offers and coupons",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "code": { "type": "string" },
+        "discountPercent": { "type": "number" },
+        "description": { "type": "string" },
+        "active": { "type": "boolean" },
+        "validUntil": { "type": "string" }
+      },
+      "required": ["title", "code", "discountPercent", "active"]
+    },
+    "Popup": {
+      "title": "Popup",
+      "description": "Promotional popup on Home page",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "buttonText": { "type": "string" },
+        "buttonAction": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "active"]
+    },
+    "Feedback": {
+      "title": "Feedback",
+      "description": "Member review and rating",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "targetType": { "type": "string", "enum": ["gym", "trainer", "service"] },
+        "trainerId": { "type": "string" },
+        "rating": { "type": "number" },
+        "comment": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["clientId", "targetType", "rating", "comment", "createdAt"]
+    },
+    "GymQrConfig": {
+      "title": "GymQrConfig",
+      "description": "Gym attendance dynamic QR code configuration",
+      "type": "object",
+      "properties": {
+        "activeToken": { "type": "string" },
+        "gymCode": { "type": "string" },
+        "generatedAt": { "type": "string" },
+        "active": { "type": "boolean" },
+        "previousTokens": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["activeToken", "gymCode", "active"]
+    },
+    "GymSettings": {
+      "title": "GymSettings",
+      "description": "Gym configuration and contact info",
+      "type": "object",
+      "properties": {
+        "gymName": { "type": "string" },
+        "contactPhone": { "type": "string" },
+        "address": { "type": "string" },
+        "openingHours": { "type": "string" },
+        "ptMonthlyRate": { "type": "number" },
+        "sessionDurationHours": { "type": "number" }
+      },
+      "required": ["gymName"]
+    },
+    "PaymentGateway": {
+      "title": "PaymentGateway",
+      "description": "Configured payment gateway settings for Razorpay and alternatives",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "provider": { "type": "string", "enum": ["razorpay", "upi_manual", "cash", "custom"] },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "isEnabled": { "type": "boolean" },
+        "isDefault": { "type": "boolean" },
+        "environment": { "type": "string", "enum": ["test", "live"] },
+        "keyId": { "type": "string" },
+        "keySecret": { "type": "string" },
+        "merchantName": { "type": "string" },
+        "themeColor": { "type": "string" },
+        "currency": { "type": "string" },
+        "webhookSecret": { "type": "string" },
+        "upiId": { "type": "string" },
+        "instructions": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "provider", "name", "isEnabled"]
+    },
+    "PaymentTransaction": {
+      "title": "PaymentTransaction",
+      "description": "Client payment transaction record and invoice receipt",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "receiptNumber": { "type": "string" },
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "clientPhone": { "type": "string" },
+        "clientEmail": { "type": "string" },
+        "purpose": { "type": "string", "enum": ["membership", "personal_training", "renewal", "merchandise"] },
+        "itemTitle": { "type": "string" },
+        "amount": { "type": "number" },
+        "currency": { "type": "string" },
+        "status": { "type": "string", "enum": ["success", "pending", "failed", "refunded"] },
+        "gatewayId": { "type": "string" },
+        "gatewayProvider": { "type": "string" },
+        "paymentMethod": { "type": "string" },
+        "razorpayPaymentId": { "type": "string" },
+        "razorpayOrderId": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "completedAt": { "type": "string" }
+      },
+      "required": ["id", "clientId", "amount", "status", "createdAt"]
+    },
+    "DirectMessage": {
+      "title": "DirectMessage",
+      "description": "Direct chat message between client and trainer",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "chatId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderRole": { "type": "string", "enum": ["client", "trainer"] },
+        "recipientId": { "type": "string" },
+        "recipientName": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "chatId", "senderId", "recipientId", "text", "createdAt"]
+    },
+    "PtPlan": {
+      "title": "PtPlan",
+      "description": "Personal training tier packages",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "durationMonths": { "type": "number" },
+        "sessions": { "type": "number" },
+        "mrpPrice": { "type": "number" },
+        "offerPrice": { "type": "number" },
+        "savings": { "type": "string" },
+        "badge": { "type": "string" },
+        "active": { "type": "boolean" },
+        "popular": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "durationMonths", "sessions", "offerPrice", "active"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Registered app accounts"
+    },
+    "/clientProfiles/{userId}": {
+      "schema": "ClientProfile",
+      "description": "Client profile details"
+    },
+    "/trainerProfiles/{trainerId}": {
+      "schema": "TrainerProfile",
+      "description": "Trainer profiles with badges"
+    },
+    "/membershipPlans/{planId}": {
+      "schema": "MembershipPlan",
+      "description": "Membership plan definitions"
+    },
+    "/memberships/{membershipId}": {
+      "schema": "Membership",
+      "description": "Purchased or assigned memberships"
+    },
+    "/ptRequests/{requestId}": {
+      "schema": "PtRequest",
+      "description": "Personal trainer requests"
+    },
+    "/ptSchedules/{scheduleId}": {
+      "schema": "PtSchedule",
+      "description": "Assigned PT recurring schedules"
+    },
+    "/workouts/{workoutId}": {
+      "schema": "Workout",
+      "description": "Workout library and assigned workouts"
+    },
+    "/dietPlans/{dietPlanId}": {
+      "schema": "DietPlan",
+      "description": "Assigned PT diet plans"
+    },
+    "/attendance/{attendanceId}": {
+      "schema": "Attendance",
+      "description": "QR Attendance records"
+    },
+    "/fitnessAnalysisHistory/{analysisId}": {
+      "schema": "FitnessAnalysisHistory",
+      "description": "Rule-based fitness analysis results"
+    },
+    "/events/{eventId}": {
+      "schema": "Event",
+      "description": "Gym events"
+    },
+    "/eventRegistrations/{regId}": {
+      "schema": "EventRegistration",
+      "description": "Event signups"
+    },
+    "/challenges/{challengeId}": {
+      "schema": "Challenge",
+      "description": "Gym challenges"
+    },
+    "/challengeParticipations/{partId}": {
+      "schema": "ChallengeParticipation",
+      "description": "Challenge participant entries"
+    },
+    "/announcements/{announcementId}": {
+      "schema": "Announcement",
+      "description": "Announcements"
+    },
+    "/offers/{offerId}": {
+      "schema": "Offer",
+      "description": "Discounts and coupon offers"
+    },
+    "/popups/{popupId}": {
+      "schema": "Popup",
+      "description": "Home popups"
+    },
+    "/feedback/{feedbackId}": {
+      "schema": "Feedback",
+      "description": "User reviews"
+    },
+    "/gymQrConfig/{configId}": {
+      "schema": "GymQrConfig",
+      "description": "Gym attendance QR tokens"
+    },
+    "/gymSettings/{settingsId}": {
+      "schema": "GymSettings",
+      "description": "Gym master configuration"
+    },
+    "/paymentGateways/{gatewayId}": {
+      "schema": "PaymentGateway",
+      "description": "Configured payment gateways including Razorpay and UPI"
+    },
+    "/paymentTransactions/{transactionId}": {
+      "schema": "PaymentTransaction",
+      "description": "Payment transactions and member receipts"
+    },
+    "/directMessages/{messageId}": {
+      "schema": "DirectMessage",
+      "description": "Direct communication messages between clients and trainers"
+    },
+    "/ptPlans/{planId}": {
+      "schema": "PtPlan",
+      "description": "Personal training tier packages"
+    }
+  }
+}

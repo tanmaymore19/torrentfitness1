@@ -1,0 +1,356 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    background-color: #EEF2F6;
+    color: #1E293B;
+    min-height: 100vh;
+    min-height: 100dvh;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: #EEF2F6;
+    background-image: 
+      radial-gradient(circle at 10% 12%, rgba(129, 140, 248, 0.14) 0%, transparent 45%),
+      radial-gradient(circle at 90% 18%, rgba(251, 113, 133, 0.12) 0%, transparent 42%),
+      radial-gradient(circle at 50% 88%, rgba(52, 211, 153, 0.12) 0%, transparent 50%),
+      radial-gradient(circle at 82% 78%, rgba(56, 189, 248, 0.12) 0%, transparent 44%);
+    background-attachment: fixed;
+    color: #1E293B;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+    min-height: 100dvh;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  #root {
+    min-height: 100vh;
+    min-height: 100dvh;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+/* =========================================================================
+   APPLE VISIONOS INSPIRED SOFT GLASS & AMBIENT 3D DESIGN TOKENS
+   Semi-translucent frosted glass, ultra-delicate inner glow borders,
+   deep diffused drop shadows, and soothing pastel aurora accents.
+   ========================================================================= */
+
+/* VisionOS Frosted Glass Shell & Primary Modal/Container */
+.vision-surface,
+.clay-surface {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 
+    0 20px 40px -15px rgba(15, 23, 42, 0.07),
+    0 4px 12px -2px rgba(15, 23, 42, 0.03),
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.95);
+}
+
+/* VisionOS Tactile Floating Card */
+.vision-card,
+.clay-card,
+.glass-card {
+  background: rgba(255, 255, 255, 0.70);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  box-shadow: 
+    0 16px 32px -12px rgba(15, 23, 42, 0.06),
+    0 2px 6px 0 rgba(15, 23, 42, 0.02),
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.9);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.vision-card:hover,
+.clay-card:hover,
+.glass-card:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 
+    0 24px 44px -14px rgba(15, 23, 42, 0.1),
+    0 4px 14px -2px rgba(99, 102, 241, 0.08),
+    inset 0 1px 2px 0 rgba(255, 255, 255, 1);
+}
+
+/* VisionOS Inset / Debossed Glass Well (Inputs, Filter tracks, display wells) */
+.vision-inset,
+.clay-inset {
+  background: rgba(235, 242, 250, 0.65);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 
+    inset 0 2px 4px rgba(15, 23, 42, 0.04),
+    inset 0 1px 2px rgba(15, 23, 42, 0.03),
+    0 1px 1px rgba(255, 255, 255, 0.9);
+}
+
+/* 1. Aurora Lavender Violet to Sky Blue Gradient */
+.vision-btn-aurora,
+.clay-btn-aurora {
+  background: linear-gradient(135deg, #6366F1 0%, #8B5CF6 45%, #38BDF8 100%);
+  color: #FFFFFF;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 
+    0 12px 24px -6px rgba(99, 102, 241, 0.32),
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.6);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.vision-btn-aurora:hover,
+.clay-btn-aurora:hover {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 16px 28px -6px rgba(99, 102, 241, 0.42),
+    inset 0 1px 2px rgba(255, 255, 255, 0.8);
+}
+
+.vision-btn-aurora:active,
+.clay-btn-aurora:active {
+  transform: translateY(0);
+  box-shadow: 
+    0 6px 14px -4px rgba(99, 102, 241, 0.3);
+}
+
+/* 2. Aurora Soft Rose Peach to Coral Gradient */
+.vision-btn-rose,
+.clay-btn-sunset {
+  background: linear-gradient(135deg, #F43F5E 0%, #FB7185 45%, #FB923C 100%);
+  color: #FFFFFF;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 
+    0 12px 24px -6px rgba(244, 63, 94, 0.32),
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.6);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.vision-btn-rose:hover,
+.clay-btn-sunset:hover {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 16px 28px -6px rgba(244, 63, 94, 0.42),
+    inset 0 1px 2px rgba(255, 255, 255, 0.8);
+}
+
+.vision-btn-rose:active,
+.clay-btn-sunset:active {
+  transform: translateY(0);
+  box-shadow: 
+    0 6px 14px -4px rgba(244, 63, 94, 0.3);
+}
+
+/* 3. Aurora Fresh Mint / Aqua Cyan Gradient */
+.vision-btn-mint,
+.clay-btn-emerald {
+  background: linear-gradient(135deg, #10B981 0%, #14B8A6 50%, #06B6D4 100%);
+  color: #FFFFFF;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 
+    0 12px 24px -6px rgba(16, 185, 129, 0.3),
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.6);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.vision-btn-mint:hover,
+.clay-btn-emerald:hover {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 16px 28px -6px rgba(16, 185, 129, 0.4),
+    inset 0 1px 2px rgba(255, 255, 255, 0.8);
+}
+
+.vision-btn-mint:active,
+.clay-btn-emerald:active {
+  transform: translateY(0);
+  box-shadow: 
+    0 6px 14px -4px rgba(16, 185, 129, 0.3);
+}
+
+/* 4. Tactile Floating Glass Neutral Pill */
+.vision-btn-neutral,
+.clay-btn-neutral {
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: #1E293B;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 
+    0 6px 16px -4px rgba(15, 23, 42, 0.05),
+    inset 0 1px 1px rgba(255, 255, 255, 0.95);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.vision-btn-neutral:hover,
+.clay-btn-neutral:hover {
+  transform: translateY(-1.5px);
+  background: rgba(255, 255, 255, 0.94);
+  color: #0F172A;
+  box-shadow: 
+    0 10px 22px -6px rgba(15, 23, 42, 0.09),
+    inset 0 1px 1.5px rgba(255, 255, 255, 1);
+}
+
+.vision-btn-neutral:active,
+.clay-btn-neutral:active {
+  transform: translateY(0);
+  box-shadow: 
+    0 4px 10px -3px rgba(15, 23, 42, 0.05);
+}
+
+/* Glass panel wrapper */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 
+    0 20px 40px -15px rgba(15, 23, 42, 0.07),
+    0 4px 12px -2px rgba(15, 23, 42, 0.03),
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.95);
+}
+
+/* Ambient glow blobs */
+.ambient-orb {
+  position: absolute;
+  border-radius: 9999px;
+  pointer-events: none;
+  filter: blur(90px);
+  z-index: 0;
+  opacity: 0.55;
+}
+
+/* VisionOS Smooth Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(226, 232, 240, 0.5);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.6);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.8);
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  .print-standee-container, .print-standee-container * {
+    visibility: visible !important;
+  }
+  .print-standee-container {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 20px !important;
+    background: white !important;
+    color: black !important;
+    box-shadow: none !important;
+    border: none !important;
+    transform: none !important;
+  }
+}
+
+/* =========================================================================
+   SCOPED CLIENT / MEMBER PORTAL (MOBILE-FIRST DESKTOP FRAME)
+   ========================================================================= */
+
+/* Mobile-first base wrapper for Client / Member Portal */
+.client-portal-desktop-canvas {
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background-color: #EEF2F6;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 0;
+}
+
+.client-portal-frame {
+  width: 100%;
+  max-width: 448px;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background-color: #EEF2F6;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  margin: 0 auto;
+}
+
+@media (min-width: 640px) {
+  .client-portal-desktop-canvas {
+    padding: 24px 16px 40px;
+    align-items: center;
+    background-color: #0F172A;
+    background-image: 
+      radial-gradient(circle at 10% 12%, rgba(99, 102, 241, 0.18) 0%, transparent 45%),
+      radial-gradient(circle at 90% 18%, rgba(244, 63, 94, 0.12) 0%, transparent 40%),
+      radial-gradient(circle at 50% 88%, rgba(16, 185, 129, 0.14) 0%, transparent 50%),
+      radial-gradient(circle at 82% 78%, rgba(56, 189, 248, 0.14) 0%, transparent 44%);
+  }
+
+  .client-portal-frame {
+    max-width: 448px;
+    height: 860px;
+    max-height: 94vh;
+    border-radius: 44px;
+    border: 2px solid rgba(255, 255, 255, 0.7);
+    box-shadow: 
+      0 25px 70px -10px rgba(0, 0, 0, 0.55),
+      0 0 0 1px rgba(255, 255, 255, 0.15),
+      inset 0 1px 2px rgba(255, 255, 255, 0.8);
+    overflow: hidden;
+  }
+}
+
+/* Hide fixed navigation bar when Direct Chat modal is open */
+body.chat-modal-open nav.fixed,
+body.chat-modal-open nav {
+  display: none !important;
+}
+
+/* Cyberpunk / High-Tech QR Scanner Laser Scanline Animation */
+@keyframes qrLaserSweep {
+  0% {
+    top: 6%;
+    opacity: 0.75;
+  }
+  50% {
+    top: 92%;
+    opacity: 1;
+  }
+  100% {
+    top: 6%;
+    opacity: 0.75;
+  }
+}
+
+.animate-laser-sweep {
+  animation: qrLaserSweep 2.2s ease-in-out infinite;
+}
+

@@ -1,0 +1,21 @@
+{
+  "short_name": "Torrent Fitness",
+  "name": "Torrent Fitness Club",
+  "icons": [
+    {
+      "src": "/gym-logo-v2.png?v=20261025_2",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/gym-logo-v2.png?v=20261025_2",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#F8FAFC",
+  "theme_color": "#4f46e5",
+  "display": "standalone",
+  "orientation": "portrait"
+}

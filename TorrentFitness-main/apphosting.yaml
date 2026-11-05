@@ -1,0 +1,9 @@
+runConfig:
+  cpu: 1
+  memoryMiB: 512
+
+env:
+  - variable: NPM_CONFIG_LEGACY_PEER_DEPS
+    value: "true"
+    availability:
+      - BUILD

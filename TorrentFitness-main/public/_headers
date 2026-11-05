@@ -1,0 +1,7 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Content-Security-Policy: default-src 'self' https: data: blob: 'unsafe-inline' 'unsafe-eval'; script-src 'self' https: 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com https://test.payu.in https://checkout-static.citruspay.com; style-src 'self' https: 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https: data: https://fonts.gstatic.com; img-src 'self' https: data: blob:; connect-src 'self' https: wss:; frame-src 'self' https:;
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
