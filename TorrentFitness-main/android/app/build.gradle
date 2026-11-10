@@ -3,6 +3,7 @@ apply plugin: 'com.android.application'
 android {
     namespace "com.torrentfitness.app"
     compileSdk rootProject.ext.compileSdkVersion
+    buildToolsVersion "34.0.0"
 
     defaultConfig {
         applicationId "com.torrentfitness.app"
@@ -16,6 +17,11 @@ android {
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
     }
 
     signingConfigs {

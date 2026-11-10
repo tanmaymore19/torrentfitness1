@@ -4,16 +4,25 @@ import { getFirestore, doc, getDocFromServer, Firestore } from 'firebase/firesto
 import fallbackConfig from '../firebase-applet-config.json';
 import { withTimeout } from './services/cacheService';
 
-// Support VITE_FIREBASE_* environment variables for Cloudflare Pages / edge hosting,
-// with safe fallback to firebase-applet-config.json
+// Fallback production credentials to ensure Android APK Native WebView NEVER disconnects from live Firestore
+const DEFAULT_FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyA8vg4dubU09NZUvI7wR_CUWz2bC6Dv9w0',
+  authDomain: 'active-osprey-pcjpc.firebaseapp.com',
+  projectId: 'active-osprey-pcjpc',
+  storageBucket: 'active-osprey-pcjpc.firebasestorage.app',
+  messagingSenderId: '477304986235',
+  appId: '1:477304986235:web:3f0a3f775ae6b45ba860de',
+  firestoreDatabaseId: 'ai-studio-torrentfitness-3a8f4657-6c04-44f3-85e5-0b93052d79db'
+};
+
 const env = typeof import.meta !== 'undefined' && (import.meta as any).env ? (import.meta as any).env : {};
-const rawApiKey = (env.VITE_FIREBASE_API_KEY || (fallbackConfig as any)?.apiKey || '').trim();
-const rawAuthDomain = (env.VITE_FIREBASE_AUTH_DOMAIN || (fallbackConfig as any)?.authDomain || '').trim();
-const rawProjectId = (env.VITE_FIREBASE_PROJECT_ID || (fallbackConfig as any)?.projectId || '').trim();
-const rawStorageBucket = (env.VITE_FIREBASE_STORAGE_BUCKET || (fallbackConfig as any)?.storageBucket || '').trim();
-const rawMessagingSenderId = (env.VITE_FIREBASE_MESSAGING_SENDER_ID || (fallbackConfig as any)?.messagingSenderId || '').trim();
-const rawAppId = (env.VITE_FIREBASE_APP_ID || (fallbackConfig as any)?.appId || '').trim();
-const rawDatabaseId = (env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || (fallbackConfig as any)?.firestoreDatabaseId || '').trim();
+const rawApiKey = (env.VITE_FIREBASE_API_KEY || (fallbackConfig as any)?.apiKey || DEFAULT_FIREBASE_CONFIG.apiKey).trim();
+const rawAuthDomain = (env.VITE_FIREBASE_AUTH_DOMAIN || (fallbackConfig as any)?.authDomain || DEFAULT_FIREBASE_CONFIG.authDomain).trim();
+const rawProjectId = (env.VITE_FIREBASE_PROJECT_ID || (fallbackConfig as any)?.projectId || DEFAULT_FIREBASE_CONFIG.projectId).trim();
+const rawStorageBucket = (env.VITE_FIREBASE_STORAGE_BUCKET || (fallbackConfig as any)?.storageBucket || DEFAULT_FIREBASE_CONFIG.storageBucket).trim();
+const rawMessagingSenderId = (env.VITE_FIREBASE_MESSAGING_SENDER_ID || (fallbackConfig as any)?.messagingSenderId || DEFAULT_FIREBASE_CONFIG.messagingSenderId).trim();
+const rawAppId = (env.VITE_FIREBASE_APP_ID || (fallbackConfig as any)?.appId || DEFAULT_FIREBASE_CONFIG.appId).trim();
+const rawDatabaseId = (env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || (fallbackConfig as any)?.firestoreDatabaseId || DEFAULT_FIREBASE_CONFIG.firestoreDatabaseId).trim();
 
 export const firebaseConfig = {
   apiKey: rawApiKey,
@@ -25,33 +34,26 @@ export const firebaseConfig = {
   firestoreDatabaseId: rawDatabaseId || undefined,
 };
 
-// Defensive App initialization: prevents white-screen runtime crash if keys are missing or malformed
+// Defensive App initialization
 let appInstance: any = null;
 try {
   if (getApps().length > 0) {
     appInstance = getApp();
-  } else if (firebaseConfig.apiKey && firebaseConfig.projectId) {
-    appInstance = initializeApp(firebaseConfig);
   } else {
-    // If no config found at all, initialize with dummy options so SDK does not throw on import
-    console.warn('[Firebase] Warning: API key or Project ID missing from environment. Using fallback bootstrap.');
-    appInstance = initializeApp({
-      apiKey: 'AIzaSyA8vg4dubU09NZUvI7wR_CUWz2bC6Dv9w0',
-      projectId: 'active-osprey-pcjpc',
-      appId: '1:477304986235:web:3f0a3f775ae6b45ba860de',
-      authDomain: 'active-osprey-pcjpc.firebaseapp.com'
-    });
+    appInstance = initializeApp(firebaseConfig);
   }
 } catch (err) {
   console.error('[Firebase] initializeApp error caught gracefully:', err);
   if (getApps().length > 0) {
     appInstance = getApp();
+  } else {
+    appInstance = initializeApp(DEFAULT_FIREBASE_CONFIG);
   }
 }
 
 export const app = appInstance;
 
-// Defensive Firestore initialization: handles named database ID or defaults cleanly
+// Defensive Firestore initialization: binds to live named database ID with fallback to default
 let firestoreInstance: Firestore;
 try {
   if (firebaseConfig.firestoreDatabaseId) {
@@ -93,7 +95,7 @@ if (typeof window !== 'undefined' && auth) {
   }
 }
 
-// Connection test as required by Firebase integration guidelines, strictly bounded by a 2s timeout
+// Connection test strictly bounded by a 2s timeout
 export async function testFirestoreConnection(): Promise<boolean> {
   if (!db || typeof db !== 'object') {
     return false;

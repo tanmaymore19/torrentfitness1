@@ -1912,9 +1912,22 @@ export function loadRazorpayScript(): Promise<boolean> {
       return;
     }
 
+    const existing = document.querySelector('script[src*="checkout.razorpay.com"]') as HTMLScriptElement | null;
+    if (existing) {
+      if ((window as any).Razorpay) {
+        resolve(true);
+        return;
+      }
+      existing.addEventListener('load', () => resolve(true), { once: true });
+      existing.addEventListener('error', () => resolve(false), { once: true });
+      setTimeout(() => resolve(Boolean((window as any).Razorpay)), 3000);
+      return;
+    }
+
     const script = document.createElement('script');
     script.src = 'https://checkout.razorpay.com/v1/checkout.js';
     script.async = true;
+    script.crossOrigin = 'anonymous';
     script.onload = () => resolve(true);
     script.onerror = () => {
       console.warn('Failed to load official Razorpay checkout script.');

@@ -6,9 +6,17 @@
     "buildOptions": {
       "keystorePath": "release.keystore",
       "keystoreAlias": "torrentfitness"
-    }
+    },
+    "allowMixedContent": true
   },
   "server": {
-    "androidScheme": "https"
+    "androidScheme": "https",
+    "allowNavigation": [
+      "*.razorpay.com",
+      "api.razorpay.com",
+      "checkout.razorpay.com",
+      "*.firebaseio.com",
+      "*.googleapis.com"
+    ]
   }
 }
