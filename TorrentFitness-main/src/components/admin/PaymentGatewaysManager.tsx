@@ -535,15 +535,21 @@ export const PaymentGatewaysManager: React.FC = () => {
 
   const handleDeleteGateway = async (gw: PaymentGateway) => {
     try {
+      // Immediately remove from UI state so keys vanish before async re-fetch
+      setGateways(prev => prev.filter(g => g.id !== gw.id));
       await deletePaymentGateway(gw.id);
+      // Re-fetch to get fresh blank template for this gateway slot
       const fresh = await getPaymentGateways();
       setGateways(fresh);
       setBannerMsg({
         type: 'success',
-        text: `Gateway "${gw.name}" disconnected and returned to available catalog.`
+        text: `Gateway "${gw.name}" disconnected. All credentials wiped from backend and UI.`
       });
     } catch (err: any) {
       setBannerMsg({ type: 'error', text: 'Error disconnecting gateway: ' + err.message });
+      // Restore gateways on error
+      const fresh = await getPaymentGateways();
+      setGateways(fresh);
     }
   };
 

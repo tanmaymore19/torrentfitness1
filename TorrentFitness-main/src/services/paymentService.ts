@@ -25,18 +25,18 @@ export const LIVE_RAZORPAY_KEY_SECRET = 'oToShMju6rOURDG8MQP35jhC';
 
 export const DEFAULT_RAZORPAY_TEST_KEY =
   (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_RAZORPAY_KEY_ID) ||
-  LIVE_RAZORPAY_KEY_ID;
+  '';
 
 export const DEFAULT_RAZORPAY_GATEWAY: PaymentGateway = {
   id: 'gw_razorpay_main',
   provider: 'razorpay',
   name: 'Razorpay PG (UPI / Cards / NetBanking)',
   description: 'Official Razorpay standard gateway supporting UPI, Dynamic QR, Cards & NetBanking.',
-  isEnabled: true,
-  isDefault: true,
+  isEnabled: false,
+  isDefault: false,
   environment: 'live',
-  keyId: LIVE_RAZORPAY_KEY_ID,
-  keySecret: LIVE_RAZORPAY_KEY_SECRET,
+  keyId: '',
+  keySecret: '',
   merchantName: 'Torrent Fitness Club',
   themeColor: '#4f46e5',
   currency: 'INR',
@@ -201,43 +201,16 @@ export const ALL_DEFAULT_GATEWAYS: PaymentGateway[] = [
  */
 export async function initializePaymentGatewaysIfEmpty(): Promise<PaymentGateway[]> {
   try {
-    // 1. Guarantee gym_config/payment_gateways contains the pre-9:00 AM live Razorpay config
-    await setDoc(doc(db, 'gym_config', 'payment_gateways'), {
-      ...DEFAULT_RAZORPAY_GATEWAY,
-      keyId: LIVE_RAZORPAY_KEY_ID,
-      keySecret: LIVE_RAZORPAY_KEY_SECRET,
-      environment: 'live',
-      status: 'ACTIVE',
-      isEnabled: true,
-      isDefault: true,
-      updatedAt: new Date().toISOString()
-    }, { merge: true }).catch(() => {});
-
     const snap = await getDocs(collection(db, 'paymentGateways'));
     if (snap.empty) {
+      // Only seed defaults when collection is completely empty (first-time setup)
       for (const gw of ALL_DEFAULT_GATEWAYS) {
         await setDoc(doc(db, 'paymentGateways', gw.id), gw);
       }
       return ALL_DEFAULT_GATEWAYS;
     }
 
-    // Ensure gw_razorpay_main has live credentials restored
-    const rzpSnap = await getDoc(doc(db, 'paymentGateways', 'gw_razorpay_main'));
-    if (rzpSnap.exists()) {
-      const data = rzpSnap.data() as PaymentGateway;
-      if (!data.keySecret || data.keyId?.startsWith('rzp_test_')) {
-        await setDoc(doc(db, 'paymentGateways', 'gw_razorpay_main'), {
-          ...data,
-          keyId: LIVE_RAZORPAY_KEY_ID,
-          keySecret: LIVE_RAZORPAY_KEY_SECRET,
-          environment: 'live',
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
-      }
-    } else {
-      await setDoc(doc(db, 'paymentGateways', 'gw_razorpay_main'), DEFAULT_RAZORPAY_GATEWAY);
-    }
-
+    // Collection already exists — do NOT overwrite admin-managed credentials
     return await getPaymentGateways();
   } catch (err) {
     console.error('Error initializing payment gateways:', err);
@@ -355,15 +328,9 @@ export async function getPaymentGateways(): Promise<PaymentGateway[]> {
 
         const isThisPrimary = prov === primaryActiveProvider;
 
-        // Restore live Razorpay credentials if missing or was test key
-        const resolvedRzpKeyId =
-          prov === 'razorpay'
-            ? (!mergedKeyId || mergedKeyId.startsWith('rzp_test_') ? LIVE_RAZORPAY_KEY_ID : mergedKeyId.trim())
-            : mergedKeyId.trim();
-        const resolvedRzpKeySecret =
-          prov === 'razorpay'
-            ? (!mergedKeySecret ? LIVE_RAZORPAY_KEY_SECRET : mergedKeySecret.trim())
-            : mergedKeySecret.trim();
+        // Use the admin-saved credentials as-is; never auto-restore hardcoded keys
+        const resolvedKeyId = mergedKeyId.trim();
+        const resolvedKeySecret = mergedKeySecret.trim();
 
         merged = {
           ...defaultTemplate,
@@ -372,9 +339,9 @@ export async function getPaymentGateways(): Promise<PaymentGateway[]> {
           provider: prov,
           isEnabled: isThisPrimary,
           isDefault: isThisPrimary,
-          environment: prov === 'razorpay' ? 'live' : (canonicalDoc.environment || 'test'),
-          keyId: resolvedRzpKeyId,
-          keySecret: resolvedRzpKeySecret,
+          environment: canonicalDoc.environment || (prov === 'razorpay' ? 'live' : 'test'),
+          keyId: resolvedKeyId,
+          keySecret: resolvedKeySecret,
           appId: mergedAppId.trim(),
           secretKey: mergedSecretKey.trim(),
           merchantId: mergedMerchantId.trim(),
@@ -487,7 +454,13 @@ export async function savePaymentGateway(gateway: PaymentGateway): Promise<void>
 
   await setDoc(ref, cleanedGateway, { merge: true });
 
+  // Always sync gym_config/payment_gateways with latest credentials so client checkout picks them up immediately
   if (gateway.isEnabled || gateway.isDefault) {
+    await setDoc(doc(db, 'gym_config', 'payment_gateways'), {
+      ...cleanedGateway,
+      status: 'ACTIVE',
+      updatedAt: now
+    }, { merge: true }).catch(() => {});
     await activateSingleGateway(canonicalId);
   }
 }
@@ -526,38 +499,32 @@ export function isGatewayConfigured(gw?: PaymentGateway | null): boolean {
 }
 
 /**
- * Remove / disconnect a payment gateway by wiping credentials and resetting back to unconfigured state
+ * Remove / disconnect a payment gateway completely:
+ * - Deletes the Firestore document entirely so getPaymentGateways re-seeds a blank template
+ * - Also clears gym_config/payment_gateways if this was the active gateway
  */
 export async function deletePaymentGateway(gatewayId: string): Promise<void> {
-  const canonicalDoc = doc(db, 'paymentGateways', gatewayId);
-  const snap = await getDoc(canonicalDoc);
+  const canonicalDocRef = doc(db, 'paymentGateways', gatewayId);
+  const snap = await getDoc(canonicalDocRef);
   const currentData = snap.exists() ? (snap.data() as PaymentGateway) : null;
   const wasActive = Boolean(currentData?.isEnabled || currentData?.isDefault);
 
-  await setDoc(canonicalDoc, {
-    isEnabled: false,
-    isDefault: false,
-    keyId: '',
-    keySecret: '',
-    appId: '',
-    secretKey: '',
-    merchantId: '',
-    saltKey: '',
-    saltIndex: '1',
-    clientId: '',
-    gpayMerchantId: '',
-    gpayApiKey: '',
-    paytmMid: '',
-    paytmMerchantKey: '',
-    paytmWebsite: 'DEFAULT',
-    paytmChannelId: 'WEB',
-    payuMerchantKey: '',
-    payuMerchantSalt: '',
-    updatedAt: new Date().toISOString()
-  }, { merge: true });
+  // Fully delete the document — getPaymentGateways will re-seed a blank (unconfigured) template
+  if (snap.exists()) {
+    await deleteDoc(canonicalDocRef);
+  }
 
-  // If this was the active gateway, reassign active to another configured gateway
+  // If this was the active gateway, also clear gym_config/payment_gateways
   if (wasActive) {
+    await setDoc(doc(db, 'gym_config', 'payment_gateways'), {
+      isEnabled: false,
+      isDefault: false,
+      keyId: '',
+      keySecret: '',
+      updatedAt: new Date().toISOString()
+    }, { merge: true }).catch(() => {});
+
+    // Try to find another configured gateway to promote as active
     const allSnap = await getDocs(collection(db, 'paymentGateways'));
     const remainingConfigured = allSnap.docs
       .map(d => ({ id: d.id, ...d.data() } as PaymentGateway))
