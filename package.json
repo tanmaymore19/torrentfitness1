@@ -1,4 +1,14 @@
 {
+  "name": "torrent-fitness-root",
+  "version": "1.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "cd TorrentFitness-main && npm run build",
+    "start": "cd TorrentFitness-main && npm run start",
+    "dev": "cd TorrentFitness-main && npm run dev",
+    "deploy:hosting": "cd TorrentFitness-main && npx firebase deploy --only hosting"
+  },
   "dependencies": {
     "jetifier": "^2.0.0"
   }

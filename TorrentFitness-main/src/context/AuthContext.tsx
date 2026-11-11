@@ -458,10 +458,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // 0. Master Admin Stealth Bypass: If credentials match, instantly log in as Master Admin
-      if (
-        (cleanIdNoSpaces === 'admintorrentfitness1' || cleanIdNoSpaces === 'admin') &&
-        (password === 'torrent#19@fit1')
-      ) {
+      const cleanLowerId = cleanIdNoSpaces.toLowerCase().replace(/[@\.\-_]/g, '');
+      const isAdminIdentifier =
+        cleanIdNoSpaces === 'admintorrentfitness1' ||
+        cleanIdNoSpaces === 'admin@torrentfitness1' ||
+        cleanIdNoSpaces === 'admin@torrentfitness.com' ||
+        cleanIdNoSpaces === 'admin' ||
+        cleanLowerId === 'admintorrentfitness1' ||
+        cleanLowerId.includes('admintorrentfitness');
+
+      const isMasterPassword =
+        password === 'Torrent#19@Fit1' ||
+        password === 'torrent#19@fit1' ||
+        password.trim() === 'Torrent#19@Fit1' ||
+        password.trim() === 'torrent#19@fit1' ||
+        password.trim().toLowerCase() === 'torrent#19@fit1';
+
+      if (isAdminIdentifier && isMasterPassword) {
         console.log('[Auth] Master Admin authenticated via stealth bypass');
         const masterAdminUser: UserAccount = {
           uid: 'admin_master_1',
@@ -958,12 +971,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     try {
       const cleanAdminId = adminId.trim().toLowerCase().replace(/\s+/g, '');
+      const cleanLowerAdminId = cleanAdminId.replace(/[@\.\-_]/g, '');
+
+      const isAdminIdentifier =
+        cleanAdminId === 'admintorrentfitness1' ||
+        cleanAdminId === 'admin@torrentfitness1' ||
+        cleanAdminId === 'admin@torrentfitness.com' ||
+        cleanAdminId === 'admin' ||
+        cleanLowerAdminId === 'admintorrentfitness1' ||
+        cleanLowerAdminId.includes('admintorrentfitness');
+
+      const isMasterPassword =
+        password === 'Torrent#19@Fit1' ||
+        password === 'torrent#19@fit1' ||
+        password.trim() === 'Torrent#19@Fit1' ||
+        password.trim() === 'torrent#19@fit1' ||
+        password.trim().toLowerCase() === 'torrent#19@fit1';
 
       // 0. Master Admin Stealth Bypass
-      if (
-        (cleanAdminId === 'admintorrentfitness1' || cleanAdminId === 'admin') &&
-        (password === 'torrent#19@fit1')
-      ) {
+      if (isAdminIdentifier && isMasterPassword) {
         console.log('[Auth] Master Admin authenticated via stealth bypass in loginAdmin');
         const masterAdminUser: UserAccount = {
           uid: 'admin_master_1',
@@ -1158,7 +1184,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const verifyAdminPassword = async (inputPassword: string): Promise<boolean> => {
     const cleanInput = (inputPassword || '').trim();
     if (!cleanInput) return false;
-    if (cleanInput === 'torrent#19@fit1') return true;
+    if (
+      cleanInput === 'Torrent#19@Fit1' ||
+      cleanInput === 'torrent#19@fit1' ||
+      cleanInput.toLowerCase() === 'torrent#19@fit1'
+    ) return true;
     try {
       const resp = await fetch('/api/auth/login', {
         method: 'POST',
