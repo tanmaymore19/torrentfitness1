@@ -1,4 +1,41 @@
 import { db } from '../firebase';
+import { Capacitor } from '@capacitor/core';
+
+/**
+ * Returns true when running inside the native Android/iOS app (Capacitor),
+ * false when running in a plain web browser.
+ */
+export function isNativeApp(): boolean {
+  try {
+    return Capacitor.isNativePlatform();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the correct API key/secret for a gateway based on current platform.
+ * Admin sets webKeyId/webKeySecret for browser and appKeyId/appKeySecret for native app.
+ * Falls back to the web key if the app key is not configured.
+ */
+export function resolveGatewayKeys(gw: PaymentGateway): {
+  keyId: string;
+  keySecret: string;
+  appId: string;
+  secretKey: string;
+  merchantId: string;
+  saltKey: string;
+} {
+  const native = isNativeApp();
+  return {
+    keyId:      (native ? (gw.appKeyId     || gw.keyId     || '') : (gw.keyId     || gw.appKeyId     || '')).trim(),
+    keySecret:  (native ? (gw.appKeySecret || gw.keySecret || '') : (gw.keySecret || gw.appKeySecret || '')).trim(),
+    appId:      (native ? (gw.appAppId     || gw.appId     || '') : (gw.appId     || '')).trim(),
+    secretKey:  (native ? (gw.appSecretKey || gw.secretKey || '') : (gw.secretKey || '')).trim(),
+    merchantId: (native ? (gw.appMerchantId|| gw.merchantId|| '') : (gw.merchantId|| '')).trim(),
+    saltKey:    (native ? (gw.appSaltKey   || gw.saltKey   || '') : (gw.saltKey   || '')).trim(),
+  };
+}
 import {
   collection,
   doc,
@@ -433,6 +470,7 @@ export async function savePaymentGateway(gateway: PaymentGateway): Promise<void>
   const cleanedGateway: PaymentGateway = {
     ...gateway,
     id: canonicalId,
+    // Web platform credentials
     keyId: (gateway.keyId || '').trim(),
     keySecret: (gateway.keySecret || '').trim(),
     appId: (gateway.appId || '').trim(),
@@ -449,6 +487,13 @@ export async function savePaymentGateway(gateway: PaymentGateway): Promise<void>
     paytmChannelId: (gateway.paytmChannelId || 'WEB').trim(),
     payuMerchantKey: (gateway.payuMerchantKey || '').trim(),
     payuMerchantSalt: (gateway.payuMerchantSalt || '').trim(),
+    // App (Android/iOS) platform credentials
+    appKeyId: (gateway.appKeyId || '').trim(),
+    appKeySecret: (gateway.appKeySecret || '').trim(),
+    appAppId: (gateway.appAppId || '').trim(),
+    appSecretKey: (gateway.appSecretKey || '').trim(),
+    appMerchantId: (gateway.appMerchantId || '').trim(),
+    appSaltKey: (gateway.appSaltKey || '').trim(),
     updatedAt: now
   };
 
@@ -469,7 +514,10 @@ export function isGatewayConfigured(gw?: PaymentGateway | null): boolean {
   if (!gw) return false;
   switch (gw.provider) {
     case 'razorpay':
-      return Boolean(gw.keyId && gw.keyId.trim().length > 0);
+      return Boolean(
+        (gw.keyId && gw.keyId.trim().length > 0) ||
+        (gw.appKeyId && gw.appKeyId.trim().length > 0)
+      );
     case 'cashfree':
       return Boolean(gw.appId && gw.appId.trim().length > 0);
     case 'phonepe':
@@ -521,6 +569,8 @@ export async function deletePaymentGateway(gatewayId: string): Promise<void> {
       isDefault: false,
       keyId: '',
       keySecret: '',
+      appKeyId: '',
+      appKeySecret: '',
       updatedAt: new Date().toISOString()
     }, { merge: true }).catch(() => {});
 

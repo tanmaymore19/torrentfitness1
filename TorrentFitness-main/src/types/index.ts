@@ -507,9 +507,18 @@ export interface PaymentGateway {
   isEnabled: boolean;
   isDefault: boolean;
   environment: PaymentGatewayEnvironment;
-  // Razorpay credentials
+  // Razorpay credentials — web platform
   keyId?: string;
   keySecret?: string;
+  // Razorpay credentials — app (Android/iOS) platform
+  appKeyId?: string;
+  appKeySecret?: string;
+  // Cashfree — app platform overrides
+  appAppId?: string;
+  appSecretKey?: string;
+  // PhonePe — app platform overrides
+  appMerchantId?: string;
+  appSaltKey?: string;
   // Cashfree credentials
   appId?: string;
   secretKey?: string;

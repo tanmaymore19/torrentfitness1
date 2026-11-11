@@ -129,6 +129,9 @@ export const PaymentGatewaysManager: React.FC = () => {
   // Razorpay
   const [formKeyId, setFormKeyId] = useState<string>('');
   const [formKeySecret, setFormKeySecret] = useState<string>('');
+  // Razorpay — App (Android/iOS) platform keys
+  const [formAppKeyId, setFormAppKeyId] = useState<string>('');
+  const [formAppKeySecret, setFormAppKeySecret] = useState<string>('');
   // Cashfree
   const [formAppId, setFormAppId] = useState<string>('');
   const [formSecretKey, setFormSecretKey] = useState<string>('');
@@ -391,6 +394,8 @@ export const PaymentGatewaysManager: React.FC = () => {
     setFormEnvironment('test');
     setFormKeyId('');
     setFormKeySecret('');
+    setFormAppKeyId('');
+    setFormAppKeySecret('');
     setFormAppId('');
     setFormSecretKey('');
     setFormMerchantId('');
@@ -423,6 +428,8 @@ export const PaymentGatewaysManager: React.FC = () => {
     setFormEnvironment(gw.environment || 'test');
     setFormKeyId(gw.keyId || '');
     setFormKeySecret(gw.keySecret || '');
+    setFormAppKeyId(gw.appKeyId || '');
+    setFormAppKeySecret(gw.appKeySecret || '');
     setFormAppId(gw.appId || '');
     setFormSecretKey(gw.secretKey || '');
     setFormMerchantId(gw.merchantId || '');
@@ -447,8 +454,8 @@ export const PaymentGatewaysManager: React.FC = () => {
 
   const validateCredentialsForProvider = (): string | null => {
     if (!formName.trim()) return 'Gateway title is required.';
-    if (formProvider === 'razorpay' && !formKeyId.trim()) {
-      return 'Razorpay Key ID is required (e.g. rzp_test_... or rzp_live_...).';
+    if (formProvider === 'razorpay' && !formKeyId.trim() && !formAppKeyId.trim()) {
+      return 'At least one Razorpay Key ID (Web Key ID or App Key ID) is required.';
     }
     if (formProvider === 'cashfree' && (!formAppId.trim() || !formSecretKey.trim())) {
       return 'Cashfree App ID and Secret Key are required.';
@@ -492,6 +499,8 @@ export const PaymentGatewaysManager: React.FC = () => {
         environment: formEnvironment,
         keyId: formKeyId.trim(),
         keySecret: formKeySecret.trim(),
+        appKeyId: formAppKeyId.trim(),
+        appKeySecret: formAppKeySecret.trim(),
         appId: formAppId.trim(),
         secretKey: formSecretKey.trim(),
         merchantId: formMerchantId.trim(),
@@ -978,15 +987,21 @@ export const PaymentGatewaysManager: React.FC = () => {
                     {gw.provider === 'razorpay' && (
                       <>
                         <div className="p-2.5 rounded-xl bg-slate-50/90 border border-slate-200/80">
-                          <span className="text-[10px] text-slate-500 block uppercase font-bold">Razorpay Key ID</span>
+                          <span className="text-[10px] text-slate-500 block uppercase font-bold">🌐 Web Key ID</span>
                           <span className="font-mono text-indigo-700 font-bold truncate block">
-                            {gw.keyId || 'Universal Adapter Active'}
+                            {gw.keyId || 'Not Set'}
                           </span>
                         </div>
                         <div className="p-2.5 rounded-xl bg-slate-50/90 border border-slate-200/80">
-                          <span className="text-[10px] text-slate-500 block uppercase font-bold">Key Secret</span>
+                          <span className="text-[10px] text-slate-500 block uppercase font-bold">📱 App Key ID</span>
+                          <span className="font-mono text-emerald-700 font-bold truncate block">
+                            {gw.appKeyId || '(Uses Web Key)'}
+                          </span>
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-slate-50/90 border border-slate-200/80">
+                          <span className="text-[10px] text-slate-500 block uppercase font-bold">Secret Status</span>
                           <span className="font-mono text-slate-700 font-bold block">
-                            {gw.keySecret ? '••••••••••••••••' : 'Not Set (Callback Ready)'}
+                            {gw.keySecret || gw.appKeySecret ? '••••••••••••••••' : 'Not Set'}
                           </span>
                         </div>
                       </>
@@ -1314,28 +1329,76 @@ export const PaymentGatewaysManager: React.FC = () => {
                 </div>
 
                 {formProvider === 'razorpay' && (
-                  <>
-                    <div>
-                      <label className="block text-slate-700 mb-1 font-bold">Razorpay Key ID</label>
-                      <input
-                        type="text"
-                        value={formKeyId}
-                        onChange={(e) => setFormKeyId(e.target.value)}
-                        placeholder="rzp_test_XXXXXXXX or rzp_live_XXXXXXXX"
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-mono text-slate-900"
-                      />
+                  <div className="space-y-4">
+                    <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                      <div className="flex items-center gap-2 mb-2.5">
+                        <span className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                          🌐 Web Platform Keys
+                        </span>
+                        <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
+                          Website Browser Checkout
+                        </span>
+                      </div>
+                      <div className="space-y-2.5">
+                        <div>
+                          <label className="block text-slate-700 text-xs font-bold mb-1">Web Razorpay Key ID</label>
+                          <input
+                            type="text"
+                            value={formKeyId}
+                            onChange={(e) => setFormKeyId(e.target.value)}
+                            placeholder="rzp_test_XXXXXXXX or rzp_live_XXXXXXXX"
+                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-mono text-slate-900 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-slate-700 text-xs font-bold mb-1">Web Razorpay Key Secret</label>
+                          <input
+                            type={showSecrets ? 'text' : 'password'}
+                            value={formKeySecret}
+                            onChange={(e) => setFormKeySecret(e.target.value)}
+                            placeholder="Enter Web Razorpay Key Secret"
+                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-mono text-slate-900 text-sm"
+                          />
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-slate-700 mb-1 font-bold">Razorpay Key Secret</label>
-                      <input
-                        type={showSecrets ? 'text' : 'password'}
-                        value={formKeySecret}
-                        onChange={(e) => setFormKeySecret(e.target.value)}
-                        placeholder="Enter Razorpay Key Secret"
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-mono text-slate-900"
-                      />
+
+                    <div className="bg-indigo-50/50 p-3.5 rounded-xl border border-indigo-100">
+                      <div className="flex items-center justify-between mb-2.5">
+                        <span className="text-sm font-bold text-indigo-900 flex items-center gap-1.5">
+                          📱 Mobile App Keys
+                        </span>
+                        <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
+                          Android APK (Optional)
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mb-2">
+                        Optional. Leave blank to automatically use Web Keys in the mobile app.
+                      </p>
+                      <div className="space-y-2.5">
+                        <div>
+                          <label className="block text-slate-700 text-xs font-bold mb-1">App Razorpay Key ID</label>
+                          <input
+                            type="text"
+                            value={formAppKeyId}
+                            onChange={(e) => setFormAppKeyId(e.target.value)}
+                            placeholder="rzp_live_XXXXXXXX (Leave blank to use Web Key)"
+                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-mono text-slate-900 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-slate-700 text-xs font-bold mb-1">App Razorpay Key Secret</label>
+                          <input
+                            type={showSecrets ? 'text' : 'password'}
+                            value={formAppKeySecret}
+                            onChange={(e) => setFormAppKeySecret(e.target.value)}
+                            placeholder="Enter App Key Secret (Optional)"
+                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-mono text-slate-900 text-sm"
+                          />
+                        </div>
+                      </div>
                     </div>
-                  </>
+                  </div>
                 )}
 
                 {formProvider === 'gpay' && (
