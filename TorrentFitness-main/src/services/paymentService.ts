@@ -396,14 +396,24 @@ export async function getPaymentGateways(): Promise<PaymentGateway[]> {
           updatedAt: new Date().toISOString()
         };
 
-        // Write cleaned canonical record
-        await setDoc(doc(db, 'paymentGateways', canonicalId), merged, { merge: true });
+        // Only write back if credentials changed or deduplication happened
+        // This prevents every page-load from overwriting admin-saved keys
+        const needsWrite =
+          deleteDocIds.length > 0 ||
+          matches.length > 1 ||
+          canonicalDoc.keyId !== resolvedKeyId ||
+          canonicalDoc.keySecret !== resolvedKeySecret;
+        if (needsWrite) {
+          await setDoc(doc(db, 'paymentGateways', canonicalId), merged, { merge: true });
+        }
       }
 
       deduplicatedList.push(merged);
 
-      // Keep gym_config/payment_gateways updated with active gateway
-      if (merged.isEnabled || merged.isDefault) {
+      // Keep gym_config/payment_gateways updated only when this gateway is active
+      // and only when credentials are non-empty (never overwrite with blank keys)
+      const hasCredentials = isGatewayConfigured(merged);
+      if ((merged.isEnabled || merged.isDefault) && hasCredentials) {
         await setDoc(doc(db, 'gym_config', 'payment_gateways'), {
           ...merged,
           status: 'ACTIVE',
@@ -426,6 +436,17 @@ export async function getPaymentGateways(): Promise<PaymentGateway[]> {
     return deduplicatedList;
   } catch (err) {
     console.error('Error fetching and deduplicating payment gateways:', err);
+    // On error: try reading gym_config/payment_gateways as cached fallback
+    // NEVER return blank ALL_DEFAULT_GATEWAYS as that would wipe admin-saved keys from UI
+    try {
+      const cfgSnap = await getDoc(doc(db, 'gym_config', 'payment_gateways'));
+      if (cfgSnap.exists()) {
+        const cached = cfgSnap.data() as PaymentGateway;
+        if (cached && cached.provider) {
+          return [{ ...cached, isEnabled: true, isDefault: true }];
+        }
+      }
+    } catch (_) {}
     return ALL_DEFAULT_GATEWAYS;
   }
 }
@@ -444,16 +465,34 @@ export function getActiveOnlineGateway(gateways: PaymentGateway[]): PaymentGatew
 }
 
 /**
- * Fetch the single active online gateway directly from database on demand
+ * Fetch the single active online gateway directly from database on demand.
+ * Falls back to gym_config/payment_gateways cache (admin-saved keys) on any error —
+ * never returns a blank DEFAULT_RAZORPAY_GATEWAY with empty keys.
  */
 export async function fetchActiveOnlineGateway(): Promise<PaymentGateway> {
   try {
     const list = await getPaymentGateways();
-    return getActiveOnlineGateway(list) || DEFAULT_RAZORPAY_GATEWAY;
+    const active = getActiveOnlineGateway(list);
+    if (active && isGatewayConfigured(active)) return active;
+    // Fall through to cache fallback if the active gateway has no credentials
   } catch (e) {
-    console.warn('Error in fetchActiveOnlineGateway:', e);
-    return DEFAULT_RAZORPAY_GATEWAY;
+    console.warn('Error in fetchActiveOnlineGateway, trying cache:', e);
   }
+
+  // Fallback: read admin-saved gateway directly from gym_config/payment_gateways
+  try {
+    const cfgSnap = await getDoc(doc(db, 'gym_config', 'payment_gateways'));
+    if (cfgSnap.exists()) {
+      const cached = cfgSnap.data() as PaymentGateway;
+      if (cached && isGatewayConfigured(cached)) {
+        return { ...cached, isEnabled: true, isDefault: true };
+      }
+    }
+  } catch (cacheErr) {
+    console.warn('Cache fallback also failed:', cacheErr);
+  }
+
+  return DEFAULT_RAZORPAY_GATEWAY;
 }
 
 /**

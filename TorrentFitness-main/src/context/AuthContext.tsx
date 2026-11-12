@@ -6,7 +6,7 @@ import {
   UserRole
 } from '../types';
 import { db, auth, testFirestoreConnection } from '../firebase';
-import { signOut, onAuthStateChanged } from 'firebase/auth';
+import { signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { LogoutConfirmationModal } from '../components/common/LogoutConfirmationModal';
 import {
   doc,
@@ -217,6 +217,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, BOOT_TIMEOUT_MS);
 
     async function boot() {
+      // Ensure Firebase Auth session persists across tab close/reopen (never use sessionPersistence)
+      try {
+        await setPersistence(auth, browserLocalPersistence);
+      } catch (e) {
+        console.warn('[Auth] Could not set persistence:', e);
+      }
+
       try {
         const savedUser = getInitialSavedSession();
         if (savedUser) {
