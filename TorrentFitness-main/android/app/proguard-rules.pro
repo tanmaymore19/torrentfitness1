@@ -5,12 +5,21 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Razorpay Android SDK ProGuard rules
+-keepattributes *Annotation*
+-dontwarn com.razorpay.**
+-keep class com.razorpay.** {*;}
+-optimizations !class/loading/findclass/superclasses
+-keepclasseswithmembers class * {
+    public void onPaymentSuccess(java.lang.String);
+    public void onPaymentError(int, java.lang.String);
+}
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+-keepattributes JavascriptInterface
+-keep class com.ionicframework.capacitor.Checkout { *; }
+-keep class com.ionicframework.capacitor.** { *; }
 
 # Uncomment this to preserve the line number information for
 # debugging stack traces.

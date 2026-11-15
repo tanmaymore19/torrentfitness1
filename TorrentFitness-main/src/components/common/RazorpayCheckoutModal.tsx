@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { PaymentGateway, PaymentTransaction, PaymentPurpose } from '../../types';
 import {
   verifyAndActivateOnlinePayment,
@@ -160,16 +161,127 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
   };
 
   /**
-   * Directly triggers the official Razorpay standard checkout popup (window.Razorpay)
+   * Directly triggers Razorpay Checkout:
+   * - On Native Android (Capacitor.isNativePlatform()): Uses Native Capacitor Razorpay SDK (Checkout.open)
+   * - On Web (!Capacitor.isNativePlatform()): Executes existing window.Razorpay web checkout untouched
    */
   const triggerOfficialRazorpayCheckout = async (gwOverride?: PaymentGateway) => {
     if (isVerifyingRef.current) return;
 
     setStatus('loading');
-    setStatusMessage('Connecting to official Razorpay payment gateway...');
     setErrorMessage('');
 
     const targetGw = gwOverride || effectiveGateway;
+    const isNative = Capacitor.isNativePlatform();
+
+    // 1. Resolve configured Razorpay Key ID — picks app key on native app, web key on browser
+    const { keyId: platformKeyId } = resolveGatewayKeys(targetGw || {} as PaymentGateway);
+    const resolvedKey =
+      platformKeyId ||
+      (targetGw?.keyId && targetGw.keyId.trim()) ||
+      DEFAULT_RAZORPAY_TEST_KEY;
+
+    // 2. Convert payable amount to paise (100 paise = ₹1, enforce minimum 100 paise)
+    const amountInPaise = Math.max(100, Math.round(amount * 100));
+    const merchantTitle = gateway?.merchantName || 'Torrent Fitness Club';
+    const themeColor = gateway?.themeColor || '#4f46e5';
+
+    // =========================================================================
+    // BRANCH A: NATIVE ANDROID/iOS (CAPACITOR NATIVE RAZORPAY SDK)
+    // =========================================================================
+    if (isNative) {
+      setStatusMessage('Launching native Razorpay payment SDK...');
+
+      try {
+        const { Checkout } = await import('capacitor-razorpay');
+
+        const nativeOptions = {
+          key: resolvedKey,
+          amount: amountInPaise.toString(),
+          currency: 'INR',
+          name: merchantTitle,
+          description: `${itemTitle} (${durationMonths || 1} Month${(durationMonths || 1) > 1 ? 's' : ''})`,
+          image: 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=150',
+          prefill: {
+            name: clientName || 'Torrent Member',
+            email: clientEmail || (clientId ? `${clientId}@torrentfitness.in` : 'member@torrentfitness.in'),
+            contact: (clientPhone || '').replace(/[^\d+]/g, '')
+          },
+          notes: {
+            clientId: clientId || '',
+            planId: planId || '',
+            purpose: purpose || 'membership',
+            couponCode: couponCode || ''
+          },
+          theme: {
+            color: themeColor
+          }
+        };
+
+        const result: any = await Checkout.open(nativeOptions);
+
+        let rzpResponse: any = result?.response || result;
+        if (typeof rzpResponse === 'string') {
+          try {
+            rzpResponse = JSON.parse(rzpResponse);
+          } catch {}
+        }
+
+        const rzpPaymentId =
+          rzpResponse?.razorpay_payment_id ||
+          rzpResponse?.payment_id ||
+          result?.razorpay_payment_id ||
+          `pay_${Date.now()}`;
+
+        const rzpOrderId =
+          rzpResponse?.razorpay_order_id ||
+          rzpResponse?.order_id ||
+          result?.razorpay_order_id ||
+          orderId;
+
+        const rzpSignature =
+          rzpResponse?.razorpay_signature ||
+          rzpResponse?.signature ||
+          result?.razorpay_signature ||
+          '';
+
+        await handleUniversalPaymentVerification({
+          paymentId: rzpPaymentId,
+          orderId: rzpOrderId,
+          signature: rzpSignature,
+          methodName: 'Native Razorpay Android SDK (UPI / Cards / NetBanking)',
+          extraMetadata: {
+            paymentEngine: 'capacitor_razorpay_native_android',
+            rawResponse: rzpResponse
+          }
+        });
+      } catch (nativeErr: any) {
+        console.warn('[Native Razorpay Android Error]:', nativeErr);
+        const errMsg =
+          nativeErr?.description ||
+          nativeErr?.message ||
+          (typeof nativeErr === 'string' ? nativeErr : '');
+
+        if (
+          errMsg.toLowerCase().includes('cancel') ||
+          errMsg.toLowerCase().includes('dismiss') ||
+          errMsg.includes('Payment Canceled')
+        ) {
+          setStatus('idle');
+          onClose();
+          return;
+        }
+
+        setStatus('error');
+        setErrorMessage(errMsg || 'Payment was declined or cancelled. Please try again.');
+      }
+      return;
+    }
+
+    // =========================================================================
+    // BRANCH B: STANDARD WEB BROWSER (ORIGINAL WINDOW.RAZORPAY UNTOUCHED)
+    // =========================================================================
+    setStatusMessage('Connecting to official Razorpay payment gateway...');
 
     try {
       // 1. Ensure official Razorpay Checkout script is loaded dynamically on-demand
@@ -177,19 +289,6 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
       if (!isLoaded || !(window as any).Razorpay) {
         throw new Error('Could not load Razorpay JavaScript SDK. Please check your internet connection.');
       }
-
-      // 2. Resolve configured Razorpay Key ID — picks web key on browser, app key on native app
-      const { keyId: platformKeyId } = resolveGatewayKeys(targetGw || {} as PaymentGateway);
-      const resolvedKey =
-        platformKeyId ||
-        (targetGw?.keyId && targetGw.keyId.trim()) ||
-        DEFAULT_RAZORPAY_TEST_KEY;
-
-      // 3. Convert payable amount to paise (100 paise = ₹1, enforce minimum 100 paise)
-      const amountInPaise = Math.max(100, Math.round(amount * 100));
-
-      const merchantTitle = gateway?.merchantName || 'Torrent Fitness Club';
-      const themeColor = gateway?.themeColor || '#4f46e5';
 
       // 4. Build official Razorpay Standard Checkout Options Payload
       const options = {

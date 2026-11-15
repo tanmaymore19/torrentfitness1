@@ -22,7 +22,7 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
-    <!-- UPI Payment Intent Queries for Razorpay / GPay / PhonePe / Paytm -->
+    <!-- UPI Payment Intent Queries for Razorpay / GPay / PhonePe / Paytm / BHIM / CRED -->
     <queries>
         <intent>
             <action android:name="android.intent.action.VIEW" />
@@ -31,6 +31,10 @@
         <package android:name="com.google.android.apps.nbu.paisa.user" />
         <package android:name="com.phonepe.app" />
         <package android:name="net.one97.paytm" />
+        <package android:name="in.org.npci.upiapp" />
+        <package android:name="in.amazon.mShop.android.shopping" />
+        <package android:name="com.cred.club" />
+        <package android:name="com.whatsapp" />
     </queries>
 
     <application
