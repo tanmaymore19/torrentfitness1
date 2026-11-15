@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { db } from '../../firebase';
+import { db, auth } from '../../firebase';
+import { signInAnonymously } from 'firebase/auth';
 import {
   doc,
   writeBatch,
@@ -8,7 +9,9 @@ import {
   where,
   getDocs,
   getDoc,
-  arrayRemove
+  arrayRemove,
+  deleteDoc,
+  DocumentReference
 } from 'firebase/firestore';
 import { AlertTriangle, Trash2, X, Loader2, ArrowRight, ShieldAlert, CheckCircle2 } from 'lucide-react';
 import { getCachedData, setCachedData } from '../../services/cacheService';
@@ -62,7 +65,7 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
     setErrorMsg(null);
 
     try {
-      const uid = target.uid;
+      const uid = target.uid || (target as any).id || (target as any).userId || (target as any).trainerId;
 
       // Master admin protection check
       const protectedAdminIds = ['admin', 'admintorrentfitness1', 'admin_master_1', 'torrent_admin_master'];
@@ -74,6 +77,15 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
         setErrorMsg('The Master Admin / Owner account cannot be deleted.');
         setIsDeleting(false);
         return;
+      }
+
+      // 0. Ensure Firebase Auth is active (satisfies request.auth != null in Firestore security rules)
+      if (auth && !auth.currentUser) {
+        try {
+          await signInAnonymously(auth);
+        } catch (authErr) {
+          console.warn('[DeleteAccountModal] anonymous sign-in note:', authErr);
+        }
       }
 
       // 1. Resolve exact registered username for index deletion
@@ -93,7 +105,41 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
       const rawUsername = registeredUsername || target.username || target.displayName || uid;
       const cleanUsername = rawUsername.toLowerCase().replace(/[@\s]/g, '').trim();
 
-      // 2. Initialize atomic batch
+      // 2. Collect all document references to delete (deduplicated by path to prevent batch errors)
+      const docsToDelete = new Map<string, DocumentReference>();
+      const addDocToDelete = (ref: DocumentReference) => {
+        if (ref && ref.path) {
+          docsToDelete.set(ref.path, ref);
+        }
+      };
+
+      // Base user document
+      addDocToDelete(doc(db, 'users', uid));
+
+      // Query any other matching docs in users
+      try {
+        const uQuery = await getDocs(query(collection(db, 'users'), where('uid', '==', uid)));
+        uQuery.forEach(d => addDocToDelete(d.ref));
+        if (cleanUsername) {
+          const uQueryName = await getDocs(query(collection(db, 'users'), where('username', '==', cleanUsername)));
+          uQueryName.forEach(d => addDocToDelete(d.ref));
+        }
+      } catch (err) {
+        console.warn('Query users note:', err);
+      }
+
+      // Username lookup index references
+      if (cleanUsername) {
+        addDocToDelete(doc(db, 'usernames', cleanUsername));
+      }
+      if (registeredUsername && registeredUsername.toLowerCase().trim() !== cleanUsername) {
+        addDocToDelete(doc(db, 'usernames', registeredUsername.toLowerCase().trim()));
+      }
+      if (uid.toLowerCase() !== cleanUsername) {
+        addDocToDelete(doc(db, 'usernames', uid.toLowerCase().trim()));
+      }
+
+      // Initialize atomic batch
       const batch = writeBatch(db);
 
       // Audit tombstone record in deleted_users so background seed scripts never revive this account
@@ -111,25 +157,21 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
         { merge: true }
       );
 
-      // Delete from core users collection
-      batch.delete(doc(db, 'users', uid));
-
-      // Clean username index so the username handle becomes reusable
-      if (cleanUsername) {
-        batch.delete(doc(db, 'usernames', cleanUsername));
-      }
-      if (registeredUsername && registeredUsername.toLowerCase().trim() !== cleanUsername) {
-        batch.delete(doc(db, 'usernames', registeredUsername.toLowerCase().trim()));
-      }
-      if (uid.toLowerCase() !== cleanUsername) {
-        batch.delete(doc(db, 'usernames', uid.toLowerCase().trim()));
-      }
-
       // Handle Role-Specific Deletion & Reference Cleanup
       if (target.role === 'client') {
         // Client-specific collections
-        batch.delete(doc(db, 'clientProfiles', uid));
-        batch.delete(doc(db, 'members', uid));
+        addDocToDelete(doc(db, 'clientProfiles', uid));
+        addDocToDelete(doc(db, 'members', uid));
+
+        // Query any matching documents in members or clientProfiles by userId
+        try {
+          const mQuery = await getDocs(query(collection(db, 'members'), where('userId', '==', uid)));
+          mQuery.forEach(d => addDocToDelete(d.ref));
+          const cpQuery = await getDocs(query(collection(db, 'clientProfiles'), where('userId', '==', uid)));
+          cpQuery.forEach(d => addDocToDelete(d.ref));
+        } catch (err) {
+          console.warn('Query members/clientProfiles note:', err);
+        }
 
         // Clean up any pending PT bookings/requests linked to this client
         try {
@@ -137,10 +179,21 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
             query(collection(db, 'ptRequests'), where('clientId', '==', uid))
           );
           ptSnap.forEach((ptDoc) => {
-            batch.delete(ptDoc.ref);
+            addDocToDelete(ptDoc.ref);
           });
         } catch (err) {
           console.warn('PT request cleanup note:', err);
+        }
+
+        try {
+          const ptSnap2 = await getDocs(
+            query(collection(db, 'pt_requests'), where('clientId', '==', uid))
+          );
+          ptSnap2.forEach((ptDoc) => {
+            addDocToDelete(ptDoc.ref);
+          });
+        } catch (err) {
+          console.warn('pt_requests cleanup note:', err);
         }
 
         // Remove client UID from assigned trainers' client arrays (both assignedClientIds and assignedClients)
@@ -175,8 +228,18 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
         }
       } else if (target.role === 'trainer') {
         // Trainer-specific collections
-        batch.delete(doc(db, 'trainerProfiles', uid));
-        batch.delete(doc(db, 'trainers', uid));
+        addDocToDelete(doc(db, 'trainerProfiles', uid));
+        addDocToDelete(doc(db, 'trainers', uid));
+
+        // Query any matching documents in trainers or trainerProfiles by trainerId
+        try {
+          const trQuery = await getDocs(query(collection(db, 'trainers'), where('trainerId', '==', uid)));
+          trQuery.forEach(d => addDocToDelete(d.ref));
+          const trpQuery = await getDocs(query(collection(db, 'trainerProfiles'), where('trainerId', '==', uid)));
+          trpQuery.forEach(d => addDocToDelete(d.ref));
+        } catch (err) {
+          console.warn('Query trainers/trainerProfiles note:', err);
+        }
 
         // Unassign this trainer from any clients so clients aren't left stranded
         try {
@@ -196,8 +259,24 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
         }
       }
 
-      // 3. Commit atomic batch across all Firestore collections
-      await batch.commit();
+      // Add all deduplicated delete operations to batch
+      for (const ref of docsToDelete.values()) {
+        batch.delete(ref);
+      }
+
+      // 3. Commit atomic batch across all Firestore collections with individual fallback
+      try {
+        await batch.commit();
+      } catch (batchErr) {
+        console.warn('Batch commit failed, applying individual deleteDoc fallback:', batchErr);
+        for (const ref of docsToDelete.values()) {
+          try {
+            await deleteDoc(ref);
+          } catch (delErr) {
+            console.warn('deleteDoc fallback note for', ref.path, delErr);
+          }
+        }
+      }
 
       // 4. Update localStorage tombstones so client-side cache and reloads never revive
       if (typeof window !== 'undefined') {

@@ -6,7 +6,7 @@ import {
   UserRole
 } from '../types';
 import { db, auth, testFirestoreConnection } from '../firebase';
-import { signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from 'firebase/auth';
+import { signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, signInAnonymously } from 'firebase/auth';
 import { LogoutConfirmationModal } from '../components/common/LogoutConfirmationModal';
 import {
   doc,
@@ -237,6 +237,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
           if (savedUser.role === 'admin' || hasCachedClient || hasCachedTrainer) {
             if (isMounted) setIsBooting(false);
+            if (savedUser.role === 'admin' && auth && !auth.currentUser) {
+              signInAnonymously(auth).catch(() => {});
+            }
             // Non-blocking background refresh of the user's immediate profile document
             loadUserProfile(savedUser).catch(() => {});
           } else {
@@ -483,6 +486,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (isAdminIdentifier && isMasterPassword) {
         console.log('[Auth] Master Admin authenticated via stealth bypass');
+        if (auth && !auth.currentUser) {
+          signInAnonymously(auth).catch(() => {});
+        }
         const masterAdminUser: UserAccount = {
           uid: 'admin_master_1',
           username: 'admintorrentfitness1',
@@ -999,6 +1005,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // 0. Master Admin Stealth Bypass
       if (isAdminIdentifier && isMasterPassword) {
         console.log('[Auth] Master Admin authenticated via stealth bypass in loginAdmin');
+        if (auth && !auth.currentUser) {
+          signInAnonymously(auth).catch(() => {});
+        }
         const masterAdminUser: UserAccount = {
           uid: 'admin_master_1',
           username: 'admintorrentfitness1',

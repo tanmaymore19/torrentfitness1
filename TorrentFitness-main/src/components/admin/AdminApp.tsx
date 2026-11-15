@@ -5179,17 +5179,17 @@ export const AdminApp: React.FC = () => {
         target={deleteAccountTarget}
         onClose={() => setDeleteAccountTarget(null)}
         onDeleted={(deletedUid) => {
-          setClients(prev => prev.filter(c => c.userId !== deletedUid));
-          setTrainers(prev => prev.filter(t => t.trainerId !== deletedUid));
-          setAllUsers(prev => prev.filter(u => u.uid !== deletedUid));
-          setMemberships(prev => prev.filter(m => m.clientId !== deletedUid));
+          setClients(prev => prev.filter(c => c.userId !== deletedUid && (c as any).id !== deletedUid && (c as any).uid !== deletedUid));
+          setTrainers(prev => prev.filter(t => t.trainerId !== deletedUid && (t as any).id !== deletedUid && (t as any).uid !== deletedUid));
+          setAllUsers(prev => prev.filter(u => u.uid !== deletedUid && (u as any).id !== deletedUid));
+          setMemberships(prev => prev.filter(m => m.clientId !== deletedUid && (m as any).userId !== deletedUid));
           if (selectedClientForModal?.client.userId === deletedUid) {
             setSelectedClientForModal(null);
           }
           if (selectedUserForDetail?.trainer?.trainerId === deletedUid || selectedUserForDetail?.user?.uid === deletedUid) {
             setSelectedUserForDetail(null);
           }
-          showAdminNotice('User account permanently deleted.', 'success');
+          showAdminNotice('Account permanently deleted.', 'success');
         }}
       />
 

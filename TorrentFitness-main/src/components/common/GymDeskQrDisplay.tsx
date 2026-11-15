@@ -103,65 +103,184 @@ export const GymDeskQrDisplay: React.FC<GymDeskQrDisplayProps> = ({
     }
   };
 
-  // Bulletproof HTML5 Canvas Standee Export
+  // Bulletproof HTML5 Canvas Standee Export (Modern & Stylish Gym Wall Poster, NO Phone Numbers)
   const handleDownloadImage = async () => {
     if (!qrImageUrl || isDownloading) return;
     setIsDownloading(true);
-    showToast('Downloading QR Image...');
+    showToast('Downloading High-Resolution QR Poster...');
 
     try {
       const canvas = document.createElement('canvas');
-      canvas.width = 800;
-      canvas.height = 1050;
+      canvas.width = 900;
+      canvas.height = 1280;
       const ctx = canvas.getContext('2d');
 
       if (!ctx) {
         throw new Error('Could not get canvas 2D context');
       }
 
-      // Background
-      ctx.fillStyle = '#ffffff';
+      // 1. Deep Dark Obsidian & Navy Background
+      const bgGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      bgGrad.addColorStop(0, '#060a14');
+      bgGrad.addColorStop(0.5, '#0b1426');
+      bgGrad.addColorStop(1, '#060a14');
+      ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Card border & rounded look
-      ctx.strokeStyle = '#e0f2fe';
-      ctx.lineWidth = 4;
-      ctx.strokeRect(40, 40, canvas.width - 80, canvas.height - 80);
+      // Radial top glow
+      const radialGlow = ctx.createRadialGradient(450, 160, 20, 450, 160, 420);
+      radialGlow.addColorStop(0, 'rgba(14, 165, 233, 0.18)');
+      radialGlow.addColorStop(1, 'rgba(14, 165, 233, 0)');
+      ctx.fillStyle = radialGlow;
+      ctx.fillRect(0, 0, canvas.width, 500);
 
-      // Header Badge pill
-      ctx.fillStyle = '#f0f9ff';
-      ctx.strokeStyle = '#bae6fd';
-      ctx.lineWidth = 2;
+      // Outer Decorative Border
+      ctx.strokeStyle = '#1e3a5f';
+      ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.roundRect(canvas.width / 2 - 160, 80, 320, 40, 20);
+      ctx.roundRect(35, 35, canvas.width - 70, canvas.height - 70, 28);
+      ctx.stroke();
+
+      // Inner subtle border
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.25)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(45, 45, canvas.width - 90, canvas.height - 90, 22);
+      ctx.stroke();
+
+      // 2. Header Badge Pill
+      ctx.fillStyle = 'rgba(2, 132, 199, 0.18)';
+      ctx.strokeStyle = '#0284c7';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.roundRect(canvas.width / 2 - 170, 65, 340, 36, 18);
       ctx.fill();
       ctx.stroke();
 
-      ctx.fillStyle = '#0369a1';
-      ctx.font = 'bold 14px system-ui, sans-serif';
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 12px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('🛡️ OFFICIAL GYM GATE STANDEE', canvas.width / 2, 105);
+      ctx.fillText('⚡ OFFICIAL GYM GATE ATTENDANCE', canvas.width / 2, 88);
 
-      // Title: TORRENT FITNESS
-      ctx.fillStyle = '#0f172a';
-      ctx.font = '900 36px system-ui, sans-serif';
-      ctx.fillText('TORRENT FITNESS', canvas.width / 2, 175);
+      // 3. Gym Logo
+      try {
+        const logoImg = new Image();
+        logoImg.crossOrigin = 'anonymous';
+        logoImg.src = '/gym-logo-v2.png?v=20261025_2';
+        await new Promise((resolve) => {
+          logoImg.onload = resolve;
+          logoImg.onerror = resolve; // gracefully continue if missing
+        });
+        if (logoImg.complete && logoImg.naturalWidth !== 0) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(canvas.width / 2, 165, 42, 0, Math.PI * 2);
+          ctx.clip();
+          ctx.drawImage(logoImg, canvas.width / 2 - 42, 123, 84, 84);
+          ctx.restore();
+          // Logo ring
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.arc(canvas.width / 2, 165, 43, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      } catch {}
 
-      // Subtitle instructions
-      ctx.fillStyle = '#64748b';
-      ctx.font = '16px system-ui, sans-serif';
-      ctx.fillText('Scan with your phone to start your 2-hour gym session.', canvas.width / 2, 210);
+      // 4. Brand Title & Tagline
+      ctx.textAlign = 'center';
+      ctx.font = '900 42px system-ui, sans-serif';
+      // "TORRENT" in white, "FITNESS" in electric blue
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText('TORRENT ', canvas.width / 2 - 80, 260);
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillText('FITNESS', canvas.width / 2 + 85, 260);
 
-      // QR Code Box Background
-      ctx.fillStyle = '#f8fafc';
-      ctx.strokeStyle = '#cbd5e1';
-      ctx.lineWidth = 2;
+      // Tagline: BE MORE DO MORE
+      ctx.fillStyle = '#818cf8';
+      ctx.font = 'bold 14px system-ui, sans-serif';
+      ctx.letterSpacing = '3px';
+      ctx.fillText('BE MORE DO MORE', canvas.width / 2, 290);
+
+      // 5. "SCAN TO CHECK IN" Badge
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.roundRect(canvas.width / 2 - 210, 240, 420, 420, 30);
+      ctx.roundRect(canvas.width / 2 - 130, 318, 260, 34, 17);
       ctx.fill();
       ctx.stroke();
 
-      // Draw QR Image inside box
+      // Green active dot
+      ctx.fillStyle = '#10b981';
+      ctx.beginPath();
+      ctx.arc(canvas.width / 2 - 95, 335, 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#ecfdf5';
+      ctx.font = 'bold 13px system-ui, sans-serif';
+      ctx.fillText('SCAN TO CHECK IN', canvas.width / 2 + 10, 340);
+
+      // 6. Central QR Scanner Box with Sleek Geometric Corner Brackets
+      const qrBoxSize = 440;
+      const qrBoxX = canvas.width / 2 - qrBoxSize / 2;
+      const qrBoxY = 370;
+
+      // Dark scanner frame background
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+      ctx.strokeStyle = '#1e3a5f';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.roundRect(qrBoxX, qrBoxY, qrBoxSize, qrBoxSize, 28);
+      ctx.fill();
+      ctx.stroke();
+
+      // Neon Electric Blue Geometric Corner Brackets
+      const bracketLen = 42;
+      const bracketThickness = 6;
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = bracketThickness;
+      ctx.lineCap = 'round';
+
+      // Top-Left bracket
+      ctx.beginPath();
+      ctx.moveTo(qrBoxX + 16, qrBoxY + 16 + bracketLen);
+      ctx.lineTo(qrBoxX + 16, qrBoxY + 16);
+      ctx.lineTo(qrBoxX + 16 + bracketLen, qrBoxY + 16);
+      ctx.stroke();
+
+      // Top-Right bracket
+      ctx.beginPath();
+      ctx.moveTo(qrBoxX + qrBoxSize - 16 - bracketLen, qrBoxY + 16);
+      ctx.lineTo(qrBoxX + qrBoxSize - 16, qrBoxY + 16);
+      ctx.lineTo(qrBoxX + qrBoxSize - 16, qrBoxY + 16 + bracketLen);
+      ctx.stroke();
+
+      // Bottom-Left bracket
+      ctx.beginPath();
+      ctx.moveTo(qrBoxX + 16, qrBoxY + qrBoxSize - 16 - bracketLen);
+      ctx.lineTo(qrBoxX + 16, qrBoxY + qrBoxSize - 16);
+      ctx.lineTo(qrBoxX + 16 + bracketLen, qrBoxY + qrBoxSize - 16);
+      ctx.stroke();
+
+      // Bottom-Right bracket
+      ctx.beginPath();
+      ctx.moveTo(qrBoxX + qrBoxSize - 16 - bracketLen, qrBoxY + qrBoxSize - 16);
+      ctx.lineTo(qrBoxX + qrBoxSize - 16, qrBoxY + qrBoxSize - 16);
+      ctx.lineTo(qrBoxX + qrBoxSize - 16, qrBoxY + qrBoxSize - 16 - bracketLen);
+      ctx.stroke();
+
+      // White QR code container inside
+      const whiteTileSize = 350;
+      const whiteTileX = canvas.width / 2 - whiteTileSize / 2;
+      const whiteTileY = qrBoxY + (qrBoxSize - whiteTileSize) / 2;
+
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.roundRect(whiteTileX, whiteTileY, whiteTileSize, whiteTileSize, 20);
+      ctx.fill();
+
+      // Draw QR Image
       const qrImg = new Image();
       qrImg.crossOrigin = 'anonymous';
       qrImg.src = qrImageUrl;
@@ -171,47 +290,119 @@ export const GymDeskQrDisplay: React.FC<GymDeskQrDisplayProps> = ({
         qrImg.onerror = reject;
       });
 
-      ctx.drawImage(qrImg, canvas.width / 2 - 180, 270, 360, 360);
+      const qrPad = 15;
+      ctx.drawImage(
+        qrImg,
+        whiteTileX + qrPad,
+        whiteTileY + qrPad,
+        whiteTileSize - (qrPad * 2),
+        whiteTileSize - (qrPad * 2)
+      );
 
-      // Token info container
-      ctx.fillStyle = '#f1f5f9';
-      ctx.strokeStyle = '#e2e8f0';
+      // 7. Clear 3-Step Visual Instructions Box
+      const instructBoxY = 835;
+      const instructBoxW = 760;
+      const instructBoxH = 150;
+      const instructBoxX = canvas.width / 2 - instructBoxW / 2;
+
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+      ctx.strokeStyle = '#1e3a5f';
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.roundRect(80, 690, canvas.width - 160, 160, 20);
+      ctx.roundRect(instructBoxX, instructBoxY, instructBoxW, instructBoxH, 20);
       ctx.fill();
       ctx.stroke();
 
-      ctx.fillStyle = '#64748b';
-      ctx.font = 'bold 14px system-ui, sans-serif';
-      ctx.textAlign = 'left';
-      ctx.fillText('ACTIVE TOKEN ID:', 120, 730);
-
-      ctx.fillStyle = '#0f172a';
-      ctx.font = 'bold 16px monospace';
-      const tokenText = config?.activeToken || 'TORRENT-GATE-TOKEN';
-      ctx.fillText(tokenText, 120, 770);
-
-      const timeStr = `Generated: ${new Date().toLocaleString()}`;
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '13px system-ui, sans-serif';
-      ctx.fillText(timeStr, 120, 815);
-
-      // Footer brand note
-      ctx.fillStyle = '#64748b';
-      ctx.font = 'bold 14px system-ui, sans-serif';
+      // Instruction heading
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 12px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('Torrent Fitness Access Control • Please do not cover or tamper with this standee', canvas.width / 2, 920);
+      ctx.fillText('3 EASY STEPS TO CHECK IN', canvas.width / 2, instructBoxY + 32);
+
+      // 3 Steps
+      const stepY = instructBoxY + 75;
+      const step1X = canvas.width / 2 - 250;
+      const step2X = canvas.width / 2;
+      const step3X = canvas.width / 2 + 250;
+
+      // Step badges
+      const drawStepBadge = (num: string, title: string, subtitle: string, xPos: number) => {
+        // Circle number
+        ctx.fillStyle = '#0284c7';
+        ctx.beginPath();
+        ctx.arc(xPos, stepY - 6, 16, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 14px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(num, xPos, stepY - 1);
+
+        // Title
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 14px system-ui, sans-serif';
+        ctx.fillText(title, xPos, stepY + 30);
+
+        // Subtitle
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '11px system-ui, sans-serif';
+        ctx.fillText(subtitle, xPos, stepY + 48);
+      };
+
+      drawStepBadge('1', 'Open App', 'Torrent Fitness App', step1X);
+      drawStepBadge('2', 'Tap Scan QR', 'On Client Home Screen', step2X);
+      drawStepBadge('3', 'Start Session', 'Point Camera & Check In', step3X);
+
+      // 8. Active Token & Access Details Box
+      const tokenBoxY = 1005;
+      const tokenBoxW = 760;
+      const tokenBoxH = 80;
+      const tokenBoxX = canvas.width / 2 - tokenBoxW / 2;
+
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.6)';
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(tokenBoxX, tokenBoxY, tokenBoxW, tokenBoxH, 16);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#64748b';
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.fillText('ACTIVE GATE TOKEN:', tokenBoxX + 24, tokenBoxY + 32);
+
+      const tokenText = config?.activeToken || 'TORRENT-GATE-TOKEN';
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = 'bold 14px monospace';
+      ctx.fillText(tokenText, tokenBoxX + 24, tokenBoxY + 56);
+
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#64748b';
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillText(`Valid Gym Session: 2 Hours`, tokenBoxX + tokenBoxW - 24, tokenBoxY + 32);
+      ctx.fillText(`Auto Session Reset on Checkout`, tokenBoxX + tokenBoxW - 24, tokenBoxY + 56);
+
+      // 9. Modern Gym Address Footer (NO Phone Numbers)
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = 'bold 13px system-ui, sans-serif';
+      ctx.fillText('Sakri Rd, Opposite Sinchan Bhavan, Dhule, Maharashtra', canvas.width / 2, 1140);
+
+      ctx.fillStyle = '#475569';
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillText('Torrent Fitness Reception Access Control • Please do not tamper with or obstruct this QR poster', canvas.width / 2, 1170);
 
       // Export as PNG
       const imageUri = canvas.toDataURL('image/png');
       const a = document.createElement('a');
       a.href = imageUri;
       const cleanDateStr = new Date().toISOString().split('T')[0];
-      a.download = `TorrentFitness_Gate_QR_Standee_${cleanDateStr}.png`;
+      a.download = `TorrentFitness_Gate_QR_Poster_${cleanDateStr}.png`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      showToast('QR Standee downloaded successfully!');
+      showToast('QR Poster downloaded successfully!');
     } catch (err: any) {
       console.error('QR Export Error:', err);
       alert('Failed to download QR image: ' + err.message);
@@ -228,7 +419,7 @@ export const GymDeskQrDisplay: React.FC<GymDeskQrDisplayProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Bulletproof Hidden Iframe Print Method
+  // Bulletproof Hidden Iframe Print Method (A4 Modern Gym Wall Poster, NO Phone Numbers)
   const handlePrintStandee = () => {
     setIsPrinting(true);
     showToast('Opening Print Preview...');
@@ -248,114 +439,294 @@ export const GymDeskQrDisplay: React.FC<GymDeskQrDisplayProps> = ({
         <!DOCTYPE html>
         <html>
         <head>
-          <title>Torrent Fitness - Official QR Standee</title>
+          <title>Torrent Fitness - Gate Attendance Poster</title>
           <style>
-            body {
-              font-family: system-ui, -apple-system, sans-serif;
-              text-align: center;
-              background: #ffffff;
-              color: #0f172a;
+            @page {
+              size: A4 portrait;
               margin: 0;
-              padding: 40px;
             }
-            .print-card {
+            * {
+              box-sizing: border-box;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+            body {
+              font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+              text-align: center;
+              background: #060a14;
+              color: #ffffff;
+              margin: 0;
+              padding: 0;
+              width: 210mm;
+              min-height: 297mm;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              justify-content: center;
+            }
+            .poster-card {
+              width: 186mm;
               border: 3px solid #0284c7;
-              border-radius: 32px;
-              padding: 40px;
-              max-width: 480px;
-              margin: 0 auto;
-              background: #ffffff;
-              box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+              border-radius: 28px;
+              background: linear-gradient(180deg, #0b1426 0%, #060a14 100%);
+              padding: 28px 24px;
+              margin: auto;
+              box-shadow: 0 0 50px rgba(2, 132, 199, 0.25);
+              position: relative;
+              overflow: hidden;
             }
-            .badge {
-              font-size: 12px;
+            .badge-top {
+              font-size: 11px;
               font-weight: 800;
               text-transform: uppercase;
-              color: #0369a1;
-              background: #f0f9ff;
-              border: 1px solid #bae6fd;
-              padding: 8px 20px;
+              letter-spacing: 1.5px;
+              color: #38bdf8;
+              background: rgba(2, 132, 199, 0.18);
+              border: 1px solid #0284c7;
+              padding: 6px 18px;
               border-radius: 9999px;
               display: inline-block;
-              margin-bottom: 16px;
+              margin-bottom: 14px;
+            }
+            .logo-img {
+              width: 82px;
+              height: 82px;
+              margin: 0 auto 10px;
+              display: block;
+              border-radius: 50%;
+              object-fit: contain;
+              border: 2px solid #38bdf8;
+              box-shadow: 0 0 20px rgba(56, 189, 248, 0.35);
             }
             h1 {
-              font-size: 32px;
+              font-size: 34px;
               font-weight: 900;
-              margin: 0 0 8px 0;
-              color: #0f172a;
+              margin: 0 0 4px 0;
+              color: #ffffff;
               letter-spacing: -0.5px;
             }
             h1 span {
-              color: #0284c7;
+              color: #38bdf8;
             }
-            p {
-              font-size: 15px;
-              color: #64748b;
-              margin: 0 0 32px 0;
+            .tagline {
+              font-size: 13px;
+              font-weight: 800;
+              letter-spacing: 3px;
+              text-transform: uppercase;
+              color: #818cf8;
+              margin-bottom: 12px;
             }
-            .qr-wrapper {
-              background: #f8fafc;
-              border: 2px solid #e2e8f0;
+            .checkin-pill {
+              display: inline-flex;
+              align-items: center;
+              gap: 8px;
+              background: rgba(16, 185, 129, 0.15);
+              border: 1px solid #10b981;
+              color: #ecfdf5;
+              font-size: 12px;
+              font-weight: 800;
+              padding: 6px 16px;
+              border-radius: 9999px;
+              margin-bottom: 16px;
+            }
+            .dot-green {
+              width: 8px;
+              height: 8px;
+              background: #10b981;
+              border-radius: 50%;
+              display: inline-block;
+            }
+            /* Geometric Scanner Frame */
+            .scanner-frame {
+              position: relative;
+              background: rgba(15, 23, 42, 0.9);
+              border: 2px solid #1e3a5f;
               border-radius: 24px;
               padding: 24px;
               display: inline-block;
-              margin-bottom: 32px;
+              margin: 0 auto 20px;
+              box-shadow: inset 0 0 30px rgba(2, 132, 199, 0.15);
             }
-            .qr-wrapper img {
-              width: 260px;
-              height: 260px;
+            .corner {
+              position: absolute;
+              width: 28px;
+              height: 28px;
+              border-color: #38bdf8;
+              border-style: solid;
+            }
+            .corner-tl { top: 8px; left: 8px; border-width: 4px 0 0 4px; border-radius: 6px 0 0 0; }
+            .corner-tr { top: 8px; right: 8px; border-width: 4px 4px 0 0; border-radius: 0 6px 0 0; }
+            .corner-bl { bottom: 8px; left: 8px; border-width: 0 0 4px 4px; border-radius: 0 0 0 6px; }
+            .corner-br { bottom: 8px; right: 8px; border-width: 0 4px 4px 0; border-radius: 0 0 6px 0; }
+            .qr-white-tile {
+              background: #ffffff;
+              border-radius: 18px;
+              padding: 14px;
+              display: block;
+              margin: 0 auto;
+            }
+            .qr-white-tile img {
+              width: 250px;
+              height: 250px;
               object-fit: contain;
               display: block;
             }
+            /* 3-Step Instructions Box */
+            .instructions-box {
+              background: rgba(15, 23, 42, 0.75);
+              border: 1px solid #1e3a5f;
+              border-radius: 18px;
+              padding: 14px 20px;
+              margin: 0 auto 16px;
+              max-width: 95%;
+            }
+            .instructions-title {
+              font-size: 11px;
+              font-weight: 800;
+              text-transform: uppercase;
+              letter-spacing: 1.5px;
+              color: #38bdf8;
+              margin-bottom: 12px;
+            }
+            .steps-row {
+              display: flex;
+              align-items: center;
+              justify-content: space-around;
+              gap: 12px;
+            }
+            .step-col {
+              flex: 1;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              text-align: center;
+            }
+            .step-circle {
+              width: 26px;
+              height: 26px;
+              border-radius: 50%;
+              background: #0284c7;
+              color: #ffffff;
+              font-size: 13px;
+              font-weight: 900;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              margin-bottom: 6px;
+            }
+            .step-text {
+              font-size: 12px;
+              font-weight: 700;
+              color: #ffffff;
+            }
+            .step-sub {
+              font-size: 10px;
+              color: #94a3b8;
+              margin-top: 2px;
+            }
+            /* Token Details */
             .token-box {
-              background: #f1f5f9;
-              border: 1px solid #cbd5e1;
-              border-radius: 16px;
-              padding: 16px;
+              background: rgba(15, 23, 42, 0.6);
+              border: 1px solid #1e293b;
+              border-radius: 14px;
+              padding: 10px 18px;
+              margin: 0 auto 16px;
+              max-width: 95%;
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
               text-align: left;
             }
             .token-label {
-              font-size: 12px;
+              font-size: 10px;
               color: #64748b;
-              font-weight: 700;
-              margin-bottom: 4px;
+              font-weight: 800;
+              text-transform: uppercase;
             }
             .token-val {
               font-family: monospace;
-              font-size: 14px;
+              font-size: 13px;
               font-weight: bold;
-              color: #0f172a;
-              word-break: break-all;
+              color: #e2e8f0;
             }
-            .footer-note {
-              margin-top: 24px;
-              font-size: 12px;
+            .session-note {
+              font-size: 10px;
               color: #94a3b8;
-              font-weight: 600;
+              text-align: right;
             }
-            @media print {
-              body { padding: 0; }
-              .print-card { border: 2px solid #000; box-shadow: none; }
+            /* Gym Address Footer */
+            .footer-address {
+              font-size: 12px;
+              font-weight: 700;
+              color: #94a3b8;
+              margin-bottom: 4px;
+            }
+            .footer-disclaimer {
+              font-size: 10px;
+              color: #475569;
             }
           </style>
         </head>
         <body>
-          <div class="print-card">
-            <img src="/gym-logo-v2.png?v=20261025_2" style="width: 92px; height: 92px; margin: 0 auto 10px; display: block; border-radius: 50%; object-fit: contain;" alt="Torrent Fitness Logo" />
-            <div class="badge">Official Gym Gate Standee</div>
+          <div class="poster-card">
+            <div class="badge-top">⚡ OFFICIAL GYM GATE ATTENDANCE</div>
+            <img src="/gym-logo-v2.png?v=20261025_2" class="logo-img" alt="Torrent Fitness Logo" />
             <h1>TORRENT <span>FITNESS</span></h1>
-            <div style="font-size: 11px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; color: #4f46e5; margin-bottom: 6px;">BE MORE DO MORE</div>
-            <p>Scan with your phone to start your 2-hour gym session.</p>
-            <div class="qr-wrapper">
-              <img src="${qrImageUrl}" alt="Gate QR" />
+            <div class="tagline">BE MORE DO MORE</div>
+            <div>
+              <div class="checkin-pill">
+                <span class="dot-green"></span>
+                <span>SCAN TO CHECK IN</span>
+              </div>
             </div>
+
+            <div class="scanner-frame">
+              <div class="corner corner-tl"></div>
+              <div class="corner corner-tr"></div>
+              <div class="corner corner-bl"></div>
+              <div class="corner corner-br"></div>
+              <div class="qr-white-tile">
+                <img src="${qrImageUrl}" alt="Gate Attendance QR" />
+              </div>
+            </div>
+
+            <div class="instructions-box">
+              <div class="instructions-title">3 Easy Steps to Check In</div>
+              <div class="steps-row">
+                <div class="step-col">
+                  <div class="step-circle">1</div>
+                  <div class="step-text">Open App</div>
+                  <div class="step-sub">Torrent Fitness</div>
+                </div>
+                <div class="step-col">
+                  <div class="step-circle">2</div>
+                  <div class="step-text">Tap Scan QR</div>
+                  <div class="step-sub">On Home Screen</div>
+                </div>
+                <div class="step-col">
+                  <div class="step-circle">3</div>
+                  <div class="step-text">Start Session</div>
+                  <div class="step-sub">Point & Check In</div>
+                </div>
+              </div>
+            </div>
+
             <div class="token-box">
-              <div class="token-label">ACTIVE TOKEN ID:</div>
-              <div class="token-val">${config?.activeToken || 'N/A'}</div>
+              <div>
+                <div class="token-label">ACTIVE GATE TOKEN</div>
+                <div class="token-val">${config?.activeToken || 'N/A'}</div>
+              </div>
+              <div class="session-note">
+                Valid Session: 2 Hours<br />
+                Single Active Session Lock
+              </div>
             </div>
-            <div class="footer-note">
-              Torrent Fitness Access Control • Reception Desk Standee
+
+            <div class="footer-address">
+              Sakri Rd, Opposite Sinchan Bhavan, Dhule, Maharashtra
+            </div>
+            <div class="footer-disclaimer">
+              Torrent Fitness Reception Desk • Please do not tamper with or cover this standee
             </div>
           </div>
           <script>
@@ -403,14 +774,21 @@ export const GymDeskQrDisplay: React.FC<GymDeskQrDisplayProps> = ({
 
       {/* Standee Header */}
       <div className="space-y-1">
-        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200/80">
-          <ShieldCheck className="w-3.5 h-3.5 text-indigo-600 font-bold" />
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-sky-50 text-sky-700 border border-sky-200">
+          <ShieldCheck className="w-3.5 h-3.5 text-sky-600 font-bold" />
           <span>Official Gym Gate Standee</span>
         </div>
         <h3 className="text-xl font-black text-slate-800 tracking-tight">
-          TORRENT <span className="bg-gradient-to-r from-indigo-600 to-sky-500 bg-clip-text text-transparent font-black">FITNESS</span>
+          TORRENT <span className="bg-gradient-to-r from-sky-600 to-indigo-600 bg-clip-text text-transparent font-black">FITNESS</span>
         </h3>
-        <p className="text-xs text-slate-500">
+        <div className="text-[11px] font-black tracking-widest uppercase text-indigo-600">
+          BE MORE DO MORE
+        </div>
+        <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 mt-1">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          <span>SCAN TO CHECK IN</span>
+        </div>
+        <p className="text-xs text-slate-500 pt-0.5">
           Scan with your phone to start your 2-hour gym session.
         </p>
       </div>
@@ -456,6 +834,25 @@ export const GymDeskQrDisplay: React.FC<GymDeskQrDisplayProps> = ({
             <span>Updated: {new Date(config.generatedAt).toLocaleTimeString()}</span>
           </div>
         )}
+      </div>
+
+      {/* 3-Step Quick Instruction Preview */}
+      <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-2.5 text-[11px] text-slate-600">
+        <div className="font-bold text-sky-700 uppercase tracking-wider text-[10px] mb-1">
+          Quick Check-In Steps
+        </div>
+        <div className="flex items-center justify-between text-[10px] text-slate-500 font-medium px-1">
+          <span>1. Open App</span>
+          <span>•</span>
+          <span>2. Tap Scan QR</span>
+          <span>•</span>
+          <span>3. Start Session</span>
+        </div>
+      </div>
+
+      {/* Gym Address Footer (NO Phone Numbers) */}
+      <div className="text-[10px] text-slate-400 font-medium leading-tight">
+        📍 Sakri Rd, Opposite Sinchan Bhavan, Dhule, Maharashtra
       </div>
 
       {/* Actions */}
