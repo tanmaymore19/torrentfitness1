@@ -5108,12 +5108,36 @@ export const AdminApp: React.FC = () => {
               </div>
             )}
 
-            <button
-              onClick={() => setSelectedUserForDetail(null)}
-              className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors border border-slate-200"
-            >
-              Close Profile View
-            </button>
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setSelectedUserForDetail(null)}
+                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors border border-slate-200"
+              >
+                Close Profile
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const tr = selectedUserForDetail.trainer;
+                  const u = selectedUserForDetail.user;
+                  const targetUid = tr?.trainerId || u?.uid;
+                  if (targetUid) {
+                    setDeleteAccountTarget({
+                      uid: targetUid,
+                      displayName: tr?.displayName || u?.displayName || 'Trainer',
+                      role: 'trainer',
+                      email: u?.email || tr?.email,
+                      username: u?.username || tr?.username
+                    });
+                  }
+                }}
+                className="px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                <span>Delete Trainer</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -5158,10 +5182,14 @@ export const AdminApp: React.FC = () => {
           setClients(prev => prev.filter(c => c.userId !== deletedUid));
           setTrainers(prev => prev.filter(t => t.trainerId !== deletedUid));
           setAllUsers(prev => prev.filter(u => u.uid !== deletedUid));
+          setMemberships(prev => prev.filter(m => m.clientId !== deletedUid));
           if (selectedClientForModal?.client.userId === deletedUid) {
             setSelectedClientForModal(null);
           }
-          showAdminNotice('Account permanently deleted from database.', 'success');
+          if (selectedUserForDetail?.trainer?.trainerId === deletedUid || selectedUserForDetail?.user?.uid === deletedUid) {
+            setSelectedUserForDetail(null);
+          }
+          showAdminNotice('User account permanently deleted.', 'success');
         }}
       />
 

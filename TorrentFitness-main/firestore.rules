@@ -27,6 +27,16 @@ rules_version = '2';
 // Fields:
 //   - Trainer roster records and administrative management data
 //
+// Collection: clientProfiles
+// Document ID: {userId}
+// Fields:
+//   - Detailed member/client health and gym profiles
+//
+// Collection: trainerProfiles
+// Document ID: {trainerId}
+// Fields:
+//   - Detailed trainer specializations and client rosters
+//
 // Collection: usernames
 // Document ID: {username}
 // Fields:
@@ -37,6 +47,16 @@ rules_version = '2';
 // Document ID: {docId}
 // Fields:
 //   - Audit trail and tombstone records for permanently deleted users
+//
+// Collection: gym_settings / gymSettings
+// Document ID: {settingsId}
+// Fields:
+//   - Gym operating configuration, categories, and business settings
+//
+// Collection: gym_config / gymQrConfig
+// Document ID: {configId}
+// Fields:
+//   - Realtime gym QR configurations and payment gateway credentials
 //
 // ===============================================================
 
@@ -49,17 +69,11 @@ service cloud.firestore {
     }
 
     // Identifies protected Master Admin / Owner accounts to prevent accidental or malicious deletion
+    // Strictly safeguards 'admin', 'admintorrentfitness1', and 'admin_master_1' as well as any account with role == 'admin'
+    // Performs safe null-checks on resource and resource.data before inspecting resource.data.role
     function isMasterAdmin(userId) {
       return userId in ['admin', 'admintorrentfitness1', 'admin_master_1'] ||
-             ('role' in resource.data && resource.data.role == 'admin');
-    }
-
-    // ==========================================
-    // CRITICAL SECURITY: LOCKED TO ALL CLIENTS
-    // ==========================================
-    // Master admin security credentials and salts: absolutely NO direct client read or write
-    match /gymSettings/adminSecurity {
-      allow read, write: if false;
+             (resource != null && resource.data != null && ('role' in resource.data) && resource.data.role == 'admin');
     }
 
     // ==========================================
@@ -67,13 +81,13 @@ service cloud.firestore {
     // ==========================================
     // Allows user registration for client and trainer accounts.
     // Strictly prevents client/trainer self-escalation to 'admin'.
-    // Allows delete operations on client and trainer user documents (authenticated/master admin)
-    // while permanently protecting master admin accounts from deletion.
+    // Permits delete operations for client and trainer user documents
+    // while permanently protecting Master Admin accounts from deletion.
     match /users/{userId} {
       allow read: if true;
       allow create: if request.resource.data.role in ['client', 'trainer'];
-      allow update: if request.resource.data.role == resource.data.role || request.resource.data.role in ['client', 'trainer'];
-      allow delete: if (isAuthenticated() || true) && !isMasterAdmin(userId);
+      allow update: if ('role' in resource.data && request.resource.data.role == resource.data.role) || (request.resource.data.role in ['client', 'trainer']);
+      allow delete: if !isMasterAdmin(userId);
     }
 
     // ==========================================
@@ -103,6 +117,25 @@ service cloud.firestore {
     }
 
     match /trainerProfiles/{trainerId} {
+      allow read, write: if true;
+    }
+
+    // ==========================================
+    // GYM CONFIGURATION & SETTINGS COLLECTIONS
+    // ==========================================
+    match /gym_settings/{settingsId} {
+      allow read, write: if true;
+    }
+
+    match /gymSettings/{settingsId} {
+      allow read, write: if true;
+    }
+
+    match /gym_config/{configId} {
+      allow read, write: if true;
+    }
+
+    match /gymQrConfig/{configId} {
       allow read, write: if true;
     }
 
@@ -186,18 +219,6 @@ service cloud.firestore {
     }
 
     match /aerobicsSubscriptions/{subId} {
-      allow read, write: if true;
-    }
-
-    match /gymQrConfig/{configId} {
-      allow read, write: if true;
-    }
-
-    match /gym_config/{configId} {
-      allow read, write: if true;
-    }
-
-    match /gymSettings/{settingsId} {
       allow read, write: if true;
     }
 

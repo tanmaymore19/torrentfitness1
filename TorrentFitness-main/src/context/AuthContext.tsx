@@ -489,6 +489,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           displayName: 'Master Administrator',
           fullName: 'Master Administrator',
           email: 'admin@torrentfitness.com',
+          photoUrl: '',
           role: 'admin',
           status: 'active',
           createdAt: '2026-01-01T00:00:00.000Z'
@@ -1004,6 +1005,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           displayName: 'Master Administrator',
           fullName: 'Master Administrator',
           email: 'admin@torrentfitness.com',
+          photoUrl: '',
           role: 'admin',
           status: 'active',
           createdAt: '2026-01-01T00:00:00.000Z'

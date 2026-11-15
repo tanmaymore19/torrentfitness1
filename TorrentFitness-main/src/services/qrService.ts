@@ -121,7 +121,27 @@ export async function getActiveGymQrConfig(): Promise<GymQrConfig> {
   }
 
   try {
-    // 1. Try reading gym_config/attendance_qr with a 2.5s timeout
+    // 1. Try reading gym_settings/attendance_qr with a 2.5s timeout
+    const settingsRef = doc(db, 'gym_settings', 'attendance_qr');
+    const snap0 = await withTimeout(getDoc(settingsRef), 2500).catch((err) => {
+      console.warn('Firestore gym_settings/attendance_qr read note:', err?.message || err);
+      return null;
+    });
+
+    if (snap0 && snap0.exists()) {
+      const data = snap0.data() as any;
+      const config: GymQrConfig = {
+        activeToken: data.activeToken || cachedFallback.activeToken || INITIAL_GYM_CONFIG.activeToken,
+        gymCode: data.gymCode || 'TORRENT-FITNESS-PUNJAB-01',
+        generatedAt: data.generatedAt || data.updatedAt || '2026-01-01T00:00:00.000Z',
+        active: data.active !== false,
+        previousTokens: Array.isArray(data.previousTokens) ? data.previousTokens : []
+      };
+      persistQrConfig(config);
+      return config;
+    }
+
+    // 2. Try reading gym_config/attendance_qr with a 2.5s timeout
     const configRef1 = doc(db, 'gym_config', 'attendance_qr');
     const snap1 = await withTimeout(getDoc(configRef1), 2500).catch((err) => {
       console.warn('Firestore attendance_qr read note (offline/timeout):', err?.message || err);
@@ -129,11 +149,11 @@ export async function getActiveGymQrConfig(): Promise<GymQrConfig> {
     });
 
     if (snap1 && snap1.exists()) {
-      const data = snap1.data() as GymQrConfig;
+      const data = snap1.data() as any;
       const config: GymQrConfig = {
-        activeToken: data.activeToken || cachedFallback.activeToken,
+        activeToken: data.activeToken || cachedFallback.activeToken || INITIAL_GYM_CONFIG.activeToken,
         gymCode: data.gymCode || 'TORRENT-FITNESS-PUNJAB-01',
-        generatedAt: data.generatedAt || new Date().toISOString(),
+        generatedAt: data.generatedAt || data.updatedAt || '2026-01-01T00:00:00.000Z',
         active: data.active !== false,
         previousTokens: Array.isArray(data.previousTokens) ? data.previousTokens : []
       };
@@ -141,7 +161,7 @@ export async function getActiveGymQrConfig(): Promise<GymQrConfig> {
       return config;
     }
 
-    // 2. Try reading gymQrConfig/active-qr with a 2.5s timeout
+    // 3. Try reading gymQrConfig/active-qr with a 2.5s timeout
     const qrRef = doc(db, 'gymQrConfig', 'active-qr');
     const snap = await withTimeout(getDoc(qrRef), 2500).catch((err) => {
       console.warn('Firestore active-qr read note (offline/timeout):', err?.message || err);
@@ -149,37 +169,45 @@ export async function getActiveGymQrConfig(): Promise<GymQrConfig> {
     });
 
     if (snap && snap.exists()) {
-      const data = snap.data() as GymQrConfig;
+      const data = snap.data() as any;
       const config: GymQrConfig = {
-        activeToken: data.activeToken || cachedFallback.activeToken,
+        activeToken: data.activeToken || cachedFallback.activeToken || INITIAL_GYM_CONFIG.activeToken,
         gymCode: data.gymCode || 'TORRENT-FITNESS-PUNJAB-01',
-        generatedAt: data.generatedAt || new Date().toISOString(),
+        generatedAt: data.generatedAt || data.updatedAt || '2026-01-01T00:00:00.000Z',
         active: data.active !== false,
         previousTokens: Array.isArray(data.previousTokens) ? data.previousTokens : []
       };
       persistQrConfig(config);
-      // Best-effort background sync to gym_config/attendance_qr
-      setDoc(configRef1, config, { merge: true }).catch(() => {});
       return config;
     }
 
-    // 3. If neither doc exists yet, seed the cached fallback to Firestore (best effort)
-    const token = cachedFallback.activeToken || generateSecureToken();
-    const newConfig: GymQrConfig = {
+    // 4. Under NO circumstances auto-rotate on read/load: return permanent static token
+    const token = cachedFallback.activeToken || INITIAL_GYM_CONFIG.activeToken;
+    const permanentConfig: GymQrConfig = {
       activeToken: token,
       gymCode: cachedFallback.gymCode || 'TORRENT-FITNESS-PUNJAB-01',
-      generatedAt: new Date().toISOString(),
+      generatedAt: '2026-01-01T00:00:00.000Z',
       active: true,
       previousTokens: cachedFallback.previousTokens || []
     };
-    persistQrConfig(newConfig);
+    persistQrConfig(permanentConfig);
+
+    const payload = {
+      activeToken: token,
+      gymCode: permanentConfig.gymCode,
+      active: true,
+      updatedAt: new Date().toISOString(),
+      updatedBy: 'system_static_init',
+      previousTokens: permanentConfig.previousTokens
+    };
 
     Promise.all([
-      setDoc(qrRef, newConfig, { merge: true }).catch(() => {}),
-      setDoc(configRef1, newConfig, { merge: true }).catch(() => {})
+      setDoc(settingsRef, payload, { merge: true }).catch(() => {}),
+      setDoc(configRef1, payload, { merge: true }).catch(() => {}),
+      setDoc(qrRef, payload, { merge: true }).catch(() => {})
     ]).catch(() => {});
 
-    return newConfig;
+    return permanentConfig;
   } catch (err: any) {
     console.warn('getActiveGymQrConfig falling back to offline config:', err?.message || err);
     return cachedFallback;
@@ -187,8 +215,8 @@ export async function getActiveGymQrConfig(): Promise<GymQrConfig> {
 }
 
 /**
- * Regenerates the gym desk QR token in Firestore and local storage,
- * explicitly recording and invalidating previous tokens with offline resilience.
+ * Regenerates the gym desk QR token in Firestore and local storage.
+ * STRICT POLICY: Only invoked when Master Admin explicitly clicks "Regenerate New QR Code".
  */
 export async function regenerateGymQrConfig(): Promise<GymQrConfig> {
   const current = getPersistedQrConfig();
@@ -209,18 +237,26 @@ export async function regenerateGymQrConfig(): Promise<GymQrConfig> {
   // Update local persistent storage immediately
   persistQrConfig(newConfig);
 
-  // Sync to Firestore if online (swallowing offline/timeout errors)
+  // Sync to Firestore across gym_settings, gym_config, gymQrConfig
   if (db && typeof db === 'object') {
+    const payload = {
+      activeToken: newToken,
+      gymCode: newConfig.gymCode,
+      active: true,
+      updatedAt: new Date().toISOString(),
+      updatedBy: 'master_admin',
+      previousTokens: prevTokens
+    };
     try {
-      const qrRef = doc(db, 'gymQrConfig', 'active-qr');
-      const configRef = doc(db, 'gym_config', 'attendance_qr');
-
       await Promise.all([
-        withTimeout(setDoc(qrRef, newConfig, { merge: true }), 3000).catch((e) =>
-          console.warn('qrRef sync note:', e?.message || e)
+        withTimeout(setDoc(doc(db, 'gym_settings', 'attendance_qr'), payload, { merge: true }), 3000).catch((e) =>
+          console.warn('gym_settings QR sync note:', e?.message || e)
         ),
-        withTimeout(setDoc(configRef, newConfig, { merge: true }), 3000).catch((e) =>
+        withTimeout(setDoc(doc(db, 'gym_config', 'attendance_qr'), payload, { merge: true }), 3000).catch((e) =>
           console.warn('configRef sync note:', e?.message || e)
+        ),
+        withTimeout(setDoc(doc(db, 'gymQrConfig', 'active-qr'), payload, { merge: true }), 3000).catch((e) =>
+          console.warn('qrRef sync note:', e?.message || e)
         )
       ]);
     } catch (err: any) {
@@ -243,6 +279,7 @@ export async function toggleGymQrActive(active: boolean): Promise<void> {
     const payload = { active, updatedAt: new Date().toISOString() };
     try {
       await Promise.all([
+        withTimeout(setDoc(doc(db, 'gym_settings', 'attendance_qr'), payload, { merge: true }), 2500).catch(() => {}),
         withTimeout(setDoc(doc(db, 'gymQrConfig', 'active-qr'), payload, { merge: true }), 2500).catch(() => {}),
         withTimeout(setDoc(doc(db, 'gym_config', 'attendance_qr'), payload, { merge: true }), 2500).catch(() => {})
       ]);
@@ -256,7 +293,7 @@ export async function toggleGymQrActive(active: boolean): Promise<void> {
  * Helper to generate cryptographically unique entrance token
  */
 export function generateSecureToken(): string {
-  const timestamp = Date.now();
-  const randomBytes = Math.random().toString(36).substring(2, 10).toUpperCase();
-  return `TF_GATE_TOKEN_${timestamp}_${randomBytes}`;
+  const timestamp = Date.now().toString(36).toUpperCase();
+  const randomBytes = Math.random().toString(36).substring(2, 8).toUpperCase();
+  return `TORRENT_GYM_STATIC_${timestamp}_${randomBytes}`;
 }

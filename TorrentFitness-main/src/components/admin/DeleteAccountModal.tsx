@@ -7,6 +7,7 @@ import {
   query,
   where,
   getDocs,
+  getDoc,
   arrayRemove
 } from 'firebase/firestore';
 import { AlertTriangle, Trash2, X, Loader2, ArrowRight, ShieldAlert, CheckCircle2 } from 'lucide-react';
@@ -75,8 +76,21 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
         return;
       }
 
-      // 1. Resolve clean username for index deletion
-      const rawUsername = target.username || target.displayName || uid;
+      // 1. Resolve exact registered username for index deletion
+      let registeredUsername = target.username || '';
+      try {
+        const uSnap = await getDoc(doc(db, 'users', uid));
+        if (uSnap.exists()) {
+          const uData = uSnap.data();
+          if (uData.username) {
+            registeredUsername = uData.username;
+          }
+        }
+      } catch (e) {
+        console.warn('User doc lookup note:', e);
+      }
+
+      const rawUsername = registeredUsername || target.username || target.displayName || uid;
       const cleanUsername = rawUsername.toLowerCase().replace(/[@\s]/g, '').trim();
 
       // 2. Initialize atomic batch
@@ -104,6 +118,9 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
       if (cleanUsername) {
         batch.delete(doc(db, 'usernames', cleanUsername));
       }
+      if (registeredUsername && registeredUsername.toLowerCase().trim() !== cleanUsername) {
+        batch.delete(doc(db, 'usernames', registeredUsername.toLowerCase().trim()));
+      }
       if (uid.toLowerCase() !== cleanUsername) {
         batch.delete(doc(db, 'usernames', uid.toLowerCase().trim()));
       }
@@ -126,7 +143,7 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
           console.warn('PT request cleanup note:', err);
         }
 
-        // Remove client UID from assigned trainers' client arrays
+        // Remove client UID from assigned trainers' client arrays (both assignedClientIds and assignedClients)
         try {
           const trainerQuery = query(
             collection(db, 'trainerProfiles'),
@@ -140,6 +157,21 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
           });
         } catch (err) {
           console.warn('Trainer client list cleanup note:', err);
+        }
+
+        try {
+          const trainerQuery2 = query(
+            collection(db, 'trainers'),
+            where('assignedClients', 'array-contains', uid)
+          );
+          const trSnap2 = await getDocs(trainerQuery2);
+          trSnap2.forEach((trDoc) => {
+            batch.update(trDoc.ref, {
+              assignedClients: arrayRemove(uid)
+            });
+          });
+        } catch (err) {
+          console.warn('Trainers assignedClients cleanup note:', err);
         }
       } else if (target.role === 'trainer') {
         // Trainer-specific collections

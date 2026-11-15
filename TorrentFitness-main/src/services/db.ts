@@ -588,9 +588,9 @@ export const INITIAL_POPUP: HomePopup = {
 };
 
 export const INITIAL_GYM_CONFIG: GymQrConfig = {
-  activeToken: 'TF-QR-ACTIVE-2026-GATEWAY',
+  activeToken: 'TORRENT_GYM_STATIC_GATEWAY_TOKEN',
   gymCode: 'TORRENT-FITNESS-PUNJAB-01',
-  generatedAt: new Date().toISOString(),
+  generatedAt: '2026-01-01T00:00:00.000Z',
   active: true,
   previousTokens: []
 };

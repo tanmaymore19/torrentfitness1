@@ -65,7 +65,10 @@ import {
   ShieldAlert,
   Phone,
   MapPin,
-  Sparkles
+  Sparkles,
+  LogOut,
+  X,
+  CheckCircle2
 } from 'lucide-react';
 
 interface ClientAppProps {}
@@ -90,6 +93,8 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
   });
   const [sessionTimeLeft, setSessionTimeLeft] = useState<string>('');
   const [attendanceSuccessToast, setAttendanceSuccessToast] = useState<string | null>(null);
+  const [showEndSessionModal, setShowEndSessionModal] = useState<boolean>(false);
+  const [isEndingSession, setIsEndingSession] = useState<boolean>(false);
 
   // Sync activeSession with clientProfile changes
   useEffect(() => {
@@ -143,16 +148,22 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
 
   const handleEndSessionCheckout = async () => {
     if (!activeSession) return;
-    const confirmed = window.confirm('Are you sure you want to finish your workout session and check out of the gym?');
-    if (!confirmed) return;
-    await closeAttendanceSession(activeSession);
-    setActiveSession(null);
-    setSessionTimeLeft('');
-    if (currentUser?.uid) {
-      clearActiveSessionLocally(currentUser.uid);
+    setIsEndingSession(true);
+    try {
+      await closeAttendanceSession(activeSession);
+      setActiveSession(null);
+      setSessionTimeLeft('');
+      if (currentUser?.uid) {
+        clearActiveSessionLocally(currentUser.uid);
+      }
+      setShowEndSessionModal(false);
+      setAttendanceSuccessToast('Workout completed and attendance recorded! See you tomorrow! 💪');
+      setTimeout(() => setAttendanceSuccessToast(null), 4000);
+    } catch (err) {
+      console.warn('Error during manual checkout:', err);
+    } finally {
+      setIsEndingSession(false);
     }
-    setAttendanceSuccessToast('Workout completed and attendance recorded! See you tomorrow! 💪');
-    setTimeout(() => setAttendanceSuccessToast(null), 4000);
   };
 
   // PayU hosted callback return alert
@@ -495,7 +506,7 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
                   </div>
                 </div>
 
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 pt-1 border-t border-emerald-800/40">
+                <div className="pt-2 border-t border-emerald-800/40 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <div className="text-[11px] text-slate-300 font-medium">
                     <span>Entered: <strong>{activeSession.entryTime || '06:00 AM'}</strong></span>
                     <span className="text-emerald-400 font-semibold block sm:inline sm:ml-2">
@@ -506,17 +517,18 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
                     <button
                       type="button"
                       onClick={() => setActiveTab('qr')}
-                      className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-colors border border-white/10"
+                      className="px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-colors border border-white/15"
                     >
                       Timer Screen
                     </button>
                     <button
                       type="button"
-                      onClick={handleEndSessionCheckout}
-                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold shadow-md transition-colors flex items-center gap-1 active:scale-95 cursor-pointer"
+                      onClick={() => setShowEndSessionModal(true)}
+                      className="px-3.5 py-2 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white rounded-xl text-xs font-black shadow-lg shadow-rose-950/40 transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer ring-1 ring-white/20"
+                      title="End Gym Session"
                     >
                       <LogOut className="w-3.5 h-3.5" />
-                      <span>End Session / Check Out</span>
+                      <span>End Session</span>
                     </button>
                   </div>
                 </div>
@@ -1037,6 +1049,48 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
             setTimeout(() => setAttendanceSuccessToast(null), 5500);
           }}
         />
+      )}
+
+      {/* Manual End Session Confirmation Modal */}
+      {showEndSessionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-sm vision-surface border border-rose-300/40 rounded-3xl p-6 shadow-2xl text-slate-800 space-y-4 relative">
+            <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto shadow-inner">
+              <LogOut className="w-6 h-6" />
+            </div>
+            <div className="text-center space-y-1">
+              <h3 className="text-lg font-black text-slate-900">End Gym Session?</h3>
+              <p className="text-xs text-slate-600 font-medium">
+                End your current gym workout session now? This will complete your attendance and unlock the QR scanner immediately.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowEndSessionModal(false)}
+                disabled={isEndingSession}
+                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleEndSessionCheckout}
+                disabled={isEndingSession}
+                className="flex-1 py-2.5 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center gap-1.5"
+              >
+                {isEndingSession ? (
+                  <span>Ending...</span>
+                ) : (
+                  <>
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>End Session</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Announcements Modal (Full Reverse-Chronological Feed) */}

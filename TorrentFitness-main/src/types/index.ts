@@ -31,6 +31,13 @@ export interface UserAccount {
   gender?: 'Female' | 'Male' | 'Other' | string; // Mandatory for members & trainers
   password?: string; // Stored for administrative account oversight & credential management
   isSelfDeleted?: boolean;
+  activeSession?: boolean;
+  activeSessionId?: string | null;
+  sessionStartedAt?: string | null;
+  sessionExpiresAt?: string | null;
+  lastCheckInTime?: string;
+  lastCheckoutTime?: string;
+  lastSessionDurationMinutes?: number;
   createdAt: string;
 }
 
@@ -76,6 +83,13 @@ export interface ClientProfile {
   lastAiAnalysisDate?: string;
   latestAiAnalysis?: AiPhysiqueAnalysis;
   isSelfDeleted?: boolean;
+  activeSession?: boolean;
+  activeSessionId?: string | null;
+  sessionStartedAt?: string | null;
+  sessionExpiresAt?: string | null;
+  lastCheckInTime?: string;
+  lastCheckoutTime?: string;
+  lastSessionDurationMinutes?: number;
   createdAt: string;
 }
 
@@ -120,6 +134,13 @@ export interface AiPhysiqueAnalysis {
   };
   disclaimer: string;
   isPtClient?: boolean;
+  activeSession?: boolean;
+  activeSessionId?: string | null;
+  sessionStartedAt?: string | null;
+  sessionExpiresAt?: string | null;
+  lastCheckInTime?: string;
+  lastCheckoutTime?: string;
+  lastSessionDurationMinutes?: number;
 }
 
 export interface TrainerProfile {
@@ -343,6 +364,10 @@ export interface AttendanceRecord {
   memberName?: string;
   badge?: string;
   updatedAt?: string;
+  sessionStartedAt?: string;
+  sessionExpiresAt?: string;
+  activeSession?: boolean;
+  checkedOutAt?: string;
 }
 
 export interface FitnessAnalysisResult {

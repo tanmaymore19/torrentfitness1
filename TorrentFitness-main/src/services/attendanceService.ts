@@ -1,5 +1,5 @@
 import { db } from '../firebase';
-import { doc, getDoc, updateDoc, setDoc, query, collection, where, getDocs } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, setDoc, query, collection, where, getDocs, serverTimestamp } from 'firebase/firestore';
 import { AttendanceRecord } from '../types';
 
 export const DEFAULT_SESSION_DURATION_MINUTES = 120; // 2-hour gym workout session
@@ -137,6 +137,8 @@ export async function closeAttendanceSession(record: AttendanceRecord | any): Pr
     sessionStatus: 'completed',
     exitTime: exitTimeStr,
     sessionDurationMinutes: elapsedMinutes,
+    checkedOutAt: serverTimestamp(),
+    checkedOutIso: nowIso,
     updatedAt: nowIso
   };
 
@@ -163,6 +165,8 @@ export async function closeAttendanceSession(record: AttendanceRecord | any): Pr
             sessionExpiresAt: null,
             lastSessionDurationMinutes: elapsedMinutes,
             lastCheckoutTime: exitTimeStr,
+            checkedOutAt: serverTimestamp(),
+            checkedOutIso: nowIso,
             updatedAt: nowIso
           },
           { merge: true }
