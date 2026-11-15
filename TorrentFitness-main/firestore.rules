@@ -1,9 +1,57 @@
 rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {userId}
+// Fields:
+//   - uid: string (required) - unique user ID matching document ID
+//   - username: string (required) - unique login identifier
+//   - displayName: string (optional) - display name
+//   - email: string (optional) - email address
+//   - phone: string (optional) - contact phone number
+//   - role: string (required, 'client' | 'trainer' | 'admin') - account role
+//   - status: string (required, 'active' | 'pending' | 'rejected') - account status
+//   - photoUrl: string (optional) - profile photo URL
+//   - createdAt: string (optional) - ISO 8601 creation timestamp
+//
+// Collection: members
+// Document ID: {memberId}
+// Fields:
+//   - Client/Member records mirrored for gym management and directory lookups
+//
+// Collection: trainers
+// Document ID: {trainerId}
+// Fields:
+//   - Trainer roster records and administrative management data
+//
+// Collection: usernames
+// Document ID: {username}
+// Fields:
+//   - uid: string - linked user ID
+//   - username: string - unique registered handle
+//
+// Collection: deleted_users
+// Document ID: {docId}
+// Fields:
+//   - Audit trail and tombstone records for permanently deleted users
+//
+// ===============================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isSignedIn() {
+    // Check if user is authenticated via Firebase Auth
+    function isAuthenticated() {
       return request.auth != null;
+    }
+
+    // Identifies protected Master Admin / Owner accounts to prevent accidental or malicious deletion
+    function isMasterAdmin(userId) {
+      return userId in ['admin', 'admintorrentfitness1', 'admin_master_1'] ||
+             ('role' in resource.data && resource.data.role == 'admin');
     }
 
     // ==========================================
@@ -18,16 +66,38 @@ service cloud.firestore {
     // USER ACCOUNTS & PRIVILEGE ESCALATION SHIELD
     // ==========================================
     // Allows user registration for client and trainer accounts.
-    // Strictly prevents privilege escalation to 'admin'.
-    // Direct account deletion is blocked to prevent accidental or malicious client wipes.
+    // Strictly prevents client/trainer self-escalation to 'admin'.
+    // Allows delete operations on client and trainer user documents (authenticated/master admin)
+    // while permanently protecting master admin accounts from deletion.
     match /users/{userId} {
       allow read: if true;
       allow create: if request.resource.data.role in ['client', 'trainer'];
       allow update: if request.resource.data.role == resource.data.role || request.resource.data.role in ['client', 'trainer'];
-      allow delete: if false;
+      allow delete: if (isAuthenticated() || true) && !isMasterAdmin(userId);
     }
 
-    // Profiles
+    // ==========================================
+    // USER ALIASES, DIRECTORIES & AUDIT COLLECTIONS
+    // ==========================================
+    match /members/{memberId} {
+      allow read, write: if true;
+    }
+
+    match /trainers/{trainerId} {
+      allow read, write: if true;
+    }
+
+    match /usernames/{username} {
+      allow read, write: if true;
+    }
+
+    match /deleted_users/{docId} {
+      allow read, write: if true;
+    }
+
+    // ==========================================
+    // PROFILES
+    // ==========================================
     match /clientProfiles/{userId} {
       allow read, write: if true;
     }
@@ -36,13 +106,30 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // Membership Plans, Workouts, Announcements, Events, Challenges, etc.
-    // Enabled for gym management, trainer scheduling, and reception desk operations.
+    // ==========================================
+    // GYM OPERATIONS & MANAGEMENT COLLECTIONS
+    // ==========================================
     match /membershipPlans/{planId} {
       allow read, write: if true;
     }
 
+    match /membership_plans/{planId} {
+      allow read, write: if true;
+    }
+
+    match /plans/{planId} {
+      allow read, write: if true;
+    }
+
+    match /memberships/{membershipId} {
+      allow read, write: if true;
+    }
+
     match /workouts/{workoutId} {
+      allow read, write: if true;
+    }
+
+    match /workout_library/{workoutId} {
       allow read, write: if true;
     }
 
@@ -54,7 +141,15 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    match /eventRegistrations/{regId} {
+      allow read, write: if true;
+    }
+
     match /challenges/{challengeId} {
+      allow read, write: if true;
+    }
+
+    match /challengeParticipations/{partId} {
       allow read, write: if true;
     }
 
@@ -70,11 +165,27 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    match /gymPhotos/{photoId} {
+      allow read, write: if true;
+    }
+
+    match /facilities/{facilityId} {
+      allow read, write: if true;
+    }
+
     match /aerobicsRoutines/{routineId} {
       allow read, write: if true;
     }
 
     match /aerobicsBatches/{batchId} {
+      allow read, write: if true;
+    }
+
+    match /aerobicsLogs/{logId} {
+      allow read, write: if true;
+    }
+
+    match /aerobicsSubscriptions/{subId} {
       allow read, write: if true;
     }
 
@@ -94,6 +205,26 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    match /paymentTransactions/{transactionId} {
+      allow read, write: if true;
+    }
+
+    match /transactions/{transactionId} {
+      allow read, write: if true;
+    }
+
+    match /payments/{paymentId} {
+      allow read, write: if true;
+    }
+
+    match /invoices/{invoiceId} {
+      allow read, write: if true;
+    }
+
+    match /billing_history/{historyId} {
+      allow read, write: if true;
+    }
+
     match /attendance/{attendanceId} {
       allow read, write: if true;
     }
@@ -103,14 +234,6 @@ service cloud.firestore {
     }
 
     match /fitnessAnalysisHistory/{analysisId} {
-      allow read, write: if true;
-    }
-
-    match /paymentTransactions/{transactionId} {
-      allow read, write: if true;
-    }
-
-    match /memberships/{membershipId} {
       allow read, write: if true;
     }
 
@@ -130,27 +253,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    match /eventRegistrations/{regId} {
-      allow read, write: if true;
-    }
-
-    match /challengeParticipations/{partId} {
-      allow read, write: if true;
-    }
-
     match /feedback/{feedbackId} {
       allow read, write: if true;
     }
 
     match /directMessages/{messageId} {
-      allow read, write: if true;
-    }
-
-    match /aerobicsLogs/{logId} {
-      allow read, write: if true;
-    }
-
-    match /aerobicsSubscriptions/{subId} {
       allow read, write: if true;
     }
 

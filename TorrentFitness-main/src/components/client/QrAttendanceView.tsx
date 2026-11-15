@@ -9,7 +9,10 @@ import {
   closeAttendanceSession,
   isSessionExpired,
   getSessionRemainingMs,
-  formatSessionRemainingTime
+  formatSessionRemainingTime,
+  loadActiveSessionLocally,
+  saveActiveSessionLocally,
+  clearActiveSessionLocally
 } from '../../services/attendanceService';
 import {
   QrCode,
@@ -34,7 +37,12 @@ export const QrAttendanceView: React.FC<QrAttendanceViewProps> = ({ onOpenScanne
   const [history, setHistory] = useState<AttendanceRecord[]>(() =>
     currentUser?.uid ? getCachedData<AttendanceRecord[]>(`attendance_${currentUser.uid}`, []) : []
   );
-  const [activeSession, setActiveSession] = useState<AttendanceRecord | null>(null);
+  const [activeSession, setActiveSession] = useState<AttendanceRecord | any | null>(() => {
+    if (typeof window !== 'undefined' && currentUser?.uid) {
+      return loadActiveSessionLocally(currentUser.uid);
+    }
+    return null;
+  });
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [remainingTime, setRemainingTime] = useState<string>('');
   const [isClosingSession, setIsClosingSession] = useState(false);
@@ -87,11 +95,14 @@ export const QrAttendanceView: React.FC<QrAttendanceViewProps> = ({ onOpenScanne
           if (isSessionExpired(currentActive)) {
             closeAttendanceSession(currentActive);
             setActiveSession(null);
+            clearActiveSessionLocally(currentUser.uid);
           } else {
             setActiveSession(currentActive);
+            saveActiveSessionLocally(currentUser.uid, currentActive);
           }
-        } else {
+        } else if (!clientProfile?.activeSession) {
           setActiveSession(null);
+          clearActiveSessionLocally(currentUser.uid);
         }
       },
       (err) => console.warn('Attendance listener note:', err)

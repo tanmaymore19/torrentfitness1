@@ -5,7 +5,15 @@ import { collection, onSnapshot, query, where, limit } from 'firebase/firestore'
 import { Announcement, AttendanceRecord } from '../../types';
 import { INITIAL_ANNOUNCEMENTS } from '../../services/db';
 import { getCachedData, setCachedData } from '../../services/cacheService';
-import { closeAttendanceSession, isSessionExpired, getSessionRemainingMs, formatSessionRemainingTime } from '../../services/attendanceService';
+import {
+  closeAttendanceSession,
+  isSessionExpired,
+  getSessionRemainingMs,
+  formatSessionRemainingTime,
+  loadActiveSessionLocally,
+  saveActiveSessionLocally,
+  clearActiveSessionLocally
+} from '../../services/attendanceService';
 import { Header } from '../common/Header';
 import { verifyAndActivateOnlinePayment } from '../../services/paymentService';
 import { PromotionalCarousel } from './PromotionalCarousel';
@@ -72,11 +80,45 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
   const [activeTab, setActiveTab] = useState<'home' | 'workouts' | 'diet' | 'qr' | 'pt' | 'analysis' | 'events' | 'plans' | 'profile'>('home');
   const [workoutInitialSubTab, setWorkoutInitialSubTab] = useState<'library' | 'myWorkout' | 'aerobics'>('library');
 
-  // Scanner modal state
+  // Scanner modal state & Persistent 0ms session restoration
   const [isScannerOpen, setIsScannerOpen] = useState(false);
-  const [activeSession, setActiveSession] = useState<AttendanceRecord | null>(null);
+  const [activeSession, setActiveSession] = useState<AttendanceRecord | any | null>(() => {
+    if (typeof window !== 'undefined' && currentUser?.uid) {
+      return loadActiveSessionLocally(currentUser.uid);
+    }
+    return null;
+  });
   const [sessionTimeLeft, setSessionTimeLeft] = useState<string>('');
   const [attendanceSuccessToast, setAttendanceSuccessToast] = useState<string | null>(null);
+
+  // Sync activeSession with clientProfile changes
+  useEffect(() => {
+    if (clientProfile && (clientProfile as any).activeSession && (clientProfile as any).sessionExpiresAt) {
+      const profileSession = {
+        id: (clientProfile as any).activeSessionId || `session_${currentUser?.uid}`,
+        clientId: currentUser?.uid || '',
+        clientName: clientProfile.displayName || 'Member',
+        activeSession: true,
+        sessionStatus: 'active',
+        sessionStartedAt: (clientProfile as any).sessionStartedAt || new Date().toISOString(),
+        sessionExpiresAt: (clientProfile as any).sessionExpiresAt,
+        entryTime: (clientProfile as any).lastCheckInTime || '06:00 AM',
+        sessionDurationMinutes: 120,
+        createdAt: (clientProfile as any).sessionStartedAt || new Date().toISOString()
+      };
+      if (isSessionExpired(profileSession)) {
+        closeAttendanceSession(profileSession);
+        setActiveSession(null);
+        clearActiveSessionLocally(currentUser?.uid || '');
+      } else {
+        setActiveSession(profileSession);
+        saveActiveSessionLocally(currentUser?.uid || '', profileSession);
+      }
+    } else if (clientProfile && (clientProfile as any).activeSession === false) {
+      setActiveSession(null);
+      clearActiveSessionLocally(currentUser?.uid || '');
+    }
+  }, [clientProfile, currentUser?.uid]);
 
   // Live countdown timer for active gym workout session (locks QR scanner until finished)
   useEffect(() => {
@@ -88,6 +130,7 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
       if (isSessionExpired(activeSession)) {
         closeAttendanceSession(activeSession);
         setActiveSession(null);
+        clearActiveSessionLocally(currentUser?.uid || '');
         setSessionTimeLeft('');
         return;
       }
@@ -96,7 +139,21 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
     updateCountdown();
     const timerInterval = setInterval(updateCountdown, 1000);
     return () => clearInterval(timerInterval);
-  }, [activeSession]);
+  }, [activeSession, currentUser?.uid]);
+
+  const handleEndSessionCheckout = async () => {
+    if (!activeSession) return;
+    const confirmed = window.confirm('Are you sure you want to finish your workout session and check out of the gym?');
+    if (!confirmed) return;
+    await closeAttendanceSession(activeSession);
+    setActiveSession(null);
+    setSessionTimeLeft('');
+    if (currentUser?.uid) {
+      clearActiveSessionLocally(currentUser.uid);
+    }
+    setAttendanceSuccessToast('Workout completed and attendance recorded! See you tomorrow! 💪');
+    setTimeout(() => setAttendanceSuccessToast(null), 4000);
+  };
 
   // PayU hosted callback return alert
   const [payuAlert, setPayuAlert] = useState<{ status: 'success' | 'error'; message: string } | null>(() => {
@@ -343,12 +400,15 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
             if (isSessionExpired(currentActive)) {
               await closeAttendanceSession(currentActive);
               setActiveSession(null);
+              clearActiveSessionLocally(currentUser.uid);
             } else {
               setActiveSession(currentActive);
+              saveActiveSessionLocally(currentUser.uid, currentActive);
               setIsScannerOpen(false);
             }
-          } else {
+          } else if (!clientProfile?.activeSession) {
             setActiveSession(null);
+            clearActiveSessionLocally(currentUser.uid);
           }
         },
         (err) => console.warn('Active session listener note:', err)
@@ -419,6 +479,49 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
         {/* Tab 1: HOME */}
         {activeTab === 'home' && (
           <div className="space-y-4 animate-fade-in">
+            {/* PINNED TOP ACTIVE GYM WORKOUT SESSION & COUNTDOWN TIMER */}
+            {activeSession && (
+              <div className="p-4 bg-gradient-to-r from-emerald-950/95 via-teal-950/95 to-[#0b1120] border-2 border-emerald-500/50 rounded-3xl text-white shadow-2xl space-y-3 animate-scale-up relative overflow-hidden ring-2 ring-emerald-500/20">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                    <span className="text-xs font-black uppercase tracking-wider text-emerald-300">
+                      Live Gym Session Active
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-900/80 rounded-full border border-emerald-400/40 text-emerald-300 font-mono text-xs font-bold shadow-inner">
+                    <Clock className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: '6s' }} />
+                    <span>{sessionTimeLeft || '02:00:00'} remaining</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 pt-1 border-t border-emerald-800/40">
+                  <div className="text-[11px] text-slate-300 font-medium">
+                    <span>Entered: <strong>{activeSession.entryTime || '06:00 AM'}</strong></span>
+                    <span className="text-emerald-400 font-semibold block sm:inline sm:ml-2">
+                      🔒 QR Scanner locked until completion
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('qr')}
+                      className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-colors border border-white/10"
+                    >
+                      Timer Screen
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleEndSessionCheckout}
+                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold shadow-md transition-colors flex items-center gap-1 active:scale-95 cursor-pointer"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>End Session / Check Out</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             {/* SMART MEMBERSHIP NOTIFICATION LOGIC:
                 - Active (> 5 days remaining): Render nothing (keep home screen completely clean)
                 - Expiring Soon (1 to 5 days remaining): Sleek non-intrusive warning card at very top
@@ -551,51 +654,6 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
 
             {/* Interactive E-Commerce Promotional Media Banner / Carousel */}
             <PromotionalCarousel onNavigateTab={(tab) => setActiveTab(tab)} />
-
-            {/* Live Workout Session in Progress Banner on Home */}
-            {activeSession && (
-              <div className="p-4 bg-gradient-to-r from-emerald-950/90 via-teal-950/90 to-[#111827] border border-emerald-500/40 rounded-3xl text-white shadow-xl space-y-3 animate-scale-up relative overflow-hidden">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-                    <span className="text-xs font-bold uppercase tracking-wider text-emerald-300">
-                      Workout Session Active
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-900/60 rounded-full border border-emerald-400/30 text-emerald-300 font-mono text-xs font-bold shadow-inner">
-                    <Clock className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: '6s' }} />
-                    <span>{sessionTimeLeft || '02:00:00'} remaining</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between pt-1">
-                  <div>
-                    <span className="text-[11px] text-slate-300 font-medium">
-                      Entered at {activeSession.entryTime} • QR Scanner locked during active session
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('qr')}
-                      className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-colors border border-white/10"
-                    >
-                      View Live Timer
-                    </button>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        await closeAttendanceSession(activeSession);
-                        setActiveSession(null);
-                      }}
-                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold shadow-md transition-colors flex items-center gap-1 active:scale-95"
-                    >
-                      <span>Check Out / End</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
 
             {/* Quick Gym Entry Hero Banner */}
             <div

@@ -9,7 +9,8 @@ import {
   closeAttendanceSession,
   isSessionExpired,
   getSessionRemainingMs,
-  formatSessionRemainingTime
+  formatSessionRemainingTime,
+  saveActiveSessionLocally
 } from '../../services/attendanceService';
 import confetti from 'canvas-confetti';
 import {
@@ -741,11 +742,16 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
         sessionDurationMinutes: 120,
         qrValidationToken: currentToken,
         ...(isAero ? { isAerobicsMember: true, aerobicsBatchName: aeroBatchName } : {}),
-        createdAt: nowIso
+        createdAt: nowIso,
+        sessionStartedAt: nowIso,
+        sessionExpiresAt: new Date(Date.now() + 120 * 60 * 1000).toISOString(),
+        activeSession: true
       };
 
+      const sessionExpiresIso = new Date(Date.now() + 120 * 60 * 1000).toISOString();
+
       try {
-        // Write to 'attendance'
+        // 1. Write to 'attendance'
         await setDoc(doc(db, 'attendance', recordId), {
           ...record,
           clientId: clientId || 'guest',
@@ -762,10 +768,14 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
           isAerobicsMember: isAero,
           aerobicsBatchName: aeroBatchName || null,
           badge: isAero ? 'AEROBICS' : 'STANDARD',
+          activeSession: true,
+          sessionStatus: 'active',
+          sessionStartedAt: nowIso,
+          sessionExpiresAt: sessionExpiresIso,
           updatedAt: nowIso
         });
 
-        // Write simultaneously to 'attendance_logs'
+        // 2. Write simultaneously to 'attendance_logs'
         await setDoc(doc(db, 'attendance_logs', recordId), {
           id: recordId,
           clientId: clientId || 'guest',
@@ -783,9 +793,42 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
           isAerobicsMember: isAero,
           aerobicsBatchName: aeroBatchName || null,
           badge: isAero ? 'AEROBICS' : 'STANDARD',
+          activeSession: true,
           sessionStatus: 'active',
+          sessionStartedAt: nowIso,
+          sessionExpiresAt: sessionExpiresIso,
           createdAt: nowIso
         });
+
+        // 3. Write active session state to clientProfiles/{uid}
+        if (clientId && clientId !== 'guest') {
+          await setDoc(
+            doc(db, 'clientProfiles', clientId),
+            {
+              activeSession: true,
+              activeSessionId: recordId,
+              sessionStartedAt: nowIso,
+              sessionExpiresAt: sessionExpiresIso,
+              lastCheckInTime: nowTimeStr,
+              lastCheckInDate: todayStr,
+              updatedAt: nowIso
+            },
+            { merge: true }
+          ).catch((e) => console.warn('ClientProfile session update note:', e));
+
+          // 4. Mirror active session in localStorage for 0ms instant display across tab switches
+          saveActiveSessionLocally(clientId, {
+            id: recordId,
+            clientId,
+            clientName,
+            activeSession: true,
+            sessionStatus: 'active',
+            sessionStartedAt: nowIso,
+            sessionExpiresAt: sessionExpiresIso,
+            entryTime: nowTimeStr,
+            createdAt: nowIso
+          });
+        }
       } catch (writeErr: any) {
         console.error('Attendance Firestore write error:', writeErr);
         const errMsg = String(writeErr?.message || '').toLowerCase();

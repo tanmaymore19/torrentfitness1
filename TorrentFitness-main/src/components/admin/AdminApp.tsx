@@ -5161,6 +5161,7 @@ export const AdminApp: React.FC = () => {
           if (selectedClientForModal?.client.userId === deletedUid) {
             setSelectedClientForModal(null);
           }
+          showAdminNotice('Account permanently deleted from database.', 'success');
         }}
       />
 

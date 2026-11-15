@@ -1310,30 +1310,43 @@ export async function initializeDatabaseSeed(force: boolean = false): Promise<vo
             }
           ];
 
-          await Promise.allSettled([
+          // Always guarantee payment gateway configuration persistence
+          const restorationTasks: Promise<any>[] = [
             setDoc(doc(db, 'gym_config', 'payment_gateways'), liveRzp, { merge: true }),
-            setDoc(doc(db, 'paymentGateways', 'gw_razorpay_main'), liveRzp, { merge: true }),
-            setDoc(doc(db, 'users', 'tanmay1_19'), tanmayAccount, { merge: true }),
-            setDoc(doc(db, 'members', 'tanmay1_19'), { ...tanmayAccount, profilePhoto: tanmayAccount.photoUrl }, { merge: true }),
-            setDoc(doc(db, 'clientProfiles', 'tanmay1_19'), tanmayProfile, { merge: true }),
-            setDoc(doc(db, 'usernames', 'tanmay1_19'), {
-              uid: 'tanmay1_19',
-              username: 'tanmay1_19',
-              email: 'tanmaymore0220@gmail.com'
-            }, { merge: true }),
-            setDoc(doc(db, 'memberships', historicalMembership.id), historicalMembership, { merge: true }),
-            // Sync financial transaction across all 5 financial collections
-            setDoc(doc(db, 'paymentTransactions', historicalTxn.id), historicalTxn, { merge: true }),
-            setDoc(doc(db, 'transactions', historicalTxn.id), historicalTxn, { merge: true }),
-            setDoc(doc(db, 'payments', historicalTxn.id), historicalTxn, { merge: true }),
-            setDoc(doc(db, 'invoices', historicalTxn.id), historicalTxn, { merge: true }),
-            setDoc(doc(db, 'billing_history', historicalTxn.id), historicalTxn, { merge: true }),
-            // Sync historical attendance logs across both attendance and attendance_logs
-            ...historicalAttendanceLogs.flatMap((log) => [
-              setDoc(doc(db, 'attendance', log.id), log, { merge: true }),
-              setDoc(doc(db, 'attendance_logs', log.id), log, { merge: true })
-            ])
-          ]);
+            setDoc(doc(db, 'paymentGateways', 'gw_razorpay_main'), liveRzp, { merge: true })
+          ];
+
+          // Check if tanmay1_19 was explicitly deleted by Admin to prevent ghost account resurrection
+          const isTanmayDeletedLocally = typeof window !== 'undefined' && localStorage.getItem('tf_deleted_tanmay1_19') === 'true';
+          const tanmayDeletedDoc = await getDoc(doc(db, 'deleted_users', 'tanmay1_19')).catch(() => null);
+          const isTanmayDeleted = isTanmayDeletedLocally || Boolean(tanmayDeletedDoc?.exists());
+
+          if (!isTanmayDeleted) {
+            restorationTasks.push(
+              setDoc(doc(db, 'users', 'tanmay1_19'), tanmayAccount, { merge: true }),
+              setDoc(doc(db, 'members', 'tanmay1_19'), { ...tanmayAccount, profilePhoto: tanmayAccount.photoUrl }, { merge: true }),
+              setDoc(doc(db, 'clientProfiles', 'tanmay1_19'), tanmayProfile, { merge: true }),
+              setDoc(doc(db, 'usernames', 'tanmay1_19'), {
+                uid: 'tanmay1_19',
+                username: 'tanmay1_19',
+                email: 'tanmaymore0220@gmail.com'
+              }, { merge: true }),
+              setDoc(doc(db, 'memberships', historicalMembership.id), historicalMembership, { merge: true }),
+              // Sync financial transaction across all 5 financial collections
+              setDoc(doc(db, 'paymentTransactions', historicalTxn.id), historicalTxn, { merge: true }),
+              setDoc(doc(db, 'transactions', historicalTxn.id), historicalTxn, { merge: true }),
+              setDoc(doc(db, 'payments', historicalTxn.id), historicalTxn, { merge: true }),
+              setDoc(doc(db, 'invoices', historicalTxn.id), historicalTxn, { merge: true }),
+              setDoc(doc(db, 'billing_history', historicalTxn.id), historicalTxn, { merge: true }),
+              // Sync historical attendance logs across both attendance and attendance_logs
+              ...historicalAttendanceLogs.flatMap((log) => [
+                setDoc(doc(db, 'attendance', log.id), log, { merge: true }),
+                setDoc(doc(db, 'attendance_logs', log.id), log, { merge: true })
+              ])
+            );
+          }
+
+          await Promise.allSettled(restorationTasks);
         } catch (restoreErr) {
           console.warn('Pre-9AM account & gateway restoration note:', restoreErr);
         }
