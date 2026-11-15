@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /trainer
+
+Sitemap: https://torrent-fitness.web.app/sitemap.xml

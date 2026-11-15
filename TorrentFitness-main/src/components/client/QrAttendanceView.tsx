@@ -41,6 +41,10 @@ export const QrAttendanceView: React.FC<QrAttendanceViewProps> = ({ onOpenScanne
   const [sessionClosedNotice, setSessionClosedNotice] = useState<string>('');
 
   const handleTriggerScanner = () => {
+    // Strictly prevent scanner from opening if an active session is ongoing
+    if (activeSession && !isSessionExpired(activeSession)) {
+      return;
+    }
     if (onOpenScanner) {
       onOpenScanner();
     } else {
@@ -221,33 +225,21 @@ export const QrAttendanceView: React.FC<QrAttendanceViewProps> = ({ onOpenScanne
             </p>
           </div>
 
-          {/* Action buttons: Close Session or Info Notice */}
-          {/* Action buttons: Close Session or Scan Another Session */}
+          {/* Action button: Explicit early exit / close workout session */}
           <div className="pt-3 border-t border-white/80 space-y-2.5">
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={handleTriggerScanner}
-                className="flex-1 py-3 px-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 active:scale-95 transition-all"
-              >
-                <QrCode className="w-4 h-4" />
-                <span>Scan New Punch (Evening / Extra)</span>
-              </button>
+            <button
+              type="button"
+              onClick={handleCloseSession}
+              disabled={isClosingSession}
+              className="w-full py-3 px-4 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-bold text-xs rounded-xl shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>{isClosingSession ? 'Closing Workout Session...' : 'Finish Workout & Close Session'}</span>
+            </button>
 
-              <button
-                type="button"
-                onClick={handleCloseSession}
-                disabled={isClosingSession}
-                className="py-3 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-50"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>{isClosingSession ? 'Closing...' : 'Close Session'}</span>
-              </button>
-            </div>
-
-            <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-600 bg-white/70 py-1.5 px-3 rounded-xl border border-white/80 text-center font-medium">
-              <Sparkles className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-              <span>Multiple daily visits supported. Morning & evening workouts logged seamlessly.</span>
+            <div className="flex items-center justify-center gap-1.5 text-[11px] text-amber-800 bg-amber-50/90 py-2 px-3 rounded-xl border border-amber-200 text-center font-medium">
+              <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+              <span>QR scanning is locked while workout is in progress. Scanning re-opens after 2 hours or upon closing this session.</span>
             </div>
           </div>
         </div>
@@ -354,8 +346,8 @@ export const QrAttendanceView: React.FC<QrAttendanceViewProps> = ({ onOpenScanne
         )}
       </div>
 
-      {/* Fallback QR Scanner Modal strictly mounted on user click */}
-      {!onOpenScanner && currentUser && isScannerOpen && (
+      {/* Fallback QR Scanner Modal strictly mounted on user click only when NO active session */}
+      {!onOpenScanner && currentUser && isScannerOpen && (!activeSession || isSessionExpired(activeSession)) && (
         <QRScannerModal
           isOpen={isScannerOpen}
           onClose={() => setIsScannerOpen(false)}

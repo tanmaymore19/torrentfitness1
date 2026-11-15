@@ -711,6 +711,23 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
         return;
       }
 
+      // 3. ACTIVE SESSION GUARD: Block new scan if client already has a live, unexpired session
+      if (clientId) {
+        const existingSession = await getActiveClientSession(clientId);
+        if (existingSession && !isSessionExpired(existingSession)) {
+          const remainingMs = getSessionRemainingMs(existingSession);
+          const timeLeft = formatSessionRemainingTime(remainingMs);
+          throw new Error(
+            `✅ You are already checked in! Active session has ${timeLeft} remaining. Exit the gym or wait for session to complete before scanning again.`
+          );
+        }
+      }
+
+      // Check once more after active-session query
+      if (!hasScannedRef.current || isCancelledRef.current || !isOpen || !isMountedRef.current) {
+        return;
+      }
+
       // 3. Dual-Sync & Real-Time Logging: Write simultaneously to 'attendance_logs' and 'attendance'
       const recordId = `att_${Date.now()}_${clientId || 'guest'}`;
       const record: AttendanceRecord = {

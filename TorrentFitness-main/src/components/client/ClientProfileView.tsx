@@ -12,7 +12,8 @@ import {
   ArrowLeft,
   Receipt,
   User,
-  MapPin
+  MapPin,
+  ShieldCheck
 } from 'lucide-react';
 import { db } from '../../firebase';
 import { collection, addDoc, onSnapshot, query, limit } from 'firebase/firestore';
@@ -20,6 +21,7 @@ import { TrainerProfile } from '../../types';
 import { DirectChatModal } from '../common/DirectChatModal';
 import { ClientPaymentHistorySection } from './ClientPaymentHistorySection';
 import { parseHeight, formatHeight } from '../../utils/heightUtils';
+import { PrivacyPolicyModal } from '../common/PrivacyPolicyModal';
 
 interface ClientProfileViewProps {
   onBack?: () => void;
@@ -81,6 +83,7 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
 
   // Delete Account Modal
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
   const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
   const [deleteError, setDeleteError] = useState('');
 
@@ -589,6 +592,15 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
           <div className="pt-2 space-y-2">
             <button
               type="button"
+              onClick={() => setShowPrivacyModal(true)}
+              className="w-full py-2.5 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-2xl text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+            >
+              <ShieldCheck className="w-4 h-4 text-emerald-600" />
+              <span>Privacy Policy &amp; Terms of Service</span>
+            </button>
+
+            <button
+              type="button"
               onClick={logout}
               className="w-full py-3 vision-card hover:bg-white text-slate-800 border border-white/80 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-colors"
             >
@@ -754,6 +766,11 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
           partnerBadge={chatPartnerTrainer.badge}
         />
       )}
+      {/* Privacy Policy Modal */}
+      <PrivacyPolicyModal
+        isOpen={showPrivacyModal}
+        onClose={() => setShowPrivacyModal(false)}
+      />
     </div>
   );
 };

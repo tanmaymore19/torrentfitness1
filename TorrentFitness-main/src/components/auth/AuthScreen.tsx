@@ -21,6 +21,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { parseHeight, formatHeight } from '../../utils/heightUtils';
+import { PrivacyPolicyModal } from '../common/PrivacyPolicyModal';
 
 const PRESET_AVATARS = [
   { id: 'av-m1', label: 'Male Athlete', url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80' },
@@ -53,6 +54,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
   const [loginIdentifier, setLoginIdentifier] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
 
   // Step 1: Core Account Details
   const [displayName, setDisplayName] = useState('');
@@ -1135,8 +1137,25 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
               <span>← Return to Client Login</span>
             </button>
           )}
+
+          {/* Privacy Policy Link */}
+          <div className="pt-2 text-center">
+            <button
+              type="button"
+              onClick={() => setShowPrivacyModal(true)}
+              className="text-[11px] text-slate-500 hover:text-indigo-600 underline font-medium transition-colors cursor-pointer"
+            >
+              Privacy Policy & Terms
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Privacy Policy Modal */}
+      <PrivacyPolicyModal
+        isOpen={showPrivacyModal}
+        onClose={() => setShowPrivacyModal(false)}
+      />
     </div>
   );
 };
