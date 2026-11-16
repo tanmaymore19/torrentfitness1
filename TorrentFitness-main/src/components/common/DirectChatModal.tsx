@@ -2,10 +2,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { DirectMessage } from '../../types';
 import {
+  getPtChatId,
   getDirectChatId,
   subscribeToDirectChat,
   sendDirectMessage,
-  isStaffOwnerOrCoManager,
+  markPtMessagesAsRead,
   playChatNotificationChime
 } from '../../services/chatService';
 import { uploadMediaOrDataUrl } from '../../services/mediaUploadService';
@@ -18,7 +19,6 @@ import {
   CheckCheck,
   Clock,
   Shield,
-  ShieldAlert,
   ArrowLeft,
   Volume2,
   VolumeX,
@@ -79,21 +79,10 @@ export const DirectChatModal: React.FC<DirectChatModalProps> = ({
     };
   }, [isOpen]);
 
-  // Role-gating validation: strictly ONLY staff members with Owner (👑) or Co-Manager (🛡️) badge can chat or call with clients
-  const isStaffPartnerUnauthorized =
-    partnerRole === 'trainer' &&
-    !isStaffOwnerOrCoManager({ badge: partnerBadge, trainerId: partnerId });
-
-  const isCurrentTrainerUnauthorized =
-    currentUserRole === 'trainer' &&
-    !isStaffOwnerOrCoManager({ badge: partnerBadge, trainerId: currentUserId });
-
-  const isRoleGated = isStaffPartnerUnauthorized || isCurrentTrainerUnauthorized;
-
-  // Derive conversation ID (always clientId_trainerId)
+  // Derive conversation ID: format strictly `${trainerId}_${clientId}`
   const clientId = currentUserRole === 'client' ? currentUserId : partnerId;
   const trainerId = currentUserRole === 'trainer' ? currentUserId : partnerId;
-  const chatId = getDirectChatId(clientId, trainerId);
+  const chatId = getPtChatId(trainerId, clientId);
 
   // Clean phone number with official fallback: Hitesh Rajput = 8208002585, Bhavesh Rajput = 9607292842
   const resolvedPartnerPhone =
@@ -105,9 +94,12 @@ export const DirectChatModal: React.FC<DirectChatModalProps> = ({
   const cleanPhone = resolvedPartnerPhone.replace(/[^\d+]/g, '');
 
   useEffect(() => {
-    if (!isOpen || !chatId || isRoleGated) return;
+    if (!isOpen || !chatId) return;
 
-    // Real-time subscription to messages
+    // Immediately mark unread messages as read upon entering chat
+    markPtMessagesAsRead(chatId, currentUserRole, currentUserId);
+
+    // Real-time subscription to messages under pt_chats/{chatId}/messages
     const unsubscribe = subscribeToDirectChat(chatId, (loaded) => {
       if (loaded.length > prevMsgCountRef.current && prevMsgCountRef.current > 0) {
         const latest = loaded[loaded.length - 1];
@@ -117,10 +109,11 @@ export const DirectChatModal: React.FC<DirectChatModalProps> = ({
       }
       prevMsgCountRef.current = loaded.length;
       setMessages(loaded);
+      markPtMessagesAsRead(chatId, currentUserRole, currentUserId);
     });
 
     return () => unsubscribe();
-  }, [isOpen, chatId, isRoleGated, currentUserId, isMuted]);
+  }, [isOpen, chatId, currentUserId, currentUserRole, isMuted]);
 
   useEffect(() => {
     // Auto scroll to bottom when messages update
@@ -131,12 +124,12 @@ export const DirectChatModal: React.FC<DirectChatModalProps> = ({
 
   // Focus input automatically on open
   useEffect(() => {
-    if (isOpen && !isRoleGated) {
+    if (isOpen) {
       setTimeout(() => {
         inputRef.current?.focus();
       }, 300);
     }
-  }, [isOpen, isRoleGated]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -148,6 +141,8 @@ export const DirectChatModal: React.FC<DirectChatModalProps> = ({
     try {
       await sendDirectMessage({
         chatId,
+        trainerId,
+        clientId,
         senderId: currentUserId,
         senderName: currentUserName,
         senderRole: currentUserRole,
@@ -190,12 +185,15 @@ export const DirectChatModal: React.FC<DirectChatModalProps> = ({
         const uploadedUrl = await uploadMediaOrDataUrl(rawDataUrl, file.name);
         await sendDirectMessage({
           chatId,
+          trainerId,
+          clientId,
           senderId: currentUserId,
           senderName: currentUserName,
           senderRole: currentUserRole,
           recipientId: partnerId,
           recipientName: partnerName,
-          text: `[Photo] ${uploadedUrl}`
+          text: `[Photo] ${uploadedUrl}`,
+          mediaUrl: uploadedUrl
         });
       } catch (err: any) {
         console.error('Failed to send media in chat:', err);
@@ -300,8 +298,8 @@ export const DirectChatModal: React.FC<DirectChatModalProps> = ({
             {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
 
-          {/* Native Phone Dialer (Authorized strictly for Owner & Co-Manager: 8208002585 / 9607292842) */}
-          {!isRoleGated && cleanPhone && (
+          {/* Native Phone Dialer */}
+          {cleanPhone && (
             <a
               href={`tel:${cleanPhone}`}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white rounded-full text-xs font-black shadow-md shadow-emerald-900/30 transition-all border border-emerald-500/50"
@@ -314,35 +312,8 @@ export const DirectChatModal: React.FC<DirectChatModalProps> = ({
         </div>
       </header>
 
-      {/* 2. GATED ACCESS RESTRICTION VIEW */}
-      {isRoleGated ? (
-        <div className="flex-1 p-6 flex flex-col items-center justify-center text-center space-y-4 bg-slate-900/60 backdrop-blur-md">
-          <div className="w-16 h-16 rounded-3xl bg-amber-500/10 text-amber-400 border border-amber-500/30 flex items-center justify-center shadow-sm">
-            <ShieldAlert className="w-8 h-8" strokeWidth={1.8} />
-          </div>
-          <div className="space-y-2 max-w-sm">
-            <h3 className="text-base font-black text-white">
-              Direct Communication Policy
-            </h3>
-            <p className="text-xs text-slate-300 leading-relaxed font-medium">
-              Strict Access Policy: Strictly ONLY staff members holding the official <strong className="text-white">Owner (👑)</strong> or <strong className="text-white">Co-Manager (🛡️)</strong> badge can initiate direct chat channels or phone calls with clients.
-            </p>
-            <p className="text-[11px] text-slate-400 pt-1">
-              General trainers assist members on the gym floor in-person during daily workout hours.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold transition-all shadow-md active:scale-95"
-          >
-            Return to Dashboard
-          </button>
-        </div>
-      ) : (
-        <>
-          {/* 3. MESSAGE FEED AREA (FLEX-1 OVERFLOW-Y-AUTO) */}
-          <div className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-4 py-3 space-y-2.5 bg-slate-950 bg-[radial-gradient(#334155_1px,transparent_1px)] [background-size:16px_16px] no-scrollbar">
+      {/* 2. MESSAGE FEED AREA (FLEX-1 OVERFLOW-Y-AUTO) */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-4 py-3 space-y-2.5 bg-slate-950 bg-[radial-gradient(#334155_1px,transparent_1px)] [background-size:16px_16px] no-scrollbar">
             {/* End-to-end Privacy Reassurance Pill */}
             <div className="flex justify-center my-2">
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900/90 backdrop-blur-md text-[10px] font-bold text-slate-400 shadow-sm border border-slate-800">
@@ -523,8 +494,6 @@ export const DirectChatModal: React.FC<DirectChatModalProps> = ({
               </button>
             </form>
           </footer>
-        </>
-      )}
     </div>,
     document.body
   );

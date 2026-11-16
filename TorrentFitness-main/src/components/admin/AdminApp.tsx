@@ -11,7 +11,10 @@ import {
   deleteDoc,
   query,
   limit,
-  onSnapshot
+  onSnapshot,
+  writeBatch,
+  arrayUnion,
+  arrayRemove
 } from 'firebase/firestore';
 import {
   UserAccount,
@@ -316,6 +319,16 @@ export const AdminApp: React.FC = () => {
   // Domain 06 states (PT Allocation & 2-Tier Verification Queue)
   const [ptAssignClientId, setPtAssignClientId] = useState('');
   const [ptAssignTrainerId, setPtAssignTrainerId] = useState('');
+  const [ptAssignDurationMonths, setPtAssignDurationMonths] = useState<number>(1);
+  const [ptAssignStartDate, setPtAssignStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [directPtAssignModalConfirm, setDirectPtAssignModalConfirm] = useState<{
+    clientId: string;
+    clientName: string;
+    trainerId: string;
+    trainerName: string;
+    durationMonths: number;
+    startDate: string;
+  } | null>(null);
   const [cashVerifyModalReq, setCashVerifyModalReq] = useState<PtRequest | null>(null);
   const [cashVerifyAmount, setCashVerifyAmount] = useState<number>(3500);
   const [cashVerifyDate, setCashVerifyDate] = useState<string>(new Date().toISOString().split('T')[0]);
@@ -917,55 +930,257 @@ export const AdminApp: React.FC = () => {
     }
   };
 
-  // 1-on-1 PT Allocation Handler
-  const handleAssignPtCoach = async (e: React.FormEvent) => {
+  // 1-on-1 PT Direct Allocation Form Trigger (Opens 2-Step Confirmation Modal)
+  const handleAssignPtCoach = (e: React.FormEvent) => {
     e.preventDefault();
     if (!ptAssignClientId || !ptAssignTrainerId) return;
-    const tr = trainers.find(t => t.trainerId === ptAssignTrainerId);
+    const cl = clients.find((c) => c.userId === ptAssignClientId);
+    const tr = trainers.find((t) => t.trainerId === ptAssignTrainerId);
     if (!tr) return;
 
+    setDirectPtAssignModalConfirm({
+      clientId: ptAssignClientId,
+      clientName: cl?.displayName || ptAssignClientId,
+      trainerId: tr.trainerId,
+      trainerName: tr.displayName,
+      durationMonths: ptAssignDurationMonths || 1,
+      startDate: ptAssignStartDate || new Date().toISOString().split('T')[0]
+    });
+  };
+
+  // 1-on-1 PT Direct Allocation Commit Handler (Atomic Multi-Collection Sync)
+  const confirmDirectPtAssign = async () => {
+    if (!directPtAssignModalConfirm) return;
+    const { clientId, clientName, trainerId, trainerName, durationMonths, startDate } = directPtAssignModalConfirm;
     try {
-      await updateDoc(doc(db, 'clientProfiles', ptAssignClientId), {
-        assignedTrainerId: tr.trainerId,
-        assignedTrainerName: tr.displayName,
-        ptStatus: 'active'
-      });
+      const batch = writeBatch(db);
+      const nowIso = new Date().toISOString();
+
+      // 1. clientProfiles
+      batch.set(
+        doc(db, 'clientProfiles', clientId),
+        {
+          assignedTrainerId: trainerId,
+          assignedTrainerName: trainerName,
+          ptStatus: 'active',
+          ptStartDate: startDate,
+          ptDurationMonths: durationMonths,
+          updatedAt: nowIso
+        },
+        { merge: true }
+      );
+
+      // 2. members
+      batch.set(
+        doc(db, 'members', clientId),
+        {
+          assignedTrainerId: trainerId,
+          assignedTrainerName: trainerName,
+          ptStatus: 'active',
+          updatedAt: nowIso
+        },
+        { merge: true }
+      );
+
+      // 3. trainers & trainerProfiles (arrayUnion)
+      batch.set(
+        doc(db, 'trainers', trainerId),
+        {
+          assignedClientIds: arrayUnion(clientId),
+          updatedAt: nowIso
+        },
+        { merge: true }
+      );
+      batch.set(
+        doc(db, 'trainerProfiles', trainerId),
+        {
+          assignedClientIds: arrayUnion(clientId),
+          updatedAt: nowIso
+        },
+        { merge: true }
+      );
+
+      // 4. Record in ptRequests & pt_requests
+      const reqId = `ptreq_${clientId}_${Date.now()}`;
+      const ptReqDoc = {
+        id: reqId,
+        clientId,
+        clientName,
+        trainerId,
+        trainerName,
+        status: 'active',
+        paidStatus: 'paid',
+        paymentMode: 'admin_direct',
+        assignedAt: nowIso,
+        startDate,
+        durationMonths,
+        fee: durationMonths === 1 ? 3500 : durationMonths === 3 ? 9500 : 18000,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      };
+      batch.set(doc(db, 'ptRequests', reqId), ptReqDoc, { merge: true });
+      batch.set(doc(db, 'pt_requests', reqId), ptReqDoc, { merge: true });
+
+      await batch.commit();
+
+      setClients((prev) =>
+        prev.map((c) =>
+          c.userId === clientId
+            ? { ...c, assignedTrainerId: trainerId, assignedTrainerName: trainerName, ptStatus: 'active' }
+            : c
+        )
+      );
       setPtAssignClientId('');
-      showAdminNotice(`Assigned ${tr.displayName} as 1-on-1 PT coach!`, 'success');
+      showAdminNotice(`Assigned Coach ${trainerName} to ${clientName} directly!`, 'success');
     } catch (err: any) {
-      showAdminNotice('Error assigning PT coach: ' + err.message, 'error');
+      showAdminNotice('Error in direct PT assignment: ' + err.message, 'error');
+    } finally {
+      setDirectPtAssignModalConfirm(null);
     }
   };
 
+  // Direct PT Unassignment Handler (2-Step Confirmation Modal + Atomic Batch Multi-Collection Sync)
   const handleRemovePtAssignment = (clientId: string) => {
-    const cl = clients.find(c => c.userId === clientId);
+    const cl = clients.find((c) => c.userId === clientId);
+    const trainerId = cl?.assignedTrainerId || '';
+    const trainerName = cl?.assignedTrainerName || 'Assigned Coach';
+
     setGlobalDeletePending({
-      title: 'Unassign 1-on-1 PT Coach',
-      itemName: `${cl?.displayName || clientId} — PT Coach: ${cl?.assignedTrainerName || 'Assigned'}`,
+      title: 'Confirm PT Removal',
+      itemName: `${cl?.displayName || clientId} — PT Coach: ${trainerName}`,
       itemType: 'PT Assignment',
-      description: 'Are you sure you want to remove this client’s 1-on-1 Personal Trainer assignment?',
+      description: 'Are you sure you want to remove this client’s 1-on-1 Personal Trainer assignment? This will immediately unassign the coach across all portals.',
       warningNote: 'The client will no longer see this coach as their assigned PT in the Client Portal.',
-      confirmLabel: 'Yes, Unassign PT Coach',
+      confirmLabel: 'Yes, Confirm PT Removal',
+      cancelLabel: 'Cancel',
       onConfirm: async () => {
-        await updateDoc(doc(db, 'clientProfiles', clientId), {
-          assignedTrainerId: '',
-          assignedTrainerName: '',
-          ptStatus: 'none'
-        });
+        const batch = writeBatch(db);
+        const nowIso = new Date().toISOString();
+
+        // 1. clientProfiles
+        batch.set(
+          doc(db, 'clientProfiles', clientId),
+          {
+            assignedTrainerId: '',
+            assignedTrainerName: '',
+            ptStatus: 'none',
+            updatedAt: nowIso
+          },
+          { merge: true }
+        );
+
+        // 2. members
+        batch.set(
+          doc(db, 'members', clientId),
+          {
+            assignedTrainerId: '',
+            assignedTrainerName: '',
+            ptStatus: 'none',
+            updatedAt: nowIso
+          },
+          { merge: true }
+        );
+
+        // 3. remove from trainers & trainerProfiles
+        if (trainerId) {
+          batch.set(
+            doc(db, 'trainers', trainerId),
+            {
+              assignedClientIds: arrayRemove(clientId),
+              updatedAt: nowIso
+            },
+            { merge: true }
+          );
+          batch.set(
+            doc(db, 'trainerProfiles', trainerId),
+            {
+              assignedClientIds: arrayRemove(clientId),
+              updatedAt: nowIso
+            },
+            { merge: true }
+          );
+        }
+
+        await batch.commit();
+
+        setClients((prev) =>
+          prev.map((c) =>
+            c.userId === clientId
+              ? { ...c, assignedTrainerId: '', assignedTrainerName: '', ptStatus: 'none' }
+              : c
+          )
+        );
         showAdminNotice(`Removed PT assignment for ${cl?.displayName || clientId}.`, 'success');
       }
     });
   };
 
+  // PT Request Approval/Rejection with Atomic Multi-Collection Sync
   const handleUpdatePtRequestStatus = async (req: PtRequest, status: 'accepted' | 'rejected') => {
     try {
-      await updateDoc(doc(db, 'ptRequests', req.id), { status, updatedAt: new Date().toISOString() });
+      const nowIso = new Date().toISOString();
       if (status === 'accepted') {
-        await updateDoc(doc(db, 'clientProfiles', req.clientId), {
-          assignedTrainerId: req.trainerId,
-          assignedTrainerName: req.trainerName,
-          ptStatus: 'active'
-        });
+        const batch = writeBatch(db);
+        batch.set(doc(db, 'ptRequests', req.id), { status: 'accepted', updatedAt: nowIso }, { merge: true });
+        try {
+          batch.set(doc(db, 'pt_requests', req.id), { status: 'accepted', updatedAt: nowIso }, { merge: true });
+        } catch {}
+
+        batch.set(
+          doc(db, 'clientProfiles', req.clientId),
+          {
+            assignedTrainerId: req.trainerId,
+            assignedTrainerName: req.trainerName,
+            ptStatus: 'active',
+            updatedAt: nowIso
+          },
+          { merge: true }
+        );
+
+        batch.set(
+          doc(db, 'members', req.clientId),
+          {
+            assignedTrainerId: req.trainerId,
+            assignedTrainerName: req.trainerName,
+            ptStatus: 'active',
+            updatedAt: nowIso
+          },
+          { merge: true }
+        );
+
+        if (req.trainerId) {
+          batch.set(
+            doc(db, 'trainers', req.trainerId),
+            {
+              assignedClientIds: arrayUnion(req.clientId),
+              updatedAt: nowIso
+            },
+            { merge: true }
+          );
+          batch.set(
+            doc(db, 'trainerProfiles', req.trainerId),
+            {
+              assignedClientIds: arrayUnion(req.clientId),
+              updatedAt: nowIso
+            },
+            { merge: true }
+          );
+        }
+
+        await batch.commit();
+
+        setClients((prev) =>
+          prev.map((c) =>
+            c.userId === req.clientId
+              ? { ...c, assignedTrainerId: req.trainerId, assignedTrainerName: req.trainerName, ptStatus: 'active' }
+              : c
+          )
+        );
+      } else {
+        await updateDoc(doc(db, 'ptRequests', req.id), { status, updatedAt: nowIso });
+        try {
+          await updateDoc(doc(db, 'pt_requests', req.id), { status, updatedAt: nowIso });
+        } catch {}
       }
       showAdminNotice(`PT request ${status.toUpperCase()}!`, 'success');
     } catch (err: any) {
@@ -973,24 +1188,94 @@ export const AdminApp: React.FC = () => {
     }
   };
 
-  // Case A: 1-Click Online Payment Verification & Trainer Assignment
+  // Case A: 1-Click Online Payment Verification & Trainer Assignment (Atomic Batch Sync)
   const handleAssignTrainerOnlinePt = async (req: PtRequest) => {
     setPtAssigningReqId(req.id);
     try {
-      await updateDoc(doc(db, 'ptRequests', req.id), {
-        status: 'active',
-        paidStatus: 'paid',
-        paymentMode: req.paymentMode || 'online',
-        assignedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      });
-      await updateDoc(doc(db, 'clientProfiles', req.clientId), {
-        assignedTrainerId: req.trainerId,
-        assignedTrainerName: req.trainerName,
-        ptStatus: 'active',
-        ptStartDate: new Date().toISOString()
-      });
-      showAdminNotice(`Trainer ${req.trainerName} assigned & 1-on-1 PT activated for ${req.clientName || 'Client'}!`, 'success');
+      const batch = writeBatch(db);
+      const nowIso = new Date().toISOString();
+
+      batch.set(
+        doc(db, 'ptRequests', req.id),
+        {
+          status: 'active',
+          paidStatus: 'paid',
+          paymentMode: req.paymentMode || 'online',
+          assignedAt: nowIso,
+          updatedAt: nowIso
+        },
+        { merge: true }
+      );
+      try {
+        batch.set(
+          doc(db, 'pt_requests', req.id),
+          {
+            status: 'active',
+            paidStatus: 'paid',
+            paymentMode: req.paymentMode || 'online',
+            assignedAt: nowIso,
+            updatedAt: nowIso
+          },
+          { merge: true }
+        );
+      } catch {}
+
+      batch.set(
+        doc(db, 'clientProfiles', req.clientId),
+        {
+          assignedTrainerId: req.trainerId,
+          assignedTrainerName: req.trainerName,
+          ptStatus: 'active',
+          ptStartDate: nowIso,
+          updatedAt: nowIso
+        },
+        { merge: true }
+      );
+
+      batch.set(
+        doc(db, 'members', req.clientId),
+        {
+          assignedTrainerId: req.trainerId,
+          assignedTrainerName: req.trainerName,
+          ptStatus: 'active',
+          updatedAt: nowIso
+        },
+        { merge: true }
+      );
+
+      if (req.trainerId) {
+        batch.set(
+          doc(db, 'trainers', req.trainerId),
+          {
+            assignedClientIds: arrayUnion(req.clientId),
+            updatedAt: nowIso
+          },
+          { merge: true }
+        );
+        batch.set(
+          doc(db, 'trainerProfiles', req.trainerId),
+          {
+            assignedClientIds: arrayUnion(req.clientId),
+            updatedAt: nowIso
+          },
+          { merge: true }
+        );
+      }
+
+      await batch.commit();
+
+      setClients((prev) =>
+        prev.map((c) =>
+          c.userId === req.clientId
+            ? { ...c, assignedTrainerId: req.trainerId, assignedTrainerName: req.trainerName, ptStatus: 'active' }
+            : c
+        )
+      );
+
+      showAdminNotice(
+        `Trainer ${req.trainerName} assigned & 1-on-1 PT activated for ${req.clientName || 'Client'}!`,
+        'success'
+      );
     } catch (err: any) {
       showAdminNotice('Error activating PT: ' + err.message, 'error');
     } finally {
@@ -1006,7 +1291,7 @@ export const AdminApp: React.FC = () => {
     setCashVerifyNotes('Cash received and verified at reception desk');
   };
 
-  // Case B: Confirm Cash & Assign Trainer
+  // Case B: Confirm Cash & Assign Trainer (Atomic Batch Sync)
   const handleConfirmCashPtPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!cashVerifyModalReq) return;
@@ -1015,38 +1300,108 @@ export const AdminApp: React.FC = () => {
       const req = cashVerifyModalReq;
       const recAmount = Number(cashVerifyAmount) || req.fee || 3500;
       const recDate = cashVerifyDate || new Date().toISOString().split('T')[0];
+      const nowIso = new Date().toISOString();
 
-      await updateDoc(doc(db, 'ptRequests', req.id), {
-        status: 'active',
-        paidStatus: 'paid',
-        paymentMode: 'cash',
-        cashReceivedAmount: recAmount,
-        cashReceivedDate: recDate,
-        cashNotes: cashVerifyNotes,
-        assignedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      });
+      const batch = writeBatch(db);
 
-      await updateDoc(doc(db, 'clientProfiles', req.clientId), {
-        assignedTrainerId: req.trainerId,
-        assignedTrainerName: req.trainerName,
-        ptStatus: 'active',
-        ptStartDate: recDate
-      });
+      batch.set(
+        doc(db, 'ptRequests', req.id),
+        {
+          status: 'active',
+          paidStatus: 'paid',
+          paymentMode: 'cash',
+          cashReceivedAmount: recAmount,
+          cashReceivedDate: recDate,
+          cashNotes: cashVerifyNotes,
+          assignedAt: nowIso,
+          updatedAt: nowIso
+        },
+        { merge: true }
+      );
 
-      // Also update any matching pending offline payment transaction
+      try {
+        batch.set(
+          doc(db, 'pt_requests', req.id),
+          {
+            status: 'active',
+            paidStatus: 'paid',
+            paymentMode: 'cash',
+            cashReceivedAmount: recAmount,
+            cashReceivedDate: recDate,
+            cashNotes: cashVerifyNotes,
+            assignedAt: nowIso,
+            updatedAt: nowIso
+          },
+          { merge: true }
+        );
+      } catch {}
+
+      batch.set(
+        doc(db, 'clientProfiles', req.clientId),
+        {
+          assignedTrainerId: req.trainerId,
+          assignedTrainerName: req.trainerName,
+          ptStatus: 'active',
+          ptStartDate: recDate,
+          updatedAt: nowIso
+        },
+        { merge: true }
+      );
+
+      batch.set(
+        doc(db, 'members', req.clientId),
+        {
+          assignedTrainerId: req.trainerId,
+          assignedTrainerName: req.trainerName,
+          ptStatus: 'active',
+          updatedAt: nowIso
+        },
+        { merge: true }
+      );
+
+      if (req.trainerId) {
+        batch.set(
+          doc(db, 'trainers', req.trainerId),
+          {
+            assignedClientIds: arrayUnion(req.clientId),
+            updatedAt: nowIso
+          },
+          { merge: true }
+        );
+        batch.set(
+          doc(db, 'trainerProfiles', req.trainerId),
+          {
+            assignedClientIds: arrayUnion(req.clientId),
+            updatedAt: nowIso
+          },
+          { merge: true }
+        );
+      }
+
       if (req.transactionId) {
-        try {
-          await updateDoc(doc(db, 'paymentTransactions', req.transactionId), {
+        batch.set(
+          doc(db, 'paymentTransactions', req.transactionId),
+          {
             status: 'completed',
             paidStatus: 'paid',
             amountReceived: recAmount,
             paymentReceivedDate: recDate,
-            approvedAt: new Date().toISOString(),
+            approvedAt: nowIso,
             approvedBy: 'Master Admin'
-          });
-        } catch {}
+          },
+          { merge: true }
+        );
       }
+
+      await batch.commit();
+
+      setClients((prev) =>
+        prev.map((c) =>
+          c.userId === req.clientId
+            ? { ...c, assignedTrainerId: req.trainerId, assignedTrainerName: req.trainerName, ptStatus: 'active' }
+            : c
+        )
+      );
 
       showAdminNotice(
         `Cash (₹${recAmount.toLocaleString('en-IN')}) verified & Coach ${req.trainerName} assigned to ${req.clientName}!`,
@@ -3735,43 +4090,75 @@ export const AdminApp: React.FC = () => {
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <select
-                      required
-                      value={ptAssignClientId}
-                      onChange={(e) => setPtAssignClientId(e.target.value)}
-                      className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium focus:outline-none"
-                    >
-                      <option value="">-- Select Client --</option>
-                      {clients.map((c) => (
-                        <option key={c.userId} value={c.userId}>
-                          {c.displayName} (@{c.userId}){' '}
-                          {c.assignedTrainerName ? `[Current: ${c.assignedTrainerName}]` : ''}
-                        </option>
-                      ))}
-                    </select>
-
-                    <select
-                      required
-                      value={ptAssignTrainerId}
-                      onChange={(e) => setPtAssignTrainerId(e.target.value)}
-                      className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium focus:outline-none"
-                    >
-                      <option value="">-- Select PT Coach --</option>
-                      {safeTrainers
-                        .filter((t) => t.status === 'active')
-                        .map((t) => (
-                          <option key={t.trainerId} value={t.trainerId}>
-                            {t.displayName} ({t.specializations || 'Strength & Conditioning'})
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 mb-1">Select Member *</label>
+                      <select
+                        required
+                        value={ptAssignClientId}
+                        onChange={(e) => setPtAssignClientId(e.target.value)}
+                        className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium focus:outline-none"
+                      >
+                        <option value="">-- Select Client --</option>
+                        {clients.map((c) => (
+                          <option key={c.userId} value={c.userId}>
+                            {c.displayName} (@{c.userId}){' '}
+                            {c.assignedTrainerName ? `[Current: ${c.assignedTrainerName}]` : ''}
                           </option>
                         ))}
-                    </select>
+                      </select>
+                    </div>
 
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 mb-1">Select PT Coach *</label>
+                      <select
+                        required
+                        value={ptAssignTrainerId}
+                        onChange={(e) => setPtAssignTrainerId(e.target.value)}
+                        className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium focus:outline-none"
+                      >
+                        <option value="">-- Select PT Coach --</option>
+                        {safeTrainers
+                          .filter((t) => t.status === 'active')
+                          .map((t) => (
+                            <option key={t.trainerId} value={t.trainerId}>
+                              {t.displayName} ({t.specializations || 'Strength & Conditioning'})
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 mb-1">Duration &amp; Term *</label>
+                      <select
+                        value={ptAssignDurationMonths}
+                        onChange={(e) => setPtAssignDurationMonths(Number(e.target.value))}
+                        className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium focus:outline-none"
+                      >
+                        <option value={1}>1 Month (12 Sessions - ₹3,500)</option>
+                        <option value={3}>3 Months (36 Sessions - ₹9,500)</option>
+                        <option value={6}>6 Months (72 Sessions - ₹18,000)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 mb-1">Start Date *</label>
+                      <input
+                        type="date"
+                        required
+                        value={ptAssignStartDate}
+                        onChange={(e) => setPtAssignStartDate(e.target.value)}
+                        className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end pt-1">
                     <button
                       type="submit"
-                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-sm"
+                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-sm transition-all active:scale-95"
                     >
-                      Assign 1-on-1 PT Coach
+                      Directly Assign PT Coach
                     </button>
                   </div>
                 </form>
@@ -5209,6 +5596,28 @@ export const AdminApp: React.FC = () => {
             setGlobalDeletePending(null);
           }
         }}
+      />
+
+      {/* MODAL 5B: DIRECT PT ASSIGN CONFIRMATION MODAL */}
+      <GlobalDeleteConfirmModal
+        isOpen={!!directPtAssignModalConfirm}
+        title="Confirm PT Assignment"
+        itemName={
+          directPtAssignModalConfirm
+            ? `${directPtAssignModalConfirm.clientName} → Coach: ${directPtAssignModalConfirm.trainerName}`
+            : ''
+        }
+        itemType="1-on-1 PT Allocation"
+        description={
+          directPtAssignModalConfirm
+            ? `Are you sure you want to directly assign Coach ${directPtAssignModalConfirm.trainerName} to member ${directPtAssignModalConfirm.clientName} for ${directPtAssignModalConfirm.durationMonths} month(s) starting from ${directPtAssignModalConfirm.startDate}?`
+            : ''
+        }
+        warningNote="This will immediately activate 1-on-1 personal coaching for this client across all portals."
+        confirmLabel="Yes, Confirm PT Assignment"
+        cancelLabel="Cancel"
+        onClose={() => setDirectPtAssignModalConfirm(null)}
+        onConfirm={confirmDirectPtAssign}
       />
 
       {/* MODAL 6: VERIFY OFFLINE CASH & ASSIGN TRAINER */}

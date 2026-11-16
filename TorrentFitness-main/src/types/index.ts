@@ -628,12 +628,14 @@ export interface DirectMessage {
   chatId: string;
   senderId: string;
   senderName: string;
-  senderRole: 'client' | 'trainer';
+  senderRole: 'client' | 'trainer' | 'CLIENT' | 'TRAINER';
   recipientId: string;
   recipientName: string;
   text: string;
-  createdAt: string;
+  createdAt: any;
   timestamp: number;
+  readByRecipient?: boolean;
+  mediaUrl?: string;
 }
 
 export type AerobicsCategory =

@@ -58,6 +58,18 @@ rules_version = '2';
 // Fields:
 //   - Realtime gym QR configurations and payment gateway credentials
 //
+// Collection: pt_requests / ptRequests
+// Document ID: {requestId}
+// Fields:
+//   - Personal training requests, bookings, and assignment status
+//
+// Collection: pt_chats
+// Document ID: {chatId}
+// Subcollections:
+//   - {document=**} (chat messages and direct communications)
+// Fields:
+//   - Direct chat threads between clients and personal trainers
+//
 // ===============================================================
 
 service cloud.firestore {
@@ -259,6 +271,18 @@ service cloud.firestore {
     }
 
     match /ptRequests/{requestId} {
+      allow read, write: if true;
+    }
+
+    match /pt_requests/{requestId} {
+      allow read, write: if true;
+    }
+
+    match /pt_chats/{chatId} {
+      allow read, write: if true;
+    }
+
+    match /pt_chats/{chatId}/{document=**} {
       allow read, write: if true;
     }
 

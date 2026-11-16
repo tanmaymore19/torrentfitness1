@@ -73,27 +73,28 @@ export const ClientPaymentHistorySection: React.FC = () => {
       limit(40)
     );
 
-    const mergeTxList = (newItems: PaymentTransaction[]) => {
-      setTransactions((prev) => {
-        const map = new Map<string, PaymentTransaction>();
-        prev.forEach((t) => map.set(t.id, t));
-        newItems.forEach((t) => map.set(t.id, { ...map.get(t.id), ...t }));
-        const list = Array.from(map.values()).sort((a, b) => {
-          const tA = new Date(a.timestamp || a.approvedAt || a.createdAt || 0).getTime();
-          const tB = new Date(b.timestamp || b.approvedAt || b.createdAt || 0).getTime();
-          return tB - tA;
-        });
-        setCachedData(`pay_tx_${currentUser.uid}`, list);
-        return list;
+    let liveTx1: PaymentTransaction[] = [];
+    let liveTx2: PaymentTransaction[] = [];
+
+    const updateCombinedTransactions = () => {
+      const map = new Map<string, PaymentTransaction>();
+      liveTx1.forEach((t) => map.set(t.id, t));
+      liveTx2.forEach((t) => map.set(t.id, { ...map.get(t.id), ...t }));
+      const list = Array.from(map.values()).sort((a, b) => {
+        const tA = new Date(a.timestamp || a.approvedAt || a.createdAt || 0).getTime();
+        const tB = new Date(b.timestamp || b.approvedAt || b.createdAt || 0).getTime();
+        return tB - tA;
       });
+      setTransactions(list);
+      setCachedData(`pay_tx_${currentUser.uid}`, list);
       setIsLoading(false);
     };
 
     const unsubTx = onSnapshot(
       qTx,
       (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentTransaction));
-        mergeTxList(list);
+        liveTx1 = snap.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentTransaction));
+        updateCombinedTransactions();
       },
       (err) => {
         console.warn('Error loading client paymentTransactions:', err);
@@ -110,8 +111,8 @@ export const ClientPaymentHistorySection: React.FC = () => {
     const unsubTx2 = onSnapshot(
       qTx2,
       (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentTransaction));
-        mergeTxList(list);
+        liveTx2 = snap.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentTransaction));
+        updateCombinedTransactions();
       },
       (err) => console.warn('Error loading client transactions alias:', err)
     );
@@ -269,6 +270,7 @@ export const ClientPaymentHistorySection: React.FC = () => {
 
     // Include any historical membership records that didn't have a separate paymentTransactions row
     for (const mem of memberships) {
+      if ((mem as any).transactionDeleted) continue;
       if (linkedMembershipIds.has(mem.id)) continue;
 
       const isCash = mem.paymentMode === 'cash';

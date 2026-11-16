@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { db, auth } from '../../firebase';
 import { signOut } from 'firebase/auth';
@@ -61,7 +61,13 @@ import {
   X
 } from 'lucide-react';
 import { DirectChatModal } from '../common/DirectChatModal';
-import { isStaffOwnerOrCoManager } from '../../services/chatService';
+import {
+  isStaffOwnerOrCoManager,
+  subscribeToTrainerChats,
+  PtChatSummary,
+  playChatNotificationChime,
+  markPtMessagesAsRead
+} from '../../services/chatService';
 import { formatHeight } from '../../utils/heightUtils';
 
 interface TrainerAppProps {}
@@ -219,6 +225,7 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
   // Active module
   const [activeModule, setActiveModule] = useState<
     | 'ptClients'
+    | 'clientChats'
     | 'assignWorkout'
     | 'dietPlan'
     | 'schedule'
@@ -229,6 +236,13 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
     | 'myProfile'
     | 'aerobicsBatches'
   >('ptClients');
+
+  // Live 2-Way Chat States (pt_chats)
+  const [chatSummaries, setChatSummaries] = useState<PtChatSummary[]>([]);
+  const [unreadByClient, setUnreadByClient] = useState<Record<string, number>>({});
+  const [totalChatUnread, setTotalChatUnread] = useState<number>(0);
+  const [incomingChatToast, setIncomingChatToast] = useState<{ clientName: string; text: string } | null>(null);
+  const prevChatUnreadRef = useRef<number>(-1);
 
   // Data states hydrated from cache
   const [ptClients, setPtClients] = useState<ClientProfile[]>([]);
@@ -310,6 +324,33 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
       if (currentUser.gender) setProfileGender(currentUser.gender);
     }
   }, [trainerProfile, currentUser]);
+
+  // Real-Time 2-Way Chat listener for Trainer
+  useEffect(() => {
+    const trainerId = currentUser?.uid || trainerProfile?.trainerId;
+    if (!trainerId) return;
+
+    const unsub = subscribeToTrainerChats(trainerId, (chats, totalUnread, unreadMap) => {
+      setChatSummaries(chats);
+      setUnreadByClient(unreadMap);
+      setTotalChatUnread(totalUnread);
+
+      if (prevChatUnreadRef.current >= 0 && totalUnread > prevChatUnreadRef.current && !isChatOpen) {
+        playChatNotificationChime();
+        const latestChat = chats.find(c => (c.unreadForTrainer || 0) > 0);
+        if (latestChat) {
+          setIncomingChatToast({
+            clientName: latestChat.clientName || 'Client',
+            text: latestChat.lastMessageText || 'Sent you a new message'
+          });
+          setTimeout(() => setIncomingChatToast(null), 5000);
+        }
+      }
+      prevChatUnreadRef.current = totalUnread;
+    });
+
+    return () => unsub();
+  }, [currentUser?.uid, trainerProfile?.trainerId, isChatOpen]);
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -786,6 +827,27 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
           }}
         />
 
+        {/* Incoming Live Chat Notification Toast */}
+        {incomingChatToast && (
+          <div
+            onClick={() => setActiveModule('clientChats')}
+            className="p-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-2xl shadow-lg border border-white/20 flex items-center justify-between gap-3 animate-bounce cursor-pointer"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+                <MessageSquare className="w-4 h-4 text-white" />
+              </div>
+              <div className="text-xs">
+                <span className="font-black block">New Message from {incomingChatToast.clientName}</span>
+                <span className="text-white/80 line-clamp-1">{incomingChatToast.text}</span>
+              </div>
+            </div>
+            <span className="px-2.5 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-[10px] font-black uppercase shrink-0">
+              Open Chat →
+            </span>
+          </div>
+        )}
+
         {/* Trainer Profile Overview Banner */}
         <div className="bg-gradient-to-tr from-indigo-500 via-purple-500 to-sky-400 rounded-3xl p-5 text-white border border-white/60 shadow-[0_16px_36px_rgba(99,102,241,0.22),inset_0_1px_2px_rgba(255,255,255,0.7)] relative overflow-hidden">
           <div className="absolute -right-8 -top-8 w-40 h-40 bg-white/20 rounded-full blur-2xl pointer-events-none" />
@@ -855,7 +917,7 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
         </div>
 
         {/* Trainer Modules Navigation Bar */}
-        <div className="grid grid-cols-3 gap-1.5 vision-inset p-2 rounded-2xl">
+        <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 vision-inset p-2 rounded-2xl">
           <button
             onClick={() => setActiveModule('ptClients')}
             className={`py-2 px-1 text-[11px] font-bold rounded-xl transition-all duration-150 text-center ${
@@ -865,6 +927,21 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
             }`}
           >
             My PT ({ptClients.length})
+          </button>
+          <button
+            onClick={() => setActiveModule('clientChats')}
+            className={`py-2 px-1 text-[11px] font-bold rounded-xl transition-all duration-150 text-center relative ${
+              activeModule === 'clientChats'
+                ? 'vision-btn-aurora text-white shadow-md font-bold'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/40'
+            }`}
+          >
+            <span>Client Chats</span>
+            {totalChatUnread > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 bg-rose-500 text-white rounded-full text-[9px] font-black animate-pulse">
+                {totalChatUnread}
+              </span>
+            )}
           </button>
           <button
             onClick={() => setActiveModule('assignWorkout')}
@@ -1003,41 +1080,40 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
                         <span>Ht: <strong className="text-slate-700">{formatHeight(client.height)}</strong></span>
                       </div>
 
-                      {/* Direct Phone & Chat Contact Bar (Role-gated to Owner & Co-Manager only) */}
+                      {/* Direct Phone & Chat Contact Bar */}
                       <div className="flex flex-wrap items-center justify-between gap-2 mt-2 pt-2 border-t border-white/80">
-                        {isPrivilegedStaff ? (
-                          <div className="flex items-center gap-2">
-                            {client.phone && (
-                              <a
-                                href={`tel:${client.phone.replace(/[^\d+]/g, '')}`}
-                                onClick={(e) => e.stopPropagation()}
-                                className="inline-flex items-center gap-1 text-[11px] text-emerald-800 bg-emerald-100 hover:bg-emerald-200 px-2.5 py-1 rounded-xl font-bold border border-emerald-300 transition-colors"
-                                title="Tap to trigger device native phone dialer"
-                              >
-                                <Phone className="w-3 h-3 text-emerald-600" />
-                                <span>{client.phone}</span>
-                              </a>
-                            )}
-
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setChatPartnerClient(client);
-                                setIsChatOpen(true);
-                              }}
-                              className="inline-flex items-center gap-1 text-[11px] text-indigo-700 font-bold bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-xl border border-indigo-200 transition-colors"
-                              title="Direct chat with member"
+                        <div className="flex items-center gap-2">
+                          {client.phone && (
+                            <a
+                              href={`tel:${client.phone.replace(/[^\d+]/g, '')}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex items-center gap-1 text-[11px] text-emerald-800 bg-emerald-100 hover:bg-emerald-200 px-2.5 py-1 rounded-xl font-bold border border-emerald-300 transition-colors"
+                              title="Tap to trigger device native phone dialer"
                             >
-                              <MessageSquare className="w-3 h-3 text-indigo-600" />
-                              <span>Chat</span>
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="text-[10px] text-slate-500 italic">
-                            Direct calling &amp; chat restricted to Owner / Co-Manager
-                          </span>
-                        )}
+                              <Phone className="w-3 h-3 text-emerald-600" />
+                              <span>{client.phone}</span>
+                            </a>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setChatPartnerClient(client);
+                              setIsChatOpen(true);
+                            }}
+                            className="inline-flex items-center gap-1 text-[11px] text-indigo-700 font-bold bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-xl border border-indigo-200 transition-colors shadow-2xs"
+                            title="Direct 2-way live chat with member"
+                          >
+                            <MessageSquare className="w-3 h-3 text-indigo-600" />
+                            <span>Chat</span>
+                            {unreadByClient[client.userId] > 0 && (
+                              <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[9px] font-black animate-pulse">
+                                {unreadByClient[client.userId]}
+                              </span>
+                            )}
+                          </button>
+                        </div>
 
                         <span className="text-[10px] text-slate-600 font-medium">Tap to Select</span>
                       </div>
@@ -1045,6 +1121,88 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
                   </div>
                 </div>
               ))
+            )}
+          </div>
+        )}
+
+        {/* MODULE: CLIENT CHAT / MESSAGES HUB */}
+        {activeModule === 'clientChats' && (
+          <div className="space-y-3 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                <MessageSquare className="w-4 h-4 text-indigo-600 font-bold" />
+                <span>Client Messages &amp; 1-on-1 Chat ({ptClients.length} Clients)</span>
+              </h3>
+              {totalChatUnread > 0 && (
+                <span className="px-2 py-0.5 rounded-full bg-rose-500 text-white text-[10px] font-black animate-pulse">
+                  {totalChatUnread} New Unread
+                </span>
+              )}
+            </div>
+
+            {ptClients.length === 0 ? (
+              <div className="p-8 text-center clay-surface rounded-3xl border border-white/80 text-slate-600 text-xs">
+                No clients currently assigned to your PT roster. Once Admin allocates clients to you, 2-way real-time messaging will activate here automatically.
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {ptClients.map((client) => {
+                  const unreadCount = unreadByClient[client.userId] || 0;
+                  const chatSummary = chatSummaries.find((c) => c.clientId === client.userId);
+
+                  return (
+                    <div
+                      key={client.userId}
+                      onClick={() => {
+                        setChatPartnerClient(client);
+                        setIsChatOpen(true);
+                      }}
+                      className="p-3.5 bg-white/90 rounded-2xl border border-slate-200/90 hover:border-indigo-400 hover:shadow-md transition-all cursor-pointer flex items-center justify-between gap-3 shadow-2xs"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <img
+                          src={client.photoUrl}
+                          alt={client.displayName}
+                          className="w-11 h-11 rounded-2xl object-cover border border-slate-200 shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-xs font-bold text-slate-900 truncate">{client.displayName}</h4>
+                            {unreadCount > 0 && (
+                              <span className="px-1.5 py-0.5 rounded-full bg-rose-500 text-white text-[9px] font-black shrink-0 animate-pulse">
+                                {unreadCount} new
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-500 truncate mt-0.5 max-w-[200px] sm:max-w-xs">
+                            {chatSummary?.lastMessageText || 'Tap to start live conversation...'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {client.phone && (
+                          <a
+                            href={`tel:${client.phone.replace(/[^\d+]/g, '')}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="p-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition-colors"
+                            title={`Call ${client.displayName}`}
+                          >
+                            <Phone className="w-3.5 h-3.5" />
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow-sm transition-all flex items-center gap-1.5"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5" />
+                          <span>Chat</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         )}

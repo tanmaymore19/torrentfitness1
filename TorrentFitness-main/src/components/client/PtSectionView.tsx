@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { db } from '../../firebase';
 import { collection, query, where, getDocs, doc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
@@ -13,7 +13,12 @@ import {
   ONLINE_PROVIDERS
 } from '../../services/paymentService';
 import { DirectChatModal } from '../common/DirectChatModal';
-import { isStaffOwnerOrCoManager } from '../../services/chatService';
+import {
+  isStaffOwnerOrCoManager,
+  subscribeToClientChats,
+  PtChatSummary,
+  playChatNotificationChime
+} from '../../services/chatService';
 import {
   UserCheck,
   Calendar,
@@ -25,7 +30,9 @@ import {
   CheckCircle,
   AlertCircle,
   Phone,
-  MessageSquare
+  MessageSquare,
+  Sparkles,
+  X
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -92,6 +99,16 @@ export const PtSectionView: React.FC = () => {
   // Direct Chat modal state
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatPartnerTrainer, setChatPartnerTrainer] = useState<TrainerProfile | null>(null);
+
+  // Live Chat & Unread States for Client
+  const [unreadByTrainer, setUnreadByTrainer] = useState<Record<string, number>>({});
+  const [totalChatUnread, setTotalChatUnread] = useState<number>(0);
+  const [incomingChatToast, setIncomingChatToast] = useState<{ trainerName: string; text: string } | null>(null);
+  const prevClientUnreadRef = useRef<number>(-1);
+
+  // Dedicated PT Plans Modal State (Trainer-First Flow)
+  const [isPtPlansModalOpen, setIsPtPlansModalOpen] = useState<boolean>(false);
+  const [modalTrainer, setModalTrainer] = useState<TrainerProfile | null>(null);
 
   const selectedPackage =
     ptPackages.find((p) => p.id === selectedPackageId) || ptPackages[0] || PT_PACKAGES[0];
@@ -222,6 +239,31 @@ export const PtSectionView: React.FC = () => {
     };
   }, [currentUser]);
 
+  // Live Chat listener for Client
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+
+    const unsub = subscribeToClientChats(currentUser.uid, (chats, totalUnread, unreadMap) => {
+      setUnreadByTrainer(unreadMap);
+      setTotalChatUnread(totalUnread);
+
+      if (prevClientUnreadRef.current >= 0 && totalUnread > prevClientUnreadRef.current && !isChatOpen) {
+        playChatNotificationChime();
+        const latestChat = chats.find((c) => (c.unreadForClient || 0) > 0);
+        if (latestChat) {
+          setIncomingChatToast({
+            trainerName: latestChat.trainerName || 'Coach',
+            text: latestChat.lastMessageText || 'Sent you a new message'
+          });
+          setTimeout(() => setIncomingChatToast(null), 5000);
+        }
+      }
+      prevClientUnreadRef.current = totalUnread;
+    });
+
+    return () => unsub();
+  }, [currentUser?.uid, isChatOpen]);
+
   // Dual Checkout 1: Pay Online (Instant Gateway)
   const handlePayOnlineCheckout = () => {
     if (!currentUser) return;
@@ -235,7 +277,7 @@ export const PtSectionView: React.FC = () => {
     setPtNotice('');
 
     try {
-      const chosenTrainer = selectedTrainer || trainers[0];
+      const chosenTrainer = modalTrainer || selectedTrainer || trainers[0];
       const chosenPackage = selectedPackage;
 
       const { transaction } = await submitOfflinePaymentRequest({
@@ -279,7 +321,12 @@ export const PtSectionView: React.FC = () => {
       };
 
       await setDoc(doc(db, 'ptRequests', reqId), newReqData, { merge: true });
+      try {
+        await setDoc(doc(db, 'pt_requests', reqId), newReqData, { merge: true });
+      } catch {}
       await updateClientProfile({ ptStatus: 'pending' });
+
+      setIsPtPlansModalOpen(false);
 
       setPtNotice(
         `Offline Cash Request (${transaction.referenceId}) submitted! Deposit ₹${chosenPackage.price.toLocaleString(
@@ -300,9 +347,10 @@ export const PtSectionView: React.FC = () => {
 
     try {
       setIsRzpModalOpen(false);
+      setIsPtPlansModalOpen(false);
       setCompletedTxn(transaction);
 
-      const chosenTrainer = selectedTrainer || trainers[0];
+      const chosenTrainer = modalTrainer || selectedTrainer || trainers[0];
       const chosenPackage = selectedPackage;
       const reqId = myPtRequest?.id || `ptreq_${currentUser.uid}`;
 
@@ -323,6 +371,9 @@ export const PtSectionView: React.FC = () => {
       };
 
       await setDoc(doc(db, 'ptRequests', reqId), newReqData, { merge: true });
+      try {
+        await setDoc(doc(db, 'pt_requests', reqId), newReqData, { merge: true });
+      } catch {}
       await updateClientProfile({ ptStatus: 'pending' });
 
       setPtNotice(
@@ -367,6 +418,34 @@ export const PtSectionView: React.FC = () => {
           Tailored nutrition plans, dedicated workout assignment and reserved regular gym timing.
         </p>
       </div>
+
+      {/* Incoming Live Chat Notification Toast */}
+      {incomingChatToast && (
+        <div
+          onClick={() => {
+            const matchedTr =
+              trainers.find((t) => t.displayName === incomingChatToast.trainerName) || trainers[0];
+            if (matchedTr) {
+              setChatPartnerTrainer(matchedTr);
+              setIsChatOpen(true);
+            }
+          }}
+          className="p-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-2xl shadow-lg border border-white/20 flex items-center justify-between gap-3 animate-bounce cursor-pointer"
+        >
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+              <MessageSquare className="w-4 h-4 text-white" />
+            </div>
+            <div className="text-xs">
+              <span className="font-black block">New Message from {incomingChatToast.trainerName}</span>
+              <span className="text-white/80 line-clamp-1">{incomingChatToast.text}</span>
+            </div>
+          </div>
+          <span className="px-2.5 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-[10px] font-black uppercase shrink-0">
+            Open Chat →
+          </span>
+        </div>
+      )}
 
       {/* Case 1: Active PT Client View */}
       {hasActivePt ? (
@@ -670,16 +749,154 @@ export const PtSectionView: React.FC = () => {
               </div>
             </div>
           ) : (
-            /* Full PT Package & Trainer Checkout Flow */
-            <div className="clay-surface rounded-3xl p-5 border border-white/80 shadow-xl space-y-4">
+            /* Trainer-First Discovery Flow */
+            <div className="space-y-4">
               <div>
-                <h3 className="text-sm font-black text-slate-800 tracking-tight">1. Choose Personal Training Package</h3>
+                <h3 className="text-sm font-black text-slate-800 tracking-tight">Certified Personal Trainers</h3>
                 <p className="text-xs text-slate-600 mt-0.5">
-                  Select your 1-on-1 coaching term with custom meal plans &amp; weekly form assessments.
+                  Explore our certified biomechanics and physique coaches. Call, chat directly, or view dedicated 1-on-1 PT Plans.
                 </p>
               </div>
 
-              {/* PT Package Tiers Grid (Admin Dynamic PtPlans Catalog) */}
+              {/* Status Notice if present */}
+              {ptNotice && (
+                <div className="p-3 rounded-2xl bg-sky-50 border border-sky-200 text-sky-900 text-xs font-bold animate-fade-in">
+                  {ptNotice}
+                </div>
+              )}
+
+              {/* Trainer Cards List */}
+              <div className="space-y-3">
+                {trainers.map((tr) => {
+                  const trPhone =
+                    tr.phone ||
+                    (tr.trainerId.includes('hitesh')
+                      ? '8208002585'
+                      : tr.trainerId.includes('bhavesh')
+                      ? '9607292842'
+                      : '8208002585');
+                  const unreadCount = unreadByTrainer[tr.trainerId] || 0;
+
+                  return (
+                    <div
+                      key={tr.trainerId}
+                      className="p-4 rounded-3xl clay-surface border border-white/80 shadow-md space-y-3 hover:shadow-lg transition-all"
+                    >
+                      <div className="flex items-start gap-3.5">
+                        <img
+                          src={tr.photoUrl}
+                          alt={tr.displayName}
+                          className="w-14 h-14 rounded-2xl object-cover border-2 border-slate-200/90 shrink-0 shadow-2xs"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <h4 className="text-xs font-black text-slate-900 truncate">{tr.displayName}</h4>
+                              <TrainerIdentityBadge badge={tr.badge} />
+                            </div>
+                            <span className="font-bold text-amber-600 text-xs shrink-0">★ {tr.rating.toFixed(1)}</span>
+                          </div>
+                          <span className="text-[11px] text-indigo-700 font-bold block mt-0.5">
+                            {tr.specializations}
+                          </span>
+                          <p className="text-[11px] text-slate-600 mt-1 line-clamp-2 leading-relaxed">
+                            {tr.bio}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* 3 Aligned Action Buttons */}
+                      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-200/80">
+                        {/* 1. Call */}
+                        <a
+                          href={`tel:${trPhone.replace(/[^\d+]/g, '')}`}
+                          className="py-2.5 px-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-xl text-xs font-bold border border-emerald-300 transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                          title={`Call ${tr.displayName}`}
+                        >
+                          <Phone className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Call</span>
+                        </a>
+
+                        {/* 2. Chat */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setChatPartnerTrainer(tr);
+                            setIsChatOpen(true);
+                          }}
+                          className="py-2.5 px-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold border border-indigo-200 transition-colors flex items-center justify-center gap-1.5 shadow-2xs relative"
+                          title={`Chat with ${tr.displayName}`}
+                        >
+                          <MessageSquare className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>Chat</span>
+                          {unreadCount > 0 && (
+                            <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[9px] font-black animate-pulse">
+                              {unreadCount}
+                            </span>
+                          )}
+                        </button>
+
+                        {/* 3. PT Plans (Primary CTA) */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setModalTrainer(tr);
+                            setSelectedTrainerId(tr.trainerId);
+                            setIsPtPlansModalOpen(true);
+                          }}
+                          className="py-2.5 px-2 vision-btn-aurora text-white rounded-xl text-xs font-black shadow-md flex items-center justify-center gap-1.5 transition-all active:scale-95"
+                          title={`View PT Plans with ${tr.displayName}`}
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>PT Plans</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* DEDICATED PT PLANS MODAL (PRE-LINKED TO CHOSEN TRAINER) */}
+      {isPtPlansModalOpen && modalTrainer && (
+        <div className="fixed inset-0 z-[65] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-lg vision-surface bg-white/95 border border-white/90 rounded-3xl p-5 sm:p-6 shadow-2xl text-slate-800 space-y-4 max-h-[90vh] overflow-y-auto">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-200">
+              <div className="flex items-center gap-3">
+                <img
+                  src={modalTrainer.photoUrl}
+                  alt={modalTrainer.displayName}
+                  className="w-12 h-12 rounded-2xl object-cover border-2 border-indigo-200 shadow-2xs"
+                />
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="text-sm font-black text-slate-900">{modalTrainer.displayName}</h3>
+                    <TrainerIdentityBadge badge={modalTrainer.badge} />
+                  </div>
+                  <span className="text-[11px] text-indigo-600 font-bold block">
+                    {modalTrainer.specializations}
+                  </span>
+                  <span className="text-[10px] text-slate-500">1-on-1 Dedicated Personal Coaching Plans</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPtPlansModalOpen(false)}
+                className="p-2 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Packages Grid */}
+            <div className="space-y-2.5">
+              <span className="text-xs font-black uppercase tracking-wider text-slate-600 block">
+                Select Your PT Package
+              </span>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 {ptPackages.map((pkg) => {
                   const isSelected = selectedPackageId === pkg.id;
@@ -690,14 +907,16 @@ export const PtSectionView: React.FC = () => {
                       className={`p-3.5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between ${
                         isSelected
                           ? 'border-indigo-600 bg-indigo-50/90 shadow-md ring-2 ring-indigo-500/25'
-                          : 'border-white/80 bg-white/70 hover:bg-white/90'
+                          : 'border-slate-200 bg-white/80 hover:bg-white'
                       }`}
                     >
                       {pkg.badge && (
                         <div className="mb-2">
-                          <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
-                            pkg.popular ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700'
-                          }`}>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
+                              pkg.popular ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700'
+                            }`}
+                          >
                             {pkg.badge}
                           </span>
                         </div>
@@ -720,129 +939,45 @@ export const PtSectionView: React.FC = () => {
                   );
                 })}
               </div>
-
-              {/* Step 2: Trainer Selection */}
-              <div className="pt-2 border-t border-slate-200/80 space-y-2.5">
-                <div>
-                  <h3 className="text-sm font-black text-slate-800 tracking-tight">2. Select Your Personal Trainer</h3>
-                  <p className="text-xs text-slate-600 mt-0.5">
-                    Choose from our certified elite biomechanics and physique coaches.
-                  </p>
-                </div>
-
-                <div className="space-y-2.5">
-                  {trainers.map((tr) => (
-                    <div
-                      key={tr.trainerId}
-                      onClick={() => setSelectedTrainerId(tr.trainerId)}
-                      className={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
-                        selectedTrainerId === tr.trainerId
-                          ? 'border-indigo-600 bg-indigo-50/80 shadow-md ring-2 ring-indigo-500/25'
-                          : 'border-white/80 bg-white/70 hover:bg-white'
-                      }`}
-                    >
-                      <div className="flex items-start gap-3">
-                        <img
-                          src={tr.photoUrl}
-                          alt={tr.displayName}
-                          className="w-12 h-12 rounded-2xl object-cover border border-slate-200 shrink-0 shadow-2xs"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <h4 className="text-xs font-bold text-slate-900">{tr.displayName}</h4>
-                            <TrainerIdentityBadge badge={tr.badge} />
-                          </div>
-                          <p className="text-[11px] text-slate-600 mt-0.5 line-clamp-2">{tr.bio}</p>
-                          <div className="flex flex-wrap items-center justify-between gap-1.5 mt-2 pt-1.5 border-t border-slate-200/80 text-[11px]">
-                            <span className="text-indigo-700 font-bold">{tr.specializations}</span>
-                            <div className="flex items-center gap-1.5">
-                              {/* Native Phone Dialer trigger */}
-                              {(() => {
-                                const trPhone =
-                                  tr.phone ||
-                                  (tr.trainerId.includes('hitesh')
-                                    ? '8208002585'
-                                    : tr.trainerId.includes('bhavesh')
-                                    ? '9607292842'
-                                    : '9820345678');
-                                return (
-                                  <a
-                                    href={`tel:${trPhone.replace(/[^\d+]/g, '')}`}
-                                    onClick={(e) => e.stopPropagation()}
-                                    className="inline-flex items-center gap-1 text-[10px] text-emerald-800 bg-emerald-100 hover:bg-emerald-200 px-2 py-0.5 rounded-lg border border-emerald-300 font-bold transition-colors"
-                                  >
-                                    <Phone className="w-2.5 h-2.5" />
-                                    <span>{trPhone}</span>
-                                  </a>
-                                );
-                              })()}
-
-                              {/* Direct Chat Trigger */}
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setChatPartnerTrainer(tr);
-                                  setIsChatOpen(true);
-                                }}
-                                className="inline-flex items-center gap-1 text-[10px] text-indigo-800 bg-indigo-100 hover:bg-indigo-200 px-2 py-0.5 rounded-lg border border-indigo-300 font-bold transition-colors"
-                              >
-                                <MessageSquare className="w-2.5 h-2.5" />
-                                <span>Chat</span>
-                              </button>
-
-                              <span className="font-bold text-amber-600">★ {tr.rating.toFixed(1)}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Status Notice if present */}
-              {ptNotice && (
-                <div className="p-3 rounded-2xl bg-sky-50 border border-sky-200 text-sky-900 text-xs font-bold animate-fade-in">
-                  {ptNotice}
-                </div>
-              )}
-
-              {/* Step 3: Dual Checkout Action Workflow */}
-              <div className="pt-2 border-t border-slate-200/80 space-y-2">
-                <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-                  <span>Selected Package: <strong>{selectedPackage.name}</strong></span>
-                  <span className="text-indigo-600 font-black text-sm">
-                    Total: ₹{selectedPackage.price.toLocaleString('en-IN')}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                  {/* Option 1: Pay Online */}
-                  <button
-                    type="button"
-                    onClick={handlePayOnlineCheckout}
-                    disabled={isPaying || isRzpModalOpen || !selectedTrainerId}
-                    className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.98]"
-                  >
-                    <CreditCard className="w-4 h-4" />
-                    <span>Pay Online ({activeOnlineGateway?.name.split(' ')[0] || 'Gateway'})</span>
-                  </button>
-
-                  {/* Option 2: Pay Offline Cash */}
-                  <button
-                    type="button"
-                    onClick={handleOfflineCashCheckout}
-                    disabled={isPaying || isRzpModalOpen || !selectedTrainerId}
-                    className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white text-xs font-black rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.98]"
-                  >
-                    <Banknote className="w-4 h-4" />
-                    <span>Pay via Offline Cash Desk</span>
-                  </button>
-                </div>
-              </div>
             </div>
-          )}
+
+            {/* Summary & Checkout Actions */}
+            <div className="pt-3 border-t border-slate-200 space-y-3">
+              <div className="flex items-center justify-between text-xs font-bold text-slate-700 p-3 bg-slate-50 rounded-2xl border border-slate-200">
+                <span>
+                  Coaching with: <strong className="text-indigo-700">{modalTrainer.displayName}</strong>
+                </span>
+                <span className="text-indigo-600 font-black text-sm">
+                  Total: ₹{selectedPackage.price.toLocaleString('en-IN')}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={handlePayOnlineCheckout}
+                  disabled={isPaying || isRzpModalOpen}
+                  className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.98]"
+                >
+                  <CreditCard className="w-4 h-4" />
+                  <span>Pay Online ({activeOnlineGateway?.name.split(' ')[0] || 'Gateway'})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleOfflineCashCheckout}
+                  disabled={isPaying || isRzpModalOpen}
+                  className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white text-xs font-black rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.98]"
+                >
+                  <Banknote className="w-4 h-4" />
+                  <span>Pay via Offline Cash Desk</span>
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-500 text-center italic">
+                * Online payments and offline cash requests are reviewed and confirmed by Admin before activation.
+              </p>
+            </div>
+          </div>
         </div>
       )}
 
@@ -854,21 +989,21 @@ export const PtSectionView: React.FC = () => {
         amount={selectedPackage.price}
         originalPrice={selectedPackage.price}
         durationMonths={selectedPackage.durationMonths}
-        itemTitle={`${selectedPackage.name} with ${selectedTrainer?.displayName || 'Coach'}`}
+        itemTitle={`${selectedPackage.name} with ${modalTrainer?.displayName || selectedTrainer?.displayName || 'Coach'}`}
         planId={selectedPackage.id}
-        planName={`${selectedPackage.name} (${selectedTrainer?.displayName || 'Personal Trainer'})`}
+        planName={`${selectedPackage.name} (${modalTrainer?.displayName || selectedTrainer?.displayName || 'Personal Trainer'})`}
         clientId={currentUser?.uid || ''}
         clientName={clientProfile?.displayName || currentUser?.displayName || 'Member'}
         clientPhone={clientProfile?.phone || currentUser?.phone}
         clientEmail={clientProfile?.email || currentUser?.email}
         ptIncluded={true}
-        ptTrainerId={selectedTrainer?.trainerId}
-        ptTrainerName={selectedTrainer?.displayName}
+        ptTrainerId={modalTrainer?.trainerId || selectedTrainer?.trainerId}
+        ptTrainerName={modalTrainer?.displayName || selectedTrainer?.displayName}
         metadata={{
           packageId: selectedPackage.id,
           sessionsCount: selectedPackage.sessions,
-          trainerId: selectedTrainer?.trainerId,
-          trainerName: selectedTrainer?.displayName
+          trainerId: modalTrainer?.trainerId || selectedTrainer?.trainerId,
+          trainerName: modalTrainer?.displayName || selectedTrainer?.displayName
         }}
         purpose="personal_training"
         onSuccess={handlePtPaymentSuccess}

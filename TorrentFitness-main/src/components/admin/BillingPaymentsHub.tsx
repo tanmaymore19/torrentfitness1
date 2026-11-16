@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { collection, query, limit, onSnapshot, doc, deleteDoc, getDocs } from 'firebase/firestore';
+import { collection, query, limit, onSnapshot, doc, deleteDoc, getDocs, updateDoc } from 'firebase/firestore';
 import {
   ClientProfile,
   MembershipPlan,
@@ -736,26 +736,45 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
     if (!txToDelete) return;
     try {
       // 1. Delete from paymentTransactions collection
-      await deleteDoc(doc(db, 'paymentTransactions', txToDelete.id));
+      try {
+        await deleteDoc(doc(db, 'paymentTransactions', txToDelete.id));
+      } catch {}
 
-      // 2. If it was linked to a membership record or is a membership id, delete as well
-      if (txToDelete.rawTx?.membershipId) {
+      // 2. Delete from transactions collection
+      try {
+        await deleteDoc(doc(db, 'transactions', txToDelete.id));
+      } catch {}
+
+      // 3. Delete from clientProfiles/{clientId}/transactions/{txId} if stored as subcollection
+      const clientId = txToDelete.rawTx?.userId || txToDelete.rawTx?.clientId;
+      if (clientId) {
         try {
-          await deleteDoc(doc(db, 'memberships', txToDelete.rawTx.membershipId));
-        } catch {}
-      } else {
-        try {
-          await deleteDoc(doc(db, 'memberships', txToDelete.id));
+          await deleteDoc(doc(db, 'clientProfiles', clientId, 'transactions', txToDelete.id));
         } catch {}
       }
 
-      // 3. Immediately update local transactions state so all KPIs dynamically recalculate instantly
-      setTransactions((prev) => prev.filter((t) => t.id !== txToDelete.id));
+      // 4. If linked to a membership, mark transactionDeleted: true WITHOUT deleting membership record or client profile!
+      if (txToDelete.rawTx?.membershipId) {
+        try {
+          await updateDoc(doc(db, 'memberships', txToDelete.rawTx.membershipId), {
+            transactionDeleted: true,
+            transactionId: null,
+            receiptNumber: null
+          });
+        } catch {}
+      }
+
+      // 5. Immediately update local transactions state so all KPIs dynamically recalculate instantly
+      setTransactions((prev) => {
+        const updated = prev.filter((t) => t.id !== txToDelete.id);
+        setCachedData('admin_payment_transactions', updated);
+        return updated;
+      });
       setSelectedLedgerIds((prev) => prev.filter((id) => id !== txToDelete.id));
 
       setFeedbackBanner({
         type: 'success',
-        text: `Transaction ${txToDelete.receiptNumber} (${txToDelete.clientName}) voided & permanently deleted. Revenue metrics updated.`
+        text: `Transaction ${txToDelete.receiptNumber} (${txToDelete.clientName}) permanently deleted. Revenue metrics updated.`
       });
     } catch (err: any) {
       setFeedbackBanner({
@@ -1433,10 +1452,10 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
                                 type="button"
                                 onClick={() => handleDeleteTransaction(item)}
                                 className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-[11px] font-bold transition-all inline-flex items-center gap-1 shadow-2xs"
-                                title="Delete / Void Transaction"
+                                title="Delete Transaction"
                               >
                                 <Trash2 className="w-3 h-3 text-rose-600" />
-                                <span>Void</span>
+                                <span>Delete</span>
                               </button>
                             </div>
                           </td>
@@ -1506,16 +1525,16 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
       {/* 2-Step Transaction Deletion Confirmation Modal */}
       <GlobalDeleteConfirmModal
         isOpen={!!txToDelete}
-        title="Delete / Void Transaction"
+        title="Confirm Permanent Deletion"
         itemName={
           txToDelete
             ? `${txToDelete.receiptNumber} (${txToDelete.clientName} - ₹${txToDelete.finalAmount})`
             : ''
         }
         itemType="Financial Transaction"
-        description="Are you sure you want to permanently delete and void this payment record from the ledger?"
-        warningNote="Revenue totals and financial ledger metrics will be dynamically recalculated immediately."
-        confirmLabel="Yes, Void & Delete"
+        description="Are you sure you want to permanently delete this transaction record? This will deduct the amount from Admin Revenue and remove it from the client's transaction history."
+        confirmLabel="Yes, Permanently Delete"
+        cancelLabel="Cancel"
         onClose={() => setTxToDelete(null)}
         onConfirm={confirmDeleteTransaction}
       />
