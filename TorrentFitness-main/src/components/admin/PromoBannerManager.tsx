@@ -103,6 +103,9 @@ export const PromoBannerManager: React.FC = () => {
   const [badgeColor, setBadgeColor] = useState('from-emerald-500 to-teal-500');
   const [active, setActive] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Image focal alignment & fit mode
+  const [imageFocalAlign, setImageFocalAlign] = useState<'object-top' | 'object-center' | 'object-bottom'>('object-center');
+  const [imageFitMode, setImageFitMode] = useState<'object-cover' | 'object-contain'>('object-cover');
   const [selectedMediaFile, setSelectedMediaFile] = useState<File | null>(null);
 
   // Gym Facility Photos state
@@ -168,6 +171,8 @@ export const PromoBannerManager: React.FC = () => {
     setButtonText('Explore Now');
     setBadgeColor('from-emerald-500 to-teal-500');
     setActive(true);
+    setImageFocalAlign('object-center');
+    setImageFitMode('object-cover');
     setEditingBanner(null);
   };
 
@@ -197,6 +202,8 @@ export const PromoBannerManager: React.FC = () => {
     setButtonText(b.buttonText || 'Explore Now');
     setBadgeColor(b.badgeColor || 'from-emerald-500 to-teal-500');
     setActive(b.active !== false);
+    setImageFocalAlign(b.imageFocalAlign || 'object-center');
+    setImageFitMode(b.imageFitMode || 'object-cover');
     setIsModalOpen(true);
   };
 
@@ -270,6 +277,8 @@ export const PromoBannerManager: React.FC = () => {
         badgeColor,
         active,
         order,
+        imageFocalAlign: mediaType === 'image' ? imageFocalAlign : undefined,
+        imageFitMode: mediaType === 'image' ? imageFitMode : undefined,
         createdAt: editingBanner?.createdAt || new Date().toISOString()
       };
 
@@ -1033,11 +1042,11 @@ export const PromoBannerManager: React.FC = () => {
                 {/* Live Preview Box with Replace & Delete Photo Actions */}
                 {mediaUrl && (
                   <div className="space-y-2 mt-2">
-                    <div className="relative w-full h-40 rounded-2xl overflow-hidden bg-slate-900 border border-white/80 shadow-inner">
+                    <div className="relative w-full aspect-[16/7] rounded-2xl overflow-hidden bg-slate-900 border border-white/80 shadow-inner">
                       {mediaType === 'video' ? (
-                        <video src={mediaUrl} autoPlay loop muted playsInline className="w-full h-full object-cover" />
+                        <video src={mediaUrl} autoPlay loop muted playsInline className="w-full h-full object-cover object-center" />
                       ) : (
-                        <img src={mediaUrl} alt="Preview" className="w-full h-full object-cover" />
+                        <img src={mediaUrl} alt="Preview" className={`w-full h-full ${imageFitMode} ${imageFocalAlign}`} />
                       )}
                       <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/30 to-transparent pointer-events-none" />
                       <div className="absolute top-2.5 left-3 pointer-events-none">
@@ -1077,6 +1086,35 @@ export const PromoBannerManager: React.FC = () => {
                         <span>Delete / Clear Photo</span>
                       </button>
                     </div>
+
+                    {/* Image Focal Alignment & Fit Mode (Images Only) */}
+                    {mediaType === 'image' && (
+                      <div className="grid grid-cols-2 gap-3 pt-1">
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-bold text-slate-600">Focal Alignment</label>
+                          <select
+                            value={imageFocalAlign}
+                            onChange={(e) => setImageFocalAlign(e.target.value as any)}
+                            className="w-full px-2.5 py-1.5 text-xs bg-white rounded-xl text-slate-900 border border-slate-200/90 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-semibold shadow-2xs"
+                          >
+                            <option value="object-top">Top (Show top of image)</option>
+                            <option value="object-center">Center (Default)</option>
+                            <option value="object-bottom">Bottom (Show bottom)</option>
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-bold text-slate-600">Fit Mode</label>
+                          <select
+                            value={imageFitMode}
+                            onChange={(e) => setImageFitMode(e.target.value as any)}
+                            className="w-full px-2.5 py-1.5 text-xs bg-white rounded-xl text-slate-900 border border-slate-200/90 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-semibold shadow-2xs"
+                          >
+                            <option value="object-cover">Cover (Fill frame, crop edges)</option>
+                            <option value="object-contain">Contain (Show full image)</option>
+                          </select>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

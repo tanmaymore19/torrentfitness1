@@ -225,7 +225,7 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
             <div
               key={banner.id || index}
               onClick={() => handleSlideClick(banner)}
-              className="relative w-full shrink-0 h-56 sm:h-64 cursor-pointer overflow-hidden bg-slate-950"
+              className="relative w-full shrink-0 aspect-[16/7] cursor-pointer overflow-hidden bg-slate-950"
             >
               {/* Media Render: Video vs Image vs Gradient Fallback */}
               {isVideo && !isFailed ? (
@@ -237,7 +237,7 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
                   playsInline
                   preload="metadata"
                   onError={() => handleImageError(banner.id)}
-                  className="w-full h-full object-cover transform scale-105 transition-transform duration-700"
+                  className="w-full h-full object-cover object-center transform scale-105 transition-transform duration-700"
                 />
               ) : !isFailed && banner.mediaUrl ? (
                 <img
@@ -245,7 +245,7 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
                   alt={banner.title}
                   decoding="async"
                   onError={() => handleImageError(banner.id)}
-                  className="w-full h-full object-cover transform transition-transform duration-700 group-hover:scale-105"
+                  className={`w-full h-full ${banner.imageFitMode || 'object-cover'} ${banner.imageFocalAlign || 'object-center'} transform transition-transform duration-700 group-hover:scale-105`}
                   loading={index === 0 ? 'eager' : 'lazy'}
                 />
               ) : (

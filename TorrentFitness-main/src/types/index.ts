@@ -476,6 +476,8 @@ export interface PromoBanner {
   badgeColor?: string;
   active: boolean;
   order: number;
+  imageFocalAlign?: 'object-top' | 'object-center' | 'object-bottom';
+  imageFitMode?: 'object-cover' | 'object-contain';
   createdAt: string;
 }
 

@@ -11,6 +11,7 @@ import {
   activateSingleGateway,
   validateGatewayCredentials,
   isGatewayConfigured,
+  maskApiKey,
   UNIVERSAL_GATEWAY_TEMPLATES,
   SUPPORTED_ONLINE_ADAPTERS,
   ONLINE_PROVIDERS
@@ -989,13 +990,13 @@ export const PaymentGatewaysManager: React.FC = () => {
                         <div className="p-2.5 rounded-xl bg-slate-50/90 border border-slate-200/80">
                           <span className="text-[10px] text-slate-500 block uppercase font-bold">🌐 Web Key ID</span>
                           <span className="font-mono text-indigo-700 font-bold truncate block">
-                            {gw.keyId || 'Not Set'}
+                            {showSecrets ? (gw.keyId || 'Not Set') : maskApiKey(gw.keyId)}
                           </span>
                         </div>
                         <div className="p-2.5 rounded-xl bg-slate-50/90 border border-slate-200/80">
                           <span className="text-[10px] text-slate-500 block uppercase font-bold">📱 App Key ID</span>
                           <span className="font-mono text-emerald-700 font-bold truncate block">
-                            {gw.appKeyId || '(Uses Web Key)'}
+                            {gw.appKeyId ? (showSecrets ? gw.appKeyId : maskApiKey(gw.appKeyId)) : '(Uses Web Key)'}
                           </span>
                         </div>
                         <div className="p-2.5 rounded-xl bg-slate-50/90 border border-slate-200/80">

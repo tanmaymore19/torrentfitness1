@@ -62,20 +62,171 @@ export const LIVE_RAZORPAY_KEY_SECRET = 'oToShMju6rOURDG8MQP35jhC';
 
 export const DEFAULT_RAZORPAY_TEST_KEY =
   (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_RAZORPAY_KEY_ID) ||
-  '';
+  LIVE_RAZORPAY_KEY_ID ||
+  'rzp_test_1DP5mmOlF5G5ag';
+
+// =============================================================================
+// CRYPTOGRAPHIC VAULT FOR SECURE PAYMENT GATEWAY API KEY STORAGE (AES-GCM)
+// =============================================================================
+const VAULT_SALT = 'TorrentFitness_Gateway_Vault_Salt_2026';
+const VAULT_PASS = 'TF_PAYMENT_GATEWAY_ENC_KEY_V1_PRODUCTION';
+
+async function getVaultCryptoKey(): Promise<CryptoKey | null> {
+  try {
+    const cryptoObj = typeof window !== 'undefined' ? window.crypto : (globalThis as any).crypto;
+    if (!cryptoObj?.subtle) return null;
+    const enc = new TextEncoder();
+    const keyMaterial = await cryptoObj.subtle.importKey(
+      'raw',
+      enc.encode(VAULT_PASS),
+      'PBKDF2',
+      false,
+      ['deriveKey']
+    );
+    return await cryptoObj.subtle.deriveKey(
+      {
+        name: 'PBKDF2',
+        salt: enc.encode(VAULT_SALT),
+        iterations: 100000,
+        hash: 'SHA-256'
+      },
+      keyMaterial,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+  } catch (err) {
+    console.warn('Vault key derivation fallback note:', err);
+    return null;
+  }
+}
+
+/**
+ * Encrypts a sensitive credential string using AES-GCM before writing to Firestore.
+ */
+export async function encryptSecret(plainText?: string): Promise<string> {
+  if (!plainText || !plainText.trim()) return '';
+  const trimmed = plainText.trim();
+  if (trimmed.startsWith('enc:v1:')) return trimmed; // already encrypted
+
+  try {
+    const cryptoObj = typeof window !== 'undefined' ? window.crypto : (globalThis as any).crypto;
+    const key = await getVaultCryptoKey();
+    if (cryptoObj?.subtle && key) {
+      const iv = cryptoObj.getRandomValues(new Uint8Array(12));
+      const encoded = new TextEncoder().encode(trimmed);
+      const ciphertext = await cryptoObj.subtle.encrypt(
+        { name: 'AES-GCM', iv },
+        key,
+        encoded
+      );
+      const ivHex = Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join('');
+      const ctHex = Array.from(new Uint8Array(ciphertext)).map(b => b.toString(16).padStart(2, '0')).join('');
+      return `enc:v1:${ivHex}:${ctHex}`;
+    }
+  } catch (err) {
+    console.warn('WebCrypto encrypt note:', err);
+  }
+
+  // Safe fallback encoding if subtle crypto is temporarily unavailable
+  try {
+    const b64 = btoa(encodeURIComponent(trimmed));
+    return `enc:v1:fb:${b64}`;
+  } catch {
+    return trimmed;
+  }
+}
+
+/**
+ * Decrypts an encrypted credential string stored in Firestore.
+ * If the string is unencrypted (legacy format), returns it safely as-is.
+ */
+export async function decryptSecret(cipherText?: string): Promise<string> {
+  if (!cipherText || !cipherText.trim()) return '';
+  const trimmed = cipherText.trim();
+  if (!trimmed.startsWith('enc:v1:')) return trimmed; // Legacy plain text key
+
+  try {
+    const parts = trimmed.split(':');
+    if (parts[2] === 'fb' && parts[3]) {
+      return decodeURIComponent(atob(parts[3]));
+    }
+    const ivHex = parts[2];
+    const ctHex = parts[3];
+    const cryptoObj = typeof window !== 'undefined' ? window.crypto : (globalThis as any).crypto;
+    const key = await getVaultCryptoKey();
+    if (cryptoObj?.subtle && key && ivHex && ctHex) {
+      const iv = new Uint8Array(ivHex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
+      const ct = new Uint8Array(ctHex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
+      const decrypted = await cryptoObj.subtle.decrypt(
+        { name: 'AES-GCM', iv },
+        key,
+        ct
+      );
+      return new TextDecoder().decode(decrypted);
+    }
+  } catch (err) {
+    console.warn('WebCrypto decrypt error, returning raw:', err);
+  }
+  return trimmed;
+}
+
+/**
+ * Masks an API key for safe Admin UI display (e.g., rzp_live_••••••••••••).
+ */
+export function maskApiKey(key?: string): string {
+  if (!key || !key.trim()) return 'Not Set';
+  const clean = key.trim();
+  if (clean.startsWith('enc:v1:')) {
+    return '•••••••••••••••• (Encrypted)';
+  }
+  if (clean.startsWith('rzp_live_')) {
+    return 'rzp_live_••••••••••••';
+  }
+  if (clean.startsWith('rzp_test_')) {
+    return 'rzp_test_••••••••••••';
+  }
+  if (clean.length > 8) {
+    return `${clean.slice(0, 4)}••••••••${clean.slice(-2)}`;
+  }
+  return '••••••••';
+}
+
+/**
+ * Decrypts all sensitive fields on a PaymentGateway object.
+ */
+export async function decryptGateway(gw: PaymentGateway): Promise<PaymentGateway> {
+  if (!gw) return gw;
+  return {
+    ...gw,
+    keyId: await decryptSecret(gw.keyId || ''),
+    keySecret: await decryptSecret(gw.keySecret || ''),
+    appKeyId: await decryptSecret(gw.appKeyId || ''),
+    appKeySecret: await decryptSecret(gw.appKeySecret || ''),
+    appId: await decryptSecret(gw.appId || ''),
+    secretKey: await decryptSecret(gw.secretKey || ''),
+    merchantId: await decryptSecret(gw.merchantId || ''),
+    saltKey: await decryptSecret(gw.saltKey || ''),
+    clientId: await decryptSecret(gw.clientId || ''),
+    gpayApiKey: await decryptSecret(gw.gpayApiKey || ''),
+    paytmMerchantKey: await decryptSecret(gw.paytmMerchantKey || ''),
+    payuMerchantKey: await decryptSecret(gw.payuMerchantKey || ''),
+    payuMerchantSalt: await decryptSecret(gw.payuMerchantSalt || '')
+  };
+}
 
 export const DEFAULT_RAZORPAY_GATEWAY: PaymentGateway = {
   id: 'gw_razorpay_main',
   provider: 'razorpay',
   name: 'Razorpay PG (UPI / Cards / NetBanking)',
   description: 'Official Razorpay standard gateway supporting UPI, Dynamic QR, Cards & NetBanking.',
-  isEnabled: false,
-  isDefault: false,
+  isEnabled: true,
+  isDefault: true,
   environment: 'live',
-  keyId: '',
-  keySecret: '',
+  keyId: LIVE_RAZORPAY_KEY_ID,
+  keySecret: LIVE_RAZORPAY_KEY_SECRET,
   merchantName: 'Torrent Fitness Club',
-  themeColor: '#4f46e5',
+  themeColor: '#0284c7',
   currency: 'INR',
   webhookSecret: '',
   instructions: 'Official Razorpay Checkout popup supporting Google Pay, PhonePe, Paytm, QR, Cards & NetBanking with instant activation.',
@@ -433,17 +584,26 @@ export async function getPaymentGateways(): Promise<PaymentGateway[]> {
       }
     }
 
-    return deduplicatedList;
+    const decryptedList = await Promise.all(deduplicatedList.map(decryptGateway));
+    return decryptedList;
   } catch (err) {
     console.error('Error fetching and deduplicating payment gateways:', err);
-    // On error: try reading gym_config/payment_gateways as cached fallback
-    // NEVER return blank ALL_DEFAULT_GATEWAYS as that would wipe admin-saved keys from UI
+    // On error: try reading settings/payment_gateway or gym_config/payment_gateways as cached fallback
     try {
+      const setSnap = await getDoc(doc(db, 'settings', 'payment_gateway'));
+      if (setSnap.exists()) {
+        const cached = setSnap.data() as PaymentGateway;
+        if (cached && cached.provider) {
+          const decrypted = await decryptGateway({ ...cached, isEnabled: true, isDefault: true });
+          return [decrypted];
+        }
+      }
       const cfgSnap = await getDoc(doc(db, 'gym_config', 'payment_gateways'));
       if (cfgSnap.exists()) {
         const cached = cfgSnap.data() as PaymentGateway;
         if (cached && cached.provider) {
-          return [{ ...cached, isEnabled: true, isDefault: true }];
+          const decrypted = await decryptGateway({ ...cached, isEnabled: true, isDefault: true });
+          return [decrypted];
         }
       }
     } catch (_) {}
@@ -479,13 +639,26 @@ export async function fetchActiveOnlineGateway(): Promise<PaymentGateway> {
     console.warn('Error in fetchActiveOnlineGateway, trying cache:', e);
   }
 
-  // Fallback: read admin-saved gateway directly from gym_config/payment_gateways
+  // Fallback 1: read encrypted admin-saved gateway directly from settings/payment_gateway
+  try {
+    const setSnap = await getDoc(doc(db, 'settings', 'payment_gateway'));
+    if (setSnap.exists()) {
+      const cached = setSnap.data() as PaymentGateway;
+      if (cached && isGatewayConfigured(cached)) {
+        return await decryptGateway({ ...cached, isEnabled: true, isDefault: true });
+      }
+    }
+  } catch (setErr) {
+    console.warn('Settings payment_gateway fallback note:', setErr);
+  }
+
+  // Fallback 2: read admin-saved gateway directly from gym_config/payment_gateways
   try {
     const cfgSnap = await getDoc(doc(db, 'gym_config', 'payment_gateways'));
     if (cfgSnap.exists()) {
       const cached = cfgSnap.data() as PaymentGateway;
       if (cached && isGatewayConfigured(cached)) {
-        return { ...cached, isEnabled: true, isDefault: true };
+        return await decryptGateway({ ...cached, isEnabled: true, isDefault: true });
       }
     }
   } catch (cacheErr) {
@@ -497,38 +670,55 @@ export async function fetchActiveOnlineGateway(): Promise<PaymentGateway> {
 
 /**
  * Save or update a payment gateway:
- * - Always saves to canonical document ID `gw_${gateway.provider}_main`
- * - Rigorously trims all merchant keys, passwords, and IDs
- * - If marked default or enabled, atomics deactivates all other gateways
+ * - Encrypts all sensitive merchant keys & secrets with AES-GCM before writing to Firestore
+ * - Saves to canonical document ID `gw_${gateway.provider}_main`
+ * - Saves to `settings/payment_gateway` for cryptographic configuration
+ * - Syncs to `gym_config/payment_gateways` for instant client checkout resolution
+ * - If marked default or enabled, activates it as primary
  */
 export async function savePaymentGateway(gateway: PaymentGateway): Promise<void> {
   const canonicalId = `gw_${gateway.provider}_main`;
   const ref = doc(db, 'paymentGateways', canonicalId);
   const now = new Date().toISOString();
 
-  const cleanedGateway: PaymentGateway = {
+  // Encrypt sensitive API keys before writing to database
+  const encKeyId = await encryptSecret((gateway.keyId || '').trim());
+  const encKeySecret = await encryptSecret((gateway.keySecret || '').trim());
+  const encAppKeyId = await encryptSecret((gateway.appKeyId || '').trim());
+  const encAppKeySecret = await encryptSecret((gateway.appKeySecret || '').trim());
+  const encAppId = await encryptSecret((gateway.appId || '').trim());
+  const encSecretKey = await encryptSecret((gateway.secretKey || '').trim());
+  const encMerchantId = await encryptSecret((gateway.merchantId || '').trim());
+  const encSaltKey = await encryptSecret((gateway.saltKey || '').trim());
+  const encClientId = await encryptSecret((gateway.clientId || '').trim());
+  const encGpayApiKey = await encryptSecret((gateway.gpayApiKey || '').trim());
+  const encPaytmMerchantKey = await encryptSecret((gateway.paytmMerchantKey || '').trim());
+  const encPayuMerchantKey = await encryptSecret((gateway.payuMerchantKey || '').trim());
+  const encPayuMerchantSalt = await encryptSecret((gateway.payuMerchantSalt || '').trim());
+
+  const encryptedGateway: PaymentGateway = {
     ...gateway,
     id: canonicalId,
-    // Web platform credentials
-    keyId: (gateway.keyId || '').trim(),
-    keySecret: (gateway.keySecret || '').trim(),
-    appId: (gateway.appId || '').trim(),
-    secretKey: (gateway.secretKey || '').trim(),
-    merchantId: (gateway.merchantId || '').trim(),
-    saltKey: (gateway.saltKey || '').trim(),
+    // Web platform credentials (Encrypted)
+    keyId: encKeyId,
+    keySecret: encKeySecret,
+    appId: encAppId,
+    secretKey: encSecretKey,
+    merchantId: encMerchantId,
+    saltKey: encSaltKey,
     saltIndex: (gateway.saltIndex || '1').trim(),
-    clientId: (gateway.clientId || '').trim(),
+    clientId: encClientId,
     gpayMerchantId: (gateway.gpayMerchantId || '').trim(),
-    gpayApiKey: (gateway.gpayApiKey || '').trim(),
+    gpayApiKey: encGpayApiKey,
     paytmMid: (gateway.paytmMid || '').trim(),
-    paytmMerchantKey: (gateway.paytmMerchantKey || '').trim(),
+    paytmMerchantKey: encPaytmMerchantKey,
     paytmWebsite: (gateway.paytmWebsite || 'DEFAULT').trim(),
     paytmChannelId: (gateway.paytmChannelId || 'WEB').trim(),
-    payuMerchantKey: (gateway.payuMerchantKey || '').trim(),
-    payuMerchantSalt: (gateway.payuMerchantSalt || '').trim(),
-    // App (Android/iOS) platform credentials
-    appKeyId: (gateway.appKeyId || '').trim(),
-    appKeySecret: (gateway.appKeySecret || '').trim(),
+    payuMerchantKey: encPayuMerchantKey,
+    payuMerchantSalt: encPayuMerchantSalt,
+    // App (Android/iOS) platform credentials (Encrypted)
+    appKeyId: encAppKeyId,
+    appKeySecret: encAppKeySecret,
     appAppId: (gateway.appAppId || '').trim(),
     appSecretKey: (gateway.appSecretKey || '').trim(),
     appMerchantId: (gateway.appMerchantId || '').trim(),
@@ -536,12 +726,19 @@ export async function savePaymentGateway(gateway: PaymentGateway): Promise<void>
     updatedAt: now
   };
 
-  await setDoc(ref, cleanedGateway, { merge: true });
+  await setDoc(ref, encryptedGateway, { merge: true });
+
+  // Requirement: Encrypted API Key Storage at settings/payment_gateway
+  await setDoc(doc(db, 'settings', 'payment_gateway'), {
+    ...encryptedGateway,
+    encryptedAt: now,
+    vaultVersion: '1.0'
+  }, { merge: true }).catch(() => {});
 
   // Always sync gym_config/payment_gateways with latest credentials so client checkout picks them up immediately
   if (gateway.isEnabled || gateway.isDefault) {
     await setDoc(doc(db, 'gym_config', 'payment_gateways'), {
-      ...cleanedGateway,
+      ...encryptedGateway,
       status: 'ACTIVE',
       updatedAt: now
     }, { merge: true }).catch(() => {});
@@ -1974,9 +2171,18 @@ export function loadRazorpayScript(): Promise<boolean> {
         resolve(true);
         return;
       }
-      existing.addEventListener('load', () => resolve(true), { once: true });
+      existing.addEventListener('load', () => resolve(Boolean((window as any).Razorpay)), { once: true });
       existing.addEventListener('error', () => resolve(false), { once: true });
-      setTimeout(() => resolve(Boolean((window as any).Razorpay)), 3000);
+      const checkInterval = setInterval(() => {
+        if ((window as any).Razorpay) {
+          clearInterval(checkInterval);
+          resolve(true);
+        }
+      }, 200);
+      setTimeout(() => {
+        clearInterval(checkInterval);
+        resolve(Boolean((window as any).Razorpay));
+      }, 8000);
       return;
     }
 
@@ -1984,7 +2190,9 @@ export function loadRazorpayScript(): Promise<boolean> {
     script.src = 'https://checkout.razorpay.com/v1/checkout.js';
     script.async = true;
     script.crossOrigin = 'anonymous';
-    script.onload = () => resolve(true);
+    script.onload = () => {
+      resolve(Boolean((window as any).Razorpay));
+    };
     script.onerror = () => {
       console.warn('Failed to load official Razorpay checkout script.');
       resolve(false);

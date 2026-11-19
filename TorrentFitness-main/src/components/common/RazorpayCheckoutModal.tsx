@@ -7,7 +7,8 @@ import {
   loadPayUBoltScript,
   fetchActiveOnlineGateway,
   DEFAULT_RAZORPAY_TEST_KEY,
-  resolveGatewayKeys
+  resolveGatewayKeys,
+  decryptSecret
 } from '../../services/paymentService';
 import { copyToClipboard } from '../../utils/clipboard';
 import confetti from 'canvas-confetti';
@@ -176,10 +177,11 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
 
     // 1. Resolve configured Razorpay Key ID — picks app key on native app, web key on browser
     const { keyId: platformKeyId } = resolveGatewayKeys(targetGw || {} as PaymentGateway);
-    const resolvedKey =
+    const rawKey =
       platformKeyId ||
       (targetGw?.keyId && targetGw.keyId.trim()) ||
       DEFAULT_RAZORPAY_TEST_KEY;
+    const resolvedKey = (await decryptSecret(rawKey)) || DEFAULT_RAZORPAY_TEST_KEY;
 
     // 2. Convert payable amount to paise (100 paise = ₹1, enforce minimum 100 paise)
     const amountInPaise = Math.max(100, Math.round(amount * 100));
