@@ -19,6 +19,7 @@ import { LogoutConfirmationModal } from '../components/common/LogoutConfirmation
 import {
   doc,
   getDoc,
+  getDocFromServer,
   setDoc,
   updateDoc,
   onSnapshot,
@@ -77,6 +78,7 @@ interface AuthContextType {
   signupTrainer: (params: SignupTrainerParams) => Promise<void>;
   loginAdmin: (adminId: string, password: string) => Promise<void>;
   updateAdminPassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  verifyMasterAdminPassword: (password: string) => Promise<boolean>;
   verifyAdminPassword: (password: string) => Promise<boolean>;
   requestAdminPasswordResetOtp: (currentPassword: string) => Promise<{ success: boolean; message: string }>;
   verifyAdminPasswordResetOtp: (enteredOtp: string) => Promise<boolean>;
@@ -558,40 +560,52 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }
 
-  // Unified Master Admin Password Verification Helper (Single Source of Truth for Login & Password Reset)
-  const verifyAdminPassword = async (inputPassword: string): Promise<boolean> => {
-    const cleanInput = (inputPassword || '').trim();
+  // Single Shared Verification Helper (Single Permanent Cloud Firestore Source of Truth for Login & Password Reset)
+  const verifyMasterAdminPassword = async (enteredPassword: string): Promise<boolean> => {
+    const cleanInput = (enteredPassword || '').trim();
     if (!cleanInput) return false;
 
-    // 1. ALWAYS read directly from Cloud Firestore system_settings/master_admin_auth first (bypassing stale cache)
+    // 1. Fetch doc(db, 'system_settings', 'master_admin_auth') directly from Firestore server (getDocFromServer with fallback to getDoc)
+    let authSnap: any = null;
     try {
-      const authSnap = await withTimeout(
-        getDoc(doc(db, 'system_settings', 'master_admin_auth')),
+      authSnap = await withTimeout(
+        getDocFromServer(doc(db, 'system_settings', 'master_admin_auth')),
         3500
       ).catch(() => null);
-
-      if (authSnap?.exists()) {
-        const authData = authSnap.data();
-        if (authData?.hasCustomPassword === true && authData?.passwordHash) {
-          try {
-            localStorage.setItem('master_admin_password_hash', authData.passwordHash);
-            sessionStorage.setItem('master_admin_password_hash', authData.passwordHash);
-          } catch {}
-          // Strict: When custom password is set in Cloud Firestore, ONLY that password is valid
-          // Old password 'torrent#19@fit1' is permanently deactivated across all devices
-          return await verifyClientPassword(cleanInput, authData.passwordHash);
-        } else if (authData?.hasCustomPassword === false) {
-          return (
-            cleanInput === 'torrent#19@fit1' ||
-            cleanInput.toLowerCase() === 'torrent#19@fit1'
-          );
-        }
-      }
-    } catch (fsErr) {
-      console.warn('[Admin Auth] Firestore read warning (checking local storage fallback):', fsErr);
+    } catch {
+      authSnap = null;
     }
 
-    // 2. Offline / Network error fallback: Check local storage
+    if (!authSnap || !authSnap.exists()) {
+      try {
+        authSnap = await withTimeout(
+          getDoc(doc(db, 'system_settings', 'master_admin_auth')),
+          3000
+        ).catch(() => null);
+      } catch {
+        authSnap = null;
+      }
+    }
+
+    // 2. If system_settings/master_admin_auth exists and contains passwordHash:
+    if (authSnap && authSnap.exists()) {
+      const authData = authSnap.data();
+      const storedHash = authData?.passwordHash;
+      if (storedHash) {
+        // Cache valid hash locally for offline continuity
+        try {
+          localStorage.setItem('master_admin_password_hash', storedHash);
+          sessionStorage.setItem('master_admin_password_hash', storedHash);
+        } catch {}
+
+        // Validate enteredPassword STRICTLY against storedHash ONLY.
+        // 100% REJECT initial bootstrap default ('torrent#19@fit1') if storedHash belongs to a new custom password,
+        // or any previously rotated passwords.
+        return await verifyClientPassword(cleanInput, storedHash);
+      }
+    }
+
+    // 3. Fallback check on localStorage if Firestore was unreachable due to network disconnect
     try {
       const localCustomHash = localStorage.getItem('master_admin_password_hash') || sessionStorage.getItem('master_admin_password_hash');
       if (localCustomHash) {
@@ -599,35 +613,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } catch {}
 
-    // 3. Initial Default Bootstrap Password (only if neither Firestore nor localStorage has any custom password)
+    // 4. Only if system_settings/master_admin_auth does NOT exist yet on first-ever setup:
     const isDefaultMatch =
       cleanInput === 'torrent#19@fit1' ||
       cleanInput.toLowerCase() === 'torrent#19@fit1';
 
     if (isDefaultMatch) {
-      // Non-blocking background attempt to seed Firestore
-      (async () => {
-        try {
-          const defaultHash = await hashPasswordPBKDF2('torrent#19@fit1');
-          await setDoc(
-            doc(db, 'system_settings', 'master_admin_auth'),
-            {
-              passwordHash: defaultHash,
-              hasCustomPassword: false,
-              defaultBootstrapped: true,
-              updatedAt: new Date().toISOString(),
-              officialEmail: 'torrentfitness1@gmail.com'
-            },
-            { merge: true }
-          ).catch(() => {});
-        } catch {}
-      })();
-
+      // Establish single Firestore source of truth immediately
+      try {
+        const defaultHash = await hashPasswordPBKDF2('torrent#19@fit1');
+        await setDoc(
+          doc(db, 'system_settings', 'master_admin_auth'),
+          {
+            passwordHash: defaultHash,
+            hasCustomPassword: false,
+            defaultBootstrapped: true,
+            updatedAt: new Date().toISOString(),
+            updatedTimestamp: serverTimestamp(),
+            officialEmail: 'torrentfitness1@gmail.com'
+          },
+          { merge: true }
+        ).catch(() => {});
+        localStorage.setItem('master_admin_password_hash', defaultHash);
+        sessionStorage.setItem('master_admin_password_hash', defaultHash);
+      } catch {}
       return true;
     }
 
     return false;
   };
+
+  const verifyAdminPassword = verifyMasterAdminPassword;
 
   // Client / Trainer Multi-Identifier Login (Mobile Number, Email, or Client ID / Username)
   const loginClientOrTrainer = async (
@@ -1888,6 +1904,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             {
               passwordHash: newHash,
               hasCustomPassword: true,
+              defaultBootstrapped: false,
               updatedAt: now,
               updatedTimestamp: serverTimestamp(),
               officialEmail: 'torrentfitness1@gmail.com',
@@ -2112,6 +2129,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signupTrainer,
         loginAdmin,
         updateAdminPassword,
+        verifyMasterAdminPassword,
         verifyAdminPassword,
         requestAdminPasswordResetOtp,
         verifyAdminPasswordResetOtp,
