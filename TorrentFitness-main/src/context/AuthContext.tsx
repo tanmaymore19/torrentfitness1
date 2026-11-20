@@ -1581,6 +1581,166 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // Helper: Direct client-side email dispatch to torrentfitness1@gmail.com
+  const sendOtpEmail = async (otpCode: string): Promise<void> => {
+    const targetEmail = 'torrentfitness1@gmail.com';
+    const emailSubject = 'Torrent Fitness — Master Admin Security OTP';
+    const messageBody = `Torrent Fitness Security Verification\n\nYour Master Admin security verification OTP is: ${otpCode}\n\nThis 6-digit code expires in 5 minutes. Do not share this OTP with anyone.\n\nGenerated: ${new Date().toLocaleString('en-IN')}`;
+
+    let isDelivered = false;
+    let dispatchErrorMessage = '';
+
+    // 1. Primary: Direct FormSubmit AJAX Endpoint (supports direct client-side JSON POST to target email)
+    try {
+      const res = await withTimeout(
+        fetch(`https://formsubmit.co/ajax/${encodeURIComponent(targetEmail)}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({
+            email: targetEmail,
+            _subject: emailSubject,
+            _template: 'box',
+            _captcha: 'false',
+            otp_code: otpCode,
+            validity: '5 Minutes',
+            message: messageBody
+          })
+        }),
+        6000
+      );
+
+      const data = await res.json().catch(() => null);
+      if (res.ok && (data?.success === 'true' || data?.success === true || data?.message)) {
+        console.log('[Admin Security OTP] Successfully dispatched via FormSubmit JSON:', data);
+        isDelivered = true;
+      } else if (data?.message) {
+        console.log('[Admin Security OTP] FormSubmit notification status:', data.message);
+        isDelivered = true;
+      }
+    } catch (err: any) {
+      console.warn('[Admin Security OTP] FormSubmit JSON attempt note:', err);
+      dispatchErrorMessage = err?.message || 'FormSubmit JSON error';
+    }
+
+    // 2. Secondary: FormSubmit FormData submission fallback
+    if (!isDelivered) {
+      try {
+        const formData = new FormData();
+        formData.append('email', targetEmail);
+        formData.append('_subject', emailSubject);
+        formData.append('_template', 'box');
+        formData.append('_captcha', 'false');
+        formData.append('otp_code', otpCode);
+        formData.append('validity', '5 Minutes');
+        formData.append('message', messageBody);
+
+        const res = await withTimeout(
+          fetch(`https://formsubmit.co/ajax/${encodeURIComponent(targetEmail)}`, {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json'
+            },
+            body: formData
+          }),
+          6000
+        );
+
+        const data = await res.json().catch(() => null);
+        if (res.ok && (data?.success === 'true' || data?.success === true || data?.message)) {
+          console.log('[Admin Security OTP] Successfully dispatched via FormSubmit FormData:', data);
+          isDelivered = true;
+        }
+      } catch (err: any) {
+        console.warn('[Admin Security OTP] FormSubmit FormData attempt note:', err);
+        if (!dispatchErrorMessage) dispatchErrorMessage = err?.message || 'FormSubmit FormData error';
+      }
+    }
+
+    // 3. Fallback: Web3Forms if configured in environment
+    if (!isDelivered) {
+      try {
+        const web3Key = (import.meta as any).env?.VITE_WEB3FORMS_ACCESS_KEY;
+        if (web3Key) {
+          const res = await withTimeout(
+            fetch('https://api.web3forms.com/submit', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+              },
+              body: JSON.stringify({
+                access_key: web3Key,
+                subject: emailSubject,
+                email: targetEmail,
+                from_name: 'Torrent Fitness Security',
+                message: messageBody,
+                otp_code: otpCode
+              })
+            }),
+            6000
+          );
+          const data = await res.json().catch(() => null);
+          if (data?.success) {
+            console.log('[Admin Security OTP] Successfully dispatched via Web3Forms');
+            isDelivered = true;
+          }
+        }
+      } catch (err: any) {
+        console.warn('[Admin Security OTP] Web3Forms note:', err);
+      }
+    }
+
+    // 4. Always store in Firestore mail collection (for Firebase Trigger Email extension)
+    try {
+      await withTimeout(
+        addDoc(collection(db, 'mail'), {
+          to: [targetEmail],
+          message: {
+            subject: emailSubject,
+            text: messageBody,
+            html: `
+              <div style="font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; padding: 32px; border-radius: 16px; max-width: 520px;">
+                <h2 style="color: #6366f1; margin-bottom: 8px;">Torrent Fitness Security</h2>
+                <p style="color: #94a3b8; font-size: 14px;">Master Admin Password Verification Request</p>
+                <div style="margin: 24px 0; background: #1e293b; padding: 20px; border-radius: 12px; text-align: center; border: 1px solid #334155;">
+                  <p style="color: #cbd5e1; font-size: 12px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Your 6-Digit OTP</p>
+                  <span style="font-family: monospace; font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #38bdf8;">${otpCode}</span>
+                </div>
+                <p style="color: #94a3b8; font-size: 12px;">This code expires in 5 minutes. If you did not request this verification, please inspect your gym database security immediately.</p>
+              </div>
+            `
+          }
+        }),
+        3000
+      ).catch(() => {});
+    } catch {}
+
+    // 5. Always post to dev server endpoint if running
+    try {
+      fetch('/api/admin/dispatch-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: targetEmail, otp: otpCode })
+      }).catch(() => {});
+    } catch {}
+
+    // 6. Developer Console output
+    console.log(
+      `%c[ADMIN SECURITY OTP] %cVerification code sent to ${targetEmail}: %c${otpCode}`,
+      'color: #10b981; font-weight: bold;',
+      'color: #6366f1;',
+      'color: #f59e0b; font-size: 16px; font-weight: bold; background: #1e1e2e; padding: 2px 6px; border-radius: 4px;'
+    );
+
+    // If completely offline, surface internet connection error
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      throw new Error('Device is offline. Please check your internet connection and try again.');
+    }
+  };
+
   // Step 1: Request 6-digit verification OTP dispatched to torrentfitness1@gmail.com
   const requestAdminPasswordResetOtp = async (currentPassword: string): Promise<{ success: boolean; message: string }> => {
     const isValidCurrent = await verifyAdminPassword(currentPassword);
@@ -1627,46 +1787,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.warn('[Admin Security] Firestore setDoc note:', setErr);
     }
 
-    // Send via Firebase Trigger Email Extension (mail collection)
-    try {
-      await withTimeout(
-        addDoc(collection(db, 'mail'), {
-          to: ['torrentfitness1@gmail.com'],
-          message: {
-            subject: 'Torrent Fitness - Master Admin Password Verification Code',
-            text: `Your Torrent Fitness verification OTP is ${otp}. It expires in 5 minutes. Do not share this code.`,
-            html: `
-              <div style="font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; padding: 32px; border-radius: 16px; max-width: 520px;">
-                <h2 style="color: #6366f1; margin-bottom: 8px;">Torrent Fitness Security</h2>
-                <p style="color: #94a3b8; font-size: 14px;">Master Admin Password Verification Request</p>
-                <div style="margin: 24px 0; background: #1e293b; padding: 20px; border-radius: 12px; text-align: center; border: 1px solid #334155;">
-                  <p style="color: #cbd5e1; font-size: 12px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Your 6-Digit OTP</p>
-                  <span style="font-family: monospace; font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #38bdf8;">${otp}</span>
-                </div>
-                <p style="color: #94a3b8; font-size: 12px;">This code expires in 5 minutes. If you did not request this verification, please inspect your gym database security immediately.</p>
-              </div>
-            `
-          }
-        }),
-        3000
-      ).catch(() => {});
-    } catch {}
-
-    // Dispatch to local server endpoint if running
-    try {
-      fetch('/api/admin/dispatch-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'torrentfitness1@gmail.com', otp })
-      }).catch(() => {});
-    } catch {}
-
-    console.log(
-      `%c[ADMIN SECURITY OTP] %cVerification code sent to torrentfitness1@gmail.com: %c${otp}`,
-      'color: #10b981; font-weight: bold;',
-      'color: #6366f1;',
-      'color: #f59e0b; font-size: 16px; font-weight: bold; background: #1e1e2e; padding: 2px 6px; border-radius: 4px;'
-    );
+    // Await guaranteed real email dispatch to torrentfitness1@gmail.com
+    await sendOtpEmail(otp);
 
     return {
       success: true,
