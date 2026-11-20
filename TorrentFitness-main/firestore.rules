@@ -265,7 +265,19 @@ service cloud.firestore {
     }
 
     match /promoBanners/{bannerId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
+    }
+
+    match /banners/{bannerId} {
+      allow read, write, delete: if true;
+    }
+
+    match /home_banners/{bannerId} {
+      allow read, write, delete: if true;
+    }
+
+    match /advertisements/{bannerId} {
+      allow read, write, delete: if true;
     }
 
     match /gymPhotos/{photoId} {

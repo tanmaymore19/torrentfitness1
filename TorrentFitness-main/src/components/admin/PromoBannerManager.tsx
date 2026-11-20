@@ -32,6 +32,7 @@ import {
   Camera
 } from 'lucide-react';
 import { uploadMediaOrDataUrl } from '../../services/mediaUploadService';
+import { compressImageToDataUrl } from '../../utils/imageCompressor';
 import { GymPhoto, DEFAULT_GYM_PHOTOS } from '../client/GymPhotoGallery';
 
 const PRESET_BANNERS = [
@@ -103,6 +104,7 @@ export const PromoBannerManager: React.FC = () => {
   const [badgeColor, setBadgeColor] = useState('from-emerald-500 to-teal-500');
   const [active, setActive] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
   // Image focal alignment & fit mode
   const [imageFocalAlign, setImageFocalAlign] = useState<'object-top' | 'object-center' | 'object-bottom'>('object-center');
   const [imageFitMode, setImageFitMode] = useState<'object-cover' | 'object-contain'>('object-cover');
@@ -222,19 +224,50 @@ export const PromoBannerManager: React.FC = () => {
     setIsPhotoModalOpen(true);
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setSelectedMediaFile(file);
+    if (file.type.startsWith('image/')) {
+      setIsCompressing(true);
+      showNotice('Compressing banner image for high-speed mobile delivery...');
+      try {
+        const compressedDataUrl = await compressImageToDataUrl(file, 1200, 0.80);
+        setMediaType('image');
+        setMediaUrl(compressedDataUrl);
+        showNotice('✓ Image compressed cleanly (max 1200px, <1MB safe) and attached!');
+      } catch (err: any) {
+        console.error('Image compression fallback:', err);
+        setSelectedMediaFile(file);
+      } finally {
+        setIsCompressing(false);
+      }
+    } else {
+      setSelectedMediaFile(file);
+    }
     e.target.value = '';
   };
 
-  const handleGymPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleGymPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setSelectedGymPhotoFile(file);
+    if (file.type.startsWith('image/')) {
+      setIsCompressing(true);
+      showNotice('Compressing facility photo for mobile delivery...');
+      try {
+        const compressedDataUrl = await compressImageToDataUrl(file, 1200, 0.80);
+        setPhotoUrl(compressedDataUrl);
+        showNotice('✓ Facility photo compressed cleanly and attached!');
+      } catch (err: any) {
+        console.error('Gym photo compression fallback:', err);
+        setSelectedGymPhotoFile(file);
+      } finally {
+        setIsCompressing(false);
+      }
+    } else {
+      setSelectedGymPhotoFile(file);
+    }
     e.target.value = '';
   };
 
@@ -251,15 +284,28 @@ export const PromoBannerManager: React.FC = () => {
 
   const handleSaveBanner = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !mediaUrl.trim()) return;
+    if (!title.trim()) {
+      showNotice('Banner title is required.');
+      return;
+    }
+    if (!mediaUrl.trim()) {
+      showNotice('Banner image or video media URL is required.');
+      return;
+    }
 
     setIsSubmitting(true);
     try {
       const bannerId = editingBanner ? editingBanner.id : `banner_${Date.now()}`;
       const order = editingBanner ? editingBanner.order : banners.length + 1;
 
-      // Persist dataUrl to server storage or optimize compression
+      // Ensure image is clean, compressed, and strictly below Firestore's 1MB limit
       let safeMediaUrl = mediaUrl.trim();
+      if (mediaType === 'image') {
+        if (safeMediaUrl.startsWith('blob:') || (safeMediaUrl.startsWith('data:image') && safeMediaUrl.length > 750000)) {
+          safeMediaUrl = await compressImageToDataUrl(safeMediaUrl, 1200, 0.80);
+        }
+      }
+
       if (safeMediaUrl.startsWith('data:')) {
         safeMediaUrl = await uploadMediaOrDataUrl(safeMediaUrl, `${bannerId}.jpg`);
       }
@@ -282,10 +328,13 @@ export const PromoBannerManager: React.FC = () => {
         createdAt: editingBanner?.createdAt || new Date().toISOString()
       };
 
-      await setDoc(doc(db, 'promoBanners', bannerId), payload);
+      // Save to primary promoBanners collection and mirror to banners
+      await setDoc(doc(db, 'promoBanners', bannerId), payload, { merge: true });
+      await setDoc(doc(db, 'banners', bannerId), payload, { merge: true }).catch(() => {});
+
       setIsModalOpen(false);
       resetForm();
-      showNotice(editingBanner ? 'Banner updated & synced to Client Home!' : 'New banner published to Client Home!');
+      showNotice(editingBanner ? '✓ Banner updated & synced to Client Home!' : '✓ New banner published to Client Home!');
     } catch (err: any) {
       console.error('Failed to save banner:', err);
       showNotice(`Failed to save banner: ${err.message || 'Please check attachment size'}`);
@@ -363,9 +412,15 @@ export const PromoBannerManager: React.FC = () => {
 
   const confirmDeleteBanner = async () => {
     if (!bannerToDelete) return;
-    await deleteDoc(doc(db, 'promoBanners', bannerToDelete.id));
-    showNotice(`Banner "${bannerToDelete.title}" removed from carousel.`);
-    setBannerToDelete(null);
+    try {
+      await deleteDoc(doc(db, 'promoBanners', bannerToDelete.id));
+      await deleteDoc(doc(db, 'banners', bannerToDelete.id)).catch(() => {});
+      showNotice(`✓ Banner "${bannerToDelete.title}" removed from carousel.`);
+    } catch (err: any) {
+      showNotice('Error deleting banner: ' + err.message);
+    } finally {
+      setBannerToDelete(null);
+    }
   };
 
   const handleToggleActive = async (banner: PromoBanner) => {

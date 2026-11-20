@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../../context/AuthContext';
 import { db } from '../../firebase';
 import { collection, query, where, getDocs, doc, setDoc, updateDoc, onSnapshot, serverTimestamp, addDoc } from 'firebase/firestore';
@@ -1024,9 +1025,9 @@ export const PtSectionView: React.FC = () => {
       )}
 
       {/* DEDICATED PT PLANS MODAL (PRE-LINKED TO CHOSEN TRAINER) */}
-      {isPtPlansModalOpen && modalTrainer && (
-        <div className="fixed inset-0 z-[65] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in">
-          <div className="w-full max-w-lg vision-surface bg-white/95 border border-white/90 rounded-3xl p-5 sm:p-6 shadow-2xl text-slate-800 space-y-4 max-h-[90vh] overflow-y-auto">
+      {isPtPlansModalOpen && modalTrainer && createPortal(
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in overscroll-none">
+          <div className="w-full max-w-lg vision-surface bg-white/95 border border-white/90 rounded-3xl p-5 sm:p-6 shadow-2xl text-slate-800 space-y-4 max-h-[90dvh] overflow-y-auto">
             {/* Modal Header */}
             <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-200">
               <div className="flex items-center gap-3">
@@ -1141,7 +1142,8 @@ export const PtSectionView: React.FC = () => {
               </p>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* UNIVERSAL ONLINE GATEWAY CHECKOUT MODAL */}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, doc, setDoc, query, limit } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, query, limit, getDocs } from 'firebase/firestore';
 import { PromoBanner } from '../../types';
 import { getCachedData, setCachedData, optimizeImageUrl } from '../../services/cacheService';
 import { ChevronLeft, ChevronRight, ArrowRight, Play, Sparkles, ImageOff } from 'lucide-react';
@@ -83,13 +83,27 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
   const touchEndXRef = useRef<number | null>(null);
   const isDraggingRef = useRef<boolean>(false);
 
-  // Load banners in real time from Firestore (bounded by limit(10)) and cache results
+  // Load banners in real time from Firestore and cache results
   useEffect(() => {
-    const qBanners = query(collection(db, 'promoBanners'), limit(10));
+    const qBanners = query(collection(db, 'promoBanners'), limit(30));
     const unsub = onSnapshot(
       qBanners,
       async (snap) => {
         if (snap.empty) {
+          // Check banners collection fallback before seeding
+          try {
+            const snapBanners = await getDocs(query(collection(db, 'banners'), limit(30)));
+            if (!snapBanners.empty) {
+              const list = snapBanners.docs
+                .map((d) => ({ id: d.id, ...d.data() } as PromoBanner))
+                .filter((b) => b.active !== false)
+                .sort((a, b) => (a.order || 0) - (b.order || 0));
+              setBanners(list);
+              setCachedData('promo_banners', list);
+              return;
+            }
+          } catch {}
+
           // Seed default banners in background so it's never empty
           try {
             await Promise.all(

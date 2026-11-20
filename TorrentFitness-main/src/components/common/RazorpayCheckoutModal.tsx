@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Capacitor } from '@capacitor/core';
 import { PaymentGateway, PaymentTransaction, PaymentPurpose } from '../../types';
 import {
@@ -840,9 +841,9 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
     setTimeout(() => setCopiedVpa(false), 2000);
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in">
-      <div className="w-full max-w-lg vision-surface rounded-3xl p-6 border border-white/90 shadow-2xl text-slate-800 space-y-4 relative overflow-hidden max-h-[92vh] flex flex-col">
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in overscroll-none">
+      <div className="w-full max-w-lg vision-surface rounded-3xl p-6 border border-white/90 shadow-2xl text-slate-800 space-y-4 relative overflow-hidden max-h-[90dvh] flex flex-col">
         {/* Soft Background Accent */}
         <div className="absolute -right-10 -top-10 w-44 h-44 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
 
@@ -1276,7 +1277,8 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
           </span>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 

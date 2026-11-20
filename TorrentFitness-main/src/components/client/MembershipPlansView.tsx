@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../../context/AuthContext';
 import { db } from '../../firebase';
 import {
@@ -67,6 +68,17 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
   const [selectedPlan, setSelectedPlan] = useState<MembershipPlan | null>(null);
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState<boolean>(false);
   const [checkoutStep, setCheckoutStep] = useState<1 | 2>(1);
+
+  // Lock body scroll when checkout modal is active to prevent page and bottom dock scrolling
+  useEffect(() => {
+    if (isCheckoutModalOpen) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = originalOverflow;
+      };
+    }
+  }, [isCheckoutModalOpen]);
 
   const [addPt, setAddPt] = useState<boolean>(false);
   const [selectedTrainerId, setSelectedTrainerId] = useState<string>(() => {
@@ -698,11 +710,11 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
       </div>
 
       {/* 2-STEP CHECKOUT MODAL UPON CLICKING "BUY NOW" */}
-      {isCheckoutModalOpen && selectedPlan && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/55 backdrop-blur-md animate-fade-in">
-          <div className="w-full max-w-md vision-surface rounded-3xl border border-white/90 shadow-2xl overflow-hidden text-slate-800 max-h-[90vh] flex flex-col">
-            {/* Modal Header with 2-Step Progress Indicator */}
-            <div className="p-5 bg-white/90 border-b border-slate-200/80 flex items-center justify-between">
+      {isCheckoutModalOpen && selectedPlan && createPortal(
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in overscroll-none">
+          <div className="w-full max-w-md vision-surface rounded-3xl border border-white/90 shadow-2xl overflow-hidden text-slate-800 max-h-[90dvh] flex flex-col">
+            {/* Modal Header with 2-Step Progress Indicator (Fixed at Top) */}
+            <div className="shrink-0 p-5 bg-white/90 border-b border-slate-200/80 flex items-center justify-between">
               <div>
                 <div className="flex items-center gap-2 text-[11px] font-bold text-indigo-700">
                   <span>Step {checkoutStep} of 2</span>
@@ -718,15 +730,15 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
               <button
                 type="button"
                 onClick={handleCloseBuyNowModal}
-                className="p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors"
+                className="p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors cursor-pointer"
                 title="Close Checkout"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Step Progress Bar */}
-            <div className="grid grid-cols-2 gap-1 px-5 pt-3 bg-white/60">
+            {/* Step Progress Bar (Fixed at Top) */}
+            <div className="shrink-0 grid grid-cols-2 gap-1 px-5 pt-3 bg-white/60">
               <div
                 className={`h-1.5 rounded-full transition-colors ${
                   checkoutStep >= 1 ? 'bg-indigo-600' : 'bg-slate-200'
@@ -739,7 +751,8 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
               />
             </div>
 
-            <div className="p-5 overflow-y-auto space-y-4">
+            {/* Independently Scrollable Middle Body */}
+            <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-4 space-y-4">
               {checkoutStep === 1 ? (
                 /* STEP 1: PLAN SUMMARY, OPTIONAL PT & APPLY COUPON CODE */
                 <>
@@ -860,7 +873,7 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
                         <button
                           type="button"
                           onClick={handleClearCoupon}
-                          className="text-[11px] font-bold text-rose-600 hover:text-rose-800 underline"
+                          className="text-[11px] font-bold text-rose-600 hover:text-rose-800 underline cursor-pointer"
                         >
                           Remove ({appliedCouponCode})
                         </button>
@@ -878,7 +891,7 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
                       <button
                         type="button"
                         onClick={handleApplyCoupon}
-                        className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition-all shadow-2xs whitespace-nowrap"
+                        className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition-all shadow-2xs whitespace-nowrap cursor-pointer"
                       >
                         Apply
                       </button>
@@ -941,16 +954,6 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
                       </span>
                     </div>
                   </div>
-
-                  {/* Continue to Step 2 CTA */}
-                  <button
-                    type="button"
-                    onClick={() => setCheckoutStep(2)}
-                    className="w-full py-3.5 px-4 vision-btn-aurora text-white text-xs font-black rounded-2xl shadow-lg flex items-center justify-center gap-2 transition-all active:scale-[0.99]"
-                  >
-                    <span>Continue to Payment Method</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
                 </>
               ) : (
                 /* STEP 2: SELECT PAYMENT METHOD (Online Gateway vs Offline Cash Desk) */
@@ -969,7 +972,7 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
                     <button
                       type="button"
                       onClick={() => setCheckoutStep(1)}
-                      className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-bold inline-flex items-center gap-1"
+                      className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-bold inline-flex items-center gap-1 cursor-pointer"
                     >
                       <ArrowLeft className="w-3.5 h-3.5" />
                       <span>Edit Plan / Coupon</span>
@@ -986,7 +989,7 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
                     <button
                       type="button"
                       onClick={() => setPaymentTier('online')}
-                      className={`w-full p-4 rounded-2xl border text-left transition-all flex items-center justify-between ${
+                      className={`w-full p-4 rounded-2xl border text-left transition-all flex items-center justify-between cursor-pointer ${
                         paymentTier === 'online'
                           ? 'border-indigo-600 bg-white shadow-sm ring-2 ring-indigo-500/20'
                           : 'border-slate-200 bg-white/80 hover:border-indigo-300'
@@ -1027,7 +1030,7 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
                     <button
                       type="button"
                       onClick={() => setPaymentTier('offline_cash')}
-                      className={`w-full p-4 rounded-2xl border text-left transition-all flex items-center justify-between ${
+                      className={`w-full p-4 rounded-2xl border text-left transition-all flex items-center justify-between cursor-pointer ${
                         paymentTier === 'offline_cash'
                           ? 'border-amber-500 bg-white shadow-sm ring-2 ring-amber-500/20'
                           : 'border-slate-200 bg-white/80 hover:border-amber-300'
@@ -1064,36 +1067,52 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
                       </div>
                     </button>
                   </div>
-
-                  {/* Step 2 Final Submit Button */}
-                  <button
-                    type="button"
-                    onClick={handleCompleteCheckout}
-                    disabled={isProcessing || isOnlineModalOpen}
-                    className={`w-full py-3.5 px-5 text-white text-xs font-black rounded-2xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.99] tabular-nums ${
-                      paymentTier === 'online'
-                        ? 'vision-btn-aurora'
-                        : 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700'
-                    }`}
-                  >
-                    {isProcessing ? (
-                      'Processing Request...'
-                    ) : (
-                      <>
-                        <span>
-                          {paymentTier === 'online'
-                            ? `Pay ₹${calculateTotal().toLocaleString('en-IN')} Online Now`
-                            : `Submit ₹${calculateTotal().toLocaleString('en-IN')} Cash Desk Request`}
-                        </span>
-                        <ArrowRight className="w-4 h-4" />
-                      </>
-                    )}
-                  </button>
                 </>
               )}
             </div>
+
+            {/* Sticky Bottom Footer: Always 100% visible, unobstructed, and clickable above all navigation docks */}
+            <div className="shrink-0 p-4 border-t border-slate-200/80 bg-white/95 backdrop-blur-md pb-safe pb-[max(env(safe-area-inset-bottom,16px),16px)]">
+              {checkoutStep === 1 ? (
+                /* STEP 1 STICKY CTA: Continue to Payment Method */
+                <button
+                  type="button"
+                  onClick={() => setCheckoutStep(2)}
+                  className="w-full py-3.5 px-4 vision-btn-aurora text-white text-xs font-black rounded-2xl shadow-lg flex items-center justify-center gap-2 transition-all active:scale-[0.99] cursor-pointer"
+                >
+                  <span>Continue to Payment Method</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              ) : (
+                /* STEP 2 STICKY CTA: Submit Payment / Offline Request */
+                <button
+                  type="button"
+                  onClick={handleCompleteCheckout}
+                  disabled={isProcessing || isOnlineModalOpen}
+                  className={`w-full py-3.5 px-5 text-white text-xs font-black rounded-2xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.99] tabular-nums cursor-pointer ${
+                    paymentTier === 'online'
+                      ? 'vision-btn-aurora'
+                      : 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700'
+                  }`}
+                >
+                  {isProcessing ? (
+                    'Processing Request...'
+                  ) : (
+                    <>
+                      <span>
+                        {paymentTier === 'online'
+                          ? `Pay ₹${calculateTotal().toLocaleString('en-IN')} Online Now`
+                          : `Submit ₹${calculateTotal().toLocaleString('en-IN')} Cash Desk Request`}
+                      </span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* UNIVERSAL ONLINE GATEWAY CHECKOUT MODAL */}
