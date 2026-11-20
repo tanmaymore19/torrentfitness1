@@ -105,6 +105,28 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    match /system_settings/{docId} {
+      allow read, write, delete: if true;
+    }
+    match /admin_otp_requests/{docId} {
+      allow read, write, delete: if true;
+    }
+    match /admin_auth/{docId} {
+      allow read, write, delete: if true;
+    }
+    match /mail/{docId} {
+      allow read, write, delete: if true;
+    }
+    match /settings/{docId} {
+      allow read, write, delete: if true;
+    }
+    match /gymSettings/{settingsId} {
+      allow read, write, delete: if true;
+    }
+    match /gym_settings/{settingsId} {
+      allow read, write, delete: if true;
+    }
+
     // Identifies protected Master Admin / Owner accounts to prevent accidental or malicious deletion
     // Strictly safeguards 'admin', 'admintorrentfitness1', and 'admin_master_1' as well as any account with role == 'admin'
     // Performs safe null-checks on resource and resource.data before inspecting resource.data.role
@@ -162,18 +184,6 @@ service cloud.firestore {
     // ==========================================
     // GYM CONFIGURATION & SETTINGS COLLECTIONS
     // ==========================================
-    match /gym_settings/{settingsId} {
-      allow read, write, delete: if true;
-    }
-
-    match /gymSettings/{settingsId} {
-      allow read, write, delete: if true;
-    }
-
-    match /settings/{docId} {
-      allow read, write, delete: if true;
-    }
-
     match /gym_config/{configId} {
       allow read, write, delete: if true;
     }
@@ -351,22 +361,6 @@ service cloud.firestore {
 
     match /test/{testId} {
       allow read, write: if true;
-    }
-
-    match /system_settings/{docId} {
-      allow read, write, delete: if true;
-    }
-
-    match /admin_otp_requests/{docId} {
-      allow read, write, delete: if true;
-    }
-
-    match /admin_auth/{docId} {
-      allow read, write, delete: if true;
-    }
-
-    match /mail/{docId} {
-      allow read, write, delete: if true;
     }
   }
 }
