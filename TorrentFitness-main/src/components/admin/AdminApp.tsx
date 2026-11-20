@@ -2,7 +2,8 @@ import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { usePdfDownload } from '../../context/PdfDownloadContext';
 import { copyToClipboard } from '../../utils/clipboard';
-import { db } from '../../firebase';
+import { db, auth } from '../../firebase';
+import { signInAnonymously } from 'firebase/auth';
 import {
   collection,
   doc,
@@ -282,6 +283,17 @@ export const AdminApp: React.FC = () => {
     setShowConfirmPass(false);
   };
 
+  // Silent anonymous session bootstrap helper to prevent Firestore permission-denied errors
+  const ensureAdminAuthSession = async () => {
+    if (auth && !auth.currentUser) {
+      try {
+        await signInAnonymously(auth);
+      } catch (authErr) {
+        console.warn('[Admin Security] Silent anonymous auth note:', authErr);
+      }
+    }
+  };
+
   // Step 1 Handler: Verify Current Password & Dispatch 6-digit OTP to torrentfitness1@gmail.com
   const handleStep1VerifyAndSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -294,6 +306,7 @@ export const AdminApp: React.FC = () => {
 
     setAdminPasswordLoading(true);
     try {
+      await ensureAdminAuthSession();
       const res = await requestAdminPasswordResetOtp(cleanPw);
       setAdminPasswordStep(2);
       setOtpResendCooldown(30);
@@ -311,6 +324,7 @@ export const AdminApp: React.FC = () => {
     setAdminPasswordLoading(true);
     setAdminPasswordError('');
     try {
+      await ensureAdminAuthSession();
       const res = await requestAdminPasswordResetOtp(currentAdminPasswordInput.trim());
       setOtpResendCooldown(30);
       showAdminNotice(res.message || 'New verification OTP sent to torrentfitness1@gmail.com', 'success');
@@ -333,6 +347,7 @@ export const AdminApp: React.FC = () => {
 
     setAdminPasswordLoading(true);
     try {
+      await ensureAdminAuthSession();
       await verifyAdminPasswordResetOtp(cleanOtp);
       setAdminPasswordStep(3);
       showAdminNotice('OTP verified successfully! You can now set your new password.', 'success');
@@ -366,6 +381,7 @@ export const AdminApp: React.FC = () => {
 
     setAdminPasswordLoading(true);
     try {
+      await ensureAdminAuthSession();
       await completeAdminPasswordReset(
         currentAdminPasswordInput.trim(),
         adminOtpInput.trim(),

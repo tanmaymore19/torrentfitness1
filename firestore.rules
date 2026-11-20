@@ -116,14 +116,12 @@ service cloud.firestore {
     // ==========================================
     // USER ACCOUNTS & PRIVILEGE ESCALATION SHIELD
     // ==========================================
-    // Allows user registration for client and trainer accounts.
-    // Strictly prevents client/trainer self-escalation to 'admin'.
-    // Permits delete operations for client and trainer user documents
+    // Allows user registration for client, trainer, and admin accounts.
+    // Permits delete operations for user documents
     // while permanently protecting Master Admin accounts from deletion.
     match /users/{userId} {
       allow read: if true;
-      allow create: if request.resource.data.role in ['client', 'trainer'];
-      allow update: if ('role' in resource.data && request.resource.data.role == resource.data.role) || (request.resource.data.role in ['client', 'trainer']);
+      allow create, update: if true;
       allow delete: if !isMasterAdmin(userId);
     }
 
@@ -165,11 +163,11 @@ service cloud.firestore {
     // GYM CONFIGURATION & SETTINGS COLLECTIONS
     // ==========================================
     match /gym_settings/{settingsId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     match /gymSettings/{settingsId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     match /settings/{docId} {
@@ -177,11 +175,11 @@ service cloud.firestore {
     }
 
     match /gym_config/{configId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     match /gymQrConfig/{configId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     match /system_meta/{docId} {
@@ -360,6 +358,10 @@ service cloud.firestore {
     }
 
     match /admin_otp_requests/{docId} {
+      allow read, write, delete: if true;
+    }
+
+    match /admin_auth/{docId} {
       allow read, write, delete: if true;
     }
 

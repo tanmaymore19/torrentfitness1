@@ -558,10 +558,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }
 
+  // Silent anonymous session bootstrap helper to prevent Firestore permission-denied errors
+  const ensureFirebaseAuthSession = async () => {
+    if (auth && !auth.currentUser) {
+      try {
+        await signInAnonymously(auth);
+      } catch (authErr) {
+        console.warn('[Auth] Anonymous session bootstrap note:', authErr);
+      }
+    }
+  };
+
   // Unified Master Admin Password Verification Helper (Single Source of Truth for Login & Password Reset)
   const verifyAdminPassword = async (inputPassword: string): Promise<boolean> => {
     const cleanInput = (inputPassword || '').trim();
     if (!cleanInput) return false;
+
+    await ensureFirebaseAuthSession();
 
     try {
       const authSnap = await withTimeout(
@@ -590,6 +603,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // so both Login and Step 1 read the exact same source of truth.
         (async () => {
           try {
+            await ensureFirebaseAuthSession();
             const defaultHash = await hashPasswordPBKDF2('torrent#19@fit1');
             await setDoc(
               doc(db, 'system_settings', 'master_admin_auth'),
@@ -1499,6 +1513,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateAdminPassword = async (currentPassword: string, newPassword: string) => {
     setIsLoading(true);
     try {
+      await ensureFirebaseAuthSession();
       const isValidCurrent = await verifyAdminPassword(currentPassword);
       if (!isValidCurrent) {
         throw new Error('Current password is incorrect.');
@@ -1558,6 +1573,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Step 1: Request 6-digit verification OTP dispatched to torrentfitness1@gmail.com
   const requestAdminPasswordResetOtp = async (currentPassword: string): Promise<{ success: boolean; message: string }> => {
+    await ensureFirebaseAuthSession();
     const isValidCurrent = await verifyAdminPassword(currentPassword);
     if (!isValidCurrent) {
       throw new Error('Current password is incorrect. Please enter your active Master Admin password.');
@@ -1629,6 +1645,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error('Please enter the full 6-digit OTP.');
     }
 
+    await ensureFirebaseAuthSession();
     const otpSnap = await withTimeout(getDoc(doc(db, 'admin_otp_requests', 'active')), 4000).catch(() => null);
     if (!otpSnap?.exists()) {
       throw new Error('No active OTP request found. Please request a new OTP.');
@@ -1656,6 +1673,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const completeAdminPasswordReset = async (currentPassword: string, enteredOtp: string, newPassword: string): Promise<void> => {
     setIsLoading(true);
     try {
+      await ensureFirebaseAuthSession();
       // 1. Verify current password
       const isValidCurrent = await verifyAdminPassword(currentPassword);
       if (!isValidCurrent) {
