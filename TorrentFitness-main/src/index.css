@@ -328,9 +328,11 @@
   }
 }
 
-/* Hide fixed navigation bar when Direct Chat modal is open */
+/* Hide fixed navigation bar when Direct Chat modal or Checkout modal is open */
 body.chat-modal-open nav.fixed,
-body.chat-modal-open nav {
+body.chat-modal-open nav,
+body.checkout-modal-open nav.fixed,
+body.checkout-modal-open nav {
   display: none !important;
 }
 

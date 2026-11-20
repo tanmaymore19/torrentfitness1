@@ -78,7 +78,11 @@ export const PT_PACKAGES: PtPackageTier[] = [
   }
 ];
 
-export const PtSectionView: React.FC = () => {
+export interface PtSectionViewProps {
+  onCheckoutModalToggle?: (isOpen: boolean) => void;
+}
+
+export const PtSectionView: React.FC<PtSectionViewProps> = ({ onCheckoutModalToggle }) => {
   const { currentUser, clientProfile, updateClientProfile } = useAuth();
   const [trainers, setTrainers] = useState<TrainerProfile[]>([]);
   const [myPtRequest, setMyPtRequest] = useState<PtRequest | null>(null);
@@ -112,6 +116,24 @@ export const PtSectionView: React.FC = () => {
   // Dedicated PT Plans Modal State (Trainer-First Flow)
   const [isPtPlansModalOpen, setIsPtPlansModalOpen] = useState<boolean>(false);
   const [modalTrainer, setModalTrainer] = useState<TrainerProfile | null>(null);
+
+  // Lock body scroll and notify parent when dedicated PT modal is active
+  useEffect(() => {
+    if (isPtPlansModalOpen) {
+      document.body.style.overflow = 'hidden';
+      document.body.classList.add('checkout-modal-open');
+      onCheckoutModalToggle?.(true);
+      return () => {
+        document.body.style.overflow = '';
+        document.body.classList.remove('checkout-modal-open');
+        onCheckoutModalToggle?.(false);
+      };
+    } else {
+      document.body.style.overflow = '';
+      document.body.classList.remove('checkout-modal-open');
+      onCheckoutModalToggle?.(false);
+    }
+  }, [isPtPlansModalOpen, onCheckoutModalToggle]);
 
   const selectedPackage =
     ptPackages.find((p) => p.id === selectedPackageId) || ptPackages[0] || PT_PACKAGES[0];
@@ -1026,10 +1048,10 @@ export const PtSectionView: React.FC = () => {
 
       {/* DEDICATED PT PLANS MODAL (PRE-LINKED TO CHOSEN TRAINER) */}
       {isPtPlansModalOpen && modalTrainer && createPortal(
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in overscroll-none">
-          <div className="w-full max-w-lg vision-surface bg-white/95 border border-white/90 rounded-3xl p-5 sm:p-6 shadow-2xl text-slate-800 space-y-4 max-h-[90dvh] overflow-y-auto">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fade-in touch-none overscroll-none">
+          <div className="w-full max-w-lg max-h-[88dvh] flex flex-col bg-white rounded-3xl border border-slate-100 shadow-2xl overflow-hidden text-slate-800 relative z-10">
             {/* Modal Header */}
-            <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-200">
+            <div className="shrink-0 p-5 bg-white border-b border-slate-100 flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
                 <img
                   src={modalTrainer.photoUrl}
@@ -1050,63 +1072,66 @@ export const PtSectionView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setIsPtPlansModalOpen(false)}
-                className="p-2 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
+                className="p-2 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Packages Grid */}
-            <div className="space-y-2.5">
-              <span className="text-xs font-black uppercase tracking-wider text-slate-600 block">
-                Select Your PT Package
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                {ptPackages.map((pkg) => {
-                  const isSelected = selectedPackageId === pkg.id;
-                  return (
-                    <div
-                      key={pkg.id}
-                      onClick={() => setSelectedPackageId(pkg.id)}
-                      className={`p-3.5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between ${
-                        isSelected
-                          ? 'border-indigo-600 bg-indigo-50/90 shadow-md ring-2 ring-indigo-500/25'
-                          : 'border-slate-200 bg-white/80 hover:bg-white'
-                      }`}
-                    >
-                      {pkg.badge && (
-                        <div className="mb-2">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
-                              pkg.popular ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700'
-                            }`}
-                          >
-                            {pkg.badge}
-                          </span>
-                        </div>
-                      )}
-                      <div>
-                        <h4 className="text-xs font-black text-slate-900">{pkg.name}</h4>
-                        <div className="mt-1 flex items-baseline gap-1">
-                          <span className="text-lg font-black text-slate-900">
-                            ₹{pkg.price.toLocaleString('en-IN')}
-                          </span>
-                          <span className="text-[10px] text-slate-500 font-bold">
-                            / {pkg.sessions} Sessions
-                          </span>
-                        </div>
-                        {pkg.savings && (
-                          <p className="text-[10px] text-emerald-700 font-bold mt-0.5">{pkg.savings}</p>
+            {/* Scrollable Middle Body */}
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain touch-pan-y p-5 space-y-4">
+              {/* Packages Grid */}
+              <div className="space-y-2.5">
+                <span className="text-xs font-black uppercase tracking-wider text-slate-600 block">
+                  Select Your PT Package
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {ptPackages.map((pkg) => {
+                    const isSelected = selectedPackageId === pkg.id;
+                    return (
+                      <div
+                        key={pkg.id}
+                        onClick={() => setSelectedPackageId(pkg.id)}
+                        className={`p-3.5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between ${
+                          isSelected
+                            ? 'border-indigo-600 bg-indigo-50/90 shadow-md ring-2 ring-indigo-500/25'
+                            : 'border-slate-200 bg-white/80 hover:bg-white'
+                        }`}
+                      >
+                        {pkg.badge && (
+                          <div className="mb-2">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
+                                pkg.popular ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700'
+                              }`}
+                            >
+                              {pkg.badge}
+                            </span>
+                          </div>
                         )}
+                        <div>
+                          <h4 className="text-xs font-black text-slate-900">{pkg.name}</h4>
+                          <div className="mt-1 flex items-baseline gap-1">
+                            <span className="text-lg font-black text-slate-900">
+                              ₹{pkg.price.toLocaleString('en-IN')}
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-bold">
+                              / {pkg.sessions} Sessions
+                            </span>
+                          </div>
+                          {pkg.savings && (
+                            <p className="text-[10px] text-emerald-700 font-bold mt-0.5">{pkg.savings}</p>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
-            {/* Summary & Checkout Actions */}
-            <div className="pt-3 border-t border-slate-200 space-y-3">
+            {/* Sticky Bottom Footer */}
+            <div className="shrink-0 p-4 border-t border-slate-100 bg-white pb-safe pb-[max(env(safe-area-inset-bottom,16px),16px)] space-y-3">
               <div className="flex items-center justify-between text-xs font-bold text-slate-700 p-3 bg-slate-50 rounded-2xl border border-slate-200">
                 <span>
                   Coaching with: <strong className="text-indigo-700">{modalTrainer.displayName}</strong>
@@ -1121,7 +1146,7 @@ export const PtSectionView: React.FC = () => {
                   type="button"
                   onClick={handlePayOnlineCheckout}
                   disabled={isPaying || isRzpModalOpen}
-                  className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.98]"
+                  className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.98] cursor-pointer"
                 >
                   <CreditCard className="w-4 h-4" />
                   <span>Pay Online ({activeOnlineGateway?.name.split(' ')[0] || 'Gateway'})</span>

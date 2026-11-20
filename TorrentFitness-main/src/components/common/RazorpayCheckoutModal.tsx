@@ -100,6 +100,8 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
   // Dynamic live gateway resolution: always uses the active gateway configured in Admin
   useEffect(() => {
     if (isOpen) {
+      document.body.style.overflow = 'hidden';
+      document.body.classList.add('checkout-modal-open');
       setErrorMessage('');
       isVerifyingRef.current = false;
       fetchActiveOnlineGateway().then((ag) => {
@@ -138,8 +140,12 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
       window.addEventListener('message', handlePayUMessage);
       return () => {
         window.removeEventListener('message', handlePayUMessage);
+        document.body.style.overflow = '';
+        document.body.classList.remove('checkout-modal-open');
       };
     } else {
+      document.body.style.overflow = '';
+      document.body.classList.remove('checkout-modal-open');
       setStatus('idle');
       setStatusMessage('');
       setErrorMessage('');
@@ -842,8 +848,8 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in overscroll-none">
-      <div className="w-full max-w-lg vision-surface rounded-3xl p-6 border border-white/90 shadow-2xl text-slate-800 space-y-4 relative overflow-hidden max-h-[90dvh] flex flex-col">
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fade-in touch-none overscroll-none">
+      <div className="w-full max-w-lg max-h-[88dvh] flex flex-col bg-white rounded-3xl p-6 border border-slate-100 shadow-2xl text-slate-800 space-y-4 relative overflow-hidden z-10">
         {/* Soft Background Accent */}
         <div className="absolute -right-10 -top-10 w-44 h-44 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
 
@@ -871,14 +877,14 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
             type="button"
             onClick={onClose}
             disabled={status === 'verifying' || status === 'loading'}
-            className="p-2 rounded-xl text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors disabled:opacity-30"
+            className="p-2 rounded-xl text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors disabled:opacity-30 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Scrollable Container */}
-        <div className="overflow-y-auto space-y-4 pr-1 relative z-10">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain touch-pan-y space-y-4 pr-1 relative z-10">
           {/* Payment Summary Box */}
           <div className="p-4 rounded-2xl bg-white/90 border border-slate-200/90 space-y-2 text-xs relative shadow-2xs">
             <div className="flex items-center justify-between">

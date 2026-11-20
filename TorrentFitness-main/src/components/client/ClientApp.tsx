@@ -95,6 +95,7 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
   const [attendanceSuccessToast, setAttendanceSuccessToast] = useState<string | null>(null);
   const [showEndSessionModal, setShowEndSessionModal] = useState<boolean>(false);
   const [isEndingSession, setIsEndingSession] = useState<boolean>(false);
+  const [isCheckoutModalActive, setIsCheckoutModalActive] = useState<boolean>(false);
 
   // Sync activeSession with clientProfile changes
   useEffect(() => {
@@ -976,7 +977,7 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
             )}
 
             {/* Tab 4: PERSONAL TRAINER */}
-            {activeTab === 'pt' && <PtSectionView />}
+            {activeTab === 'pt' && <PtSectionView onCheckoutModalToggle={setIsCheckoutModalActive} />}
 
             {/* Tab: DIET & NUTRITION */}
             {activeTab === 'diet' && <ClientDietView onBack={() => setActiveTab('home')} />}
@@ -994,7 +995,10 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
 
             {/* Tab 7: MEMBERSHIP PLANS */}
             {activeTab === 'plans' && (
-              <MembershipPlansView onSuccessPurchase={() => setActiveTab('home')} />
+              <MembershipPlansView
+                onSuccessPurchase={() => setActiveTab('home')}
+                onCheckoutModalToggle={setIsCheckoutModalActive}
+              />
             )}
 
             {/* Tab 8: PROFILE */}
@@ -1006,7 +1010,7 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
       </main>
 
       {/* Tier 3: Fixed Bottom Navigation Dock: Anchored outside scroll view */}
-      <nav className="shrink-0 z-40 w-full bg-white/95 backdrop-blur-md border-t border-slate-200/90 shadow-[0_-10px_25px_-5px_rgba(0,0,0,0.06)] pb-[max(env(safe-area-inset-bottom,16px),10px)] pt-2">
+      <nav className={`shrink-0 z-40 w-full bg-white/95 backdrop-blur-md border-t border-slate-200/90 shadow-[0_-10px_25px_-5px_rgba(0,0,0,0.06)] pb-[max(env(safe-area-inset-bottom,16px),10px)] pt-2 ${isCheckoutModalActive ? 'hidden' : ''}`}>
         <div className="w-full h-16 grid grid-cols-5 items-center px-1">
           {/* 1. Home */}
           <button

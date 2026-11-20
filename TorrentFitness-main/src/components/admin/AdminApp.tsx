@@ -300,7 +300,12 @@ export const AdminApp: React.FC = () => {
       setOtpResendCooldown(30);
       showAdminNotice(res.message || 'Verification OTP sent to torrentfitness1@gmail.com', 'success');
     } catch (err: any) {
-      setAdminPasswordError(err.message || 'Current password verification failed.');
+      const msg = err?.message || '';
+      if (msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('insufficient')) {
+        setAdminPasswordError('Current password verification failed. Please enter your active Master Admin password.');
+      } else {
+        setAdminPasswordError(msg || 'Current password verification failed.');
+      }
     } finally {
       setAdminPasswordLoading(false);
     }

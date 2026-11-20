@@ -51,9 +51,10 @@ import confetti from 'canvas-confetti';
 
 interface MembershipPlansViewProps {
   onSuccessPurchase?: () => void;
+  onCheckoutModalToggle?: (isOpen: boolean) => void;
 }
 
-export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSuccessPurchase }) => {
+export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSuccessPurchase, onCheckoutModalToggle }) => {
   const { currentUser, clientProfile, refreshUserData } = useAuth();
   const { requestPdfDownload } = usePdfDownload();
   const [plans, setPlans] = useState<MembershipPlan[]>(() =>
@@ -69,16 +70,23 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState<boolean>(false);
   const [checkoutStep, setCheckoutStep] = useState<1 | 2>(1);
 
-  // Lock body scroll when checkout modal is active to prevent page and bottom dock scrolling
+  // Lock body scroll and notify parent when checkout modal is active to prevent page and bottom dock scrolling
   useEffect(() => {
     if (isCheckoutModalOpen) {
-      const originalOverflow = document.body.style.overflow;
       document.body.style.overflow = 'hidden';
+      document.body.classList.add('checkout-modal-open');
+      onCheckoutModalToggle?.(true);
       return () => {
-        document.body.style.overflow = originalOverflow;
+        document.body.style.overflow = '';
+        document.body.classList.remove('checkout-modal-open');
+        onCheckoutModalToggle?.(false);
       };
+    } else {
+      document.body.style.overflow = '';
+      document.body.classList.remove('checkout-modal-open');
+      onCheckoutModalToggle?.(false);
     }
-  }, [isCheckoutModalOpen]);
+  }, [isCheckoutModalOpen, onCheckoutModalToggle]);
 
   const [addPt, setAddPt] = useState<boolean>(false);
   const [selectedTrainerId, setSelectedTrainerId] = useState<string>(() => {
@@ -711,10 +719,10 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
 
       {/* 2-STEP CHECKOUT MODAL UPON CLICKING "BUY NOW" */}
       {isCheckoutModalOpen && selectedPlan && createPortal(
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in overscroll-none">
-          <div className="w-full max-w-md vision-surface rounded-3xl border border-white/90 shadow-2xl overflow-hidden text-slate-800 max-h-[90dvh] flex flex-col">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fade-in touch-none overscroll-none">
+          <div className="w-full max-w-md max-h-[88dvh] flex flex-col bg-white rounded-3xl border border-slate-100 shadow-2xl overflow-hidden text-slate-800 relative z-10">
             {/* Modal Header with 2-Step Progress Indicator (Fixed at Top) */}
-            <div className="shrink-0 p-5 bg-white/90 border-b border-slate-200/80 flex items-center justify-between">
+            <div className="shrink-0 p-5 bg-white border-b border-slate-100 flex items-center justify-between">
               <div>
                 <div className="flex items-center gap-2 text-[11px] font-bold text-indigo-700">
                   <span>Step {checkoutStep} of 2</span>
@@ -738,7 +746,7 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
             </div>
 
             {/* Step Progress Bar (Fixed at Top) */}
-            <div className="shrink-0 grid grid-cols-2 gap-1 px-5 pt-3 bg-white/60">
+            <div className="shrink-0 grid grid-cols-2 gap-1 px-5 pt-3 bg-white">
               <div
                 className={`h-1.5 rounded-full transition-colors ${
                   checkoutStep >= 1 ? 'bg-indigo-600' : 'bg-slate-200'
@@ -752,7 +760,7 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
             </div>
 
             {/* Independently Scrollable Middle Body */}
-            <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-4 space-y-4">
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain touch-pan-y px-5 py-4 space-y-4">
               {checkoutStep === 1 ? (
                 /* STEP 1: PLAN SUMMARY, OPTIONAL PT & APPLY COUPON CODE */
                 <>
@@ -1072,7 +1080,7 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
             </div>
 
             {/* Sticky Bottom Footer: Always 100% visible, unobstructed, and clickable above all navigation docks */}
-            <div className="shrink-0 p-4 border-t border-slate-200/80 bg-white/95 backdrop-blur-md pb-safe pb-[max(env(safe-area-inset-bottom,16px),16px)]">
+            <div className="shrink-0 p-4 border-t border-slate-100 bg-white pb-safe pb-[max(env(safe-area-inset-bottom,16px),16px)]">
               {checkoutStep === 1 ? (
                 /* STEP 1 STICKY CTA: Continue to Payment Method */
                 <button
