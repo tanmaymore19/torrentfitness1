@@ -509,13 +509,25 @@ export const PaymentGatewaysManager: React.FC = () => {
 
       await savePaymentGateway(updated);
 
-      if (formIsDefault || formIsEnabled || configuredGateways.length === 0) {
-        const fresh = await activateSingleGateway(canonicalId);
-        setGateways(fresh);
-      } else {
-        const fresh = await getPaymentGateways();
-        setGateways(fresh);
-      }
+      // Clear any stale local cache so clients and admin pick up fresh key
+      try {
+        localStorage.removeItem('cached_payment_gateway');
+        localStorage.removeItem('active_payment_gateway');
+        localStorage.removeItem('rzp_key');
+        localStorage.removeItem('razorpay_key_id');
+        localStorage.removeItem('payment_gateway_key');
+      } catch {}
+
+      // Update local React state immediately without requiring a page reload
+      setGateways(prev => {
+        const idx = prev.findIndex(g => g.id === canonicalId);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = updated;
+          return next;
+        }
+        return [...prev, updated];
+      });
 
       setIsModalOpen(false);
       setBannerMsg({
@@ -523,16 +535,46 @@ export const PaymentGatewaysManager: React.FC = () => {
         text: 'New payment gateway key encrypted and saved!'
       });
     } catch (err: any) {
+      console.error('Save Payment Gateway error:', err);
+      alert('Error saving payment gateway key: ' + (err?.message || 'Permission denied'));
       setBannerMsg({ type: 'error', text: 'Error saving gateway: ' + err.message });
     }
   };
 
   const handleDeleteGateway = async (gw: PaymentGateway) => {
     try {
-      // Immediately remove from UI state so keys vanish before async re-fetch
-      setGateways(prev => prev.filter(g => g.id !== gw.id));
+      // 1. Delete and overwrite settings/payment_gateway
+      await deleteDoc(doc(db, 'settings', 'payment_gateway')).catch(err => {
+        console.warn('deleteDoc settings/payment_gateway note:', err);
+      });
+      await setDoc(doc(db, 'settings', 'payment_gateway'), {
+        keyId: '',
+        keySecret: '',
+        encryptedKey: null,
+        appKeyId: '',
+        appKeySecret: '',
+        isConfigured: false,
+        isEnabled: false,
+        isDefault: false,
+        updatedAt: new Date().toISOString()
+      }, { merge: true }).catch(() => {});
 
-      // Reset local input states so form clears cleanly
+      // Delete paymentGateways canonical doc
+      await deletePaymentGateway(gw.id);
+
+      // 2. Clear any cached key in localStorage / sessionStorage
+      try {
+        localStorage.removeItem('cached_payment_gateway');
+        localStorage.removeItem('active_payment_gateway');
+        localStorage.removeItem('rzp_key');
+        localStorage.removeItem('razorpay_key_id');
+        localStorage.removeItem('payment_gateway_key');
+        sessionStorage.clear();
+      } catch (storageErr) {
+        console.warn('Storage cleanup note:', storageErr);
+      }
+
+      // 3. Immediately clear local React state
       setFormKeyId('');
       setFormKeySecret('');
       setFormAppKeyId('');
@@ -547,32 +589,23 @@ export const PaymentGatewaysManager: React.FC = () => {
       setFormPayuMerchantKey('');
       setFormPayuMerchantSalt('');
 
-      await deleteDoc(doc(db, 'settings', 'payment_gateway')).catch(() => {});
-      await setDoc(doc(db, 'settings', 'payment_gateway'), {
-        keyId: null,
-        encryptedKey: null,
-        keySecret: null,
-        appKeyId: null,
-        appKeySecret: null,
-        isConfigured: false,
-        isEnabled: false,
-        isDefault: false,
-        updatedAt: new Date().toISOString()
-      }, { merge: true }).catch(() => {});
+      // Update gateways state directly with cleared keys
+      setGateways(prev =>
+        prev.map(g =>
+          g.id === gw.id
+            ? { ...g, keyId: '', keySecret: '', appKeyId: '', appKeySecret: '', isEnabled: false, isDefault: false }
+            : g
+        )
+      );
 
-      await deletePaymentGateway(gw.id);
-      // Re-fetch to get fresh blank template for this gateway slot
-      const fresh = await getPaymentGateways();
-      setGateways(fresh);
       setBannerMsg({
         type: 'success',
         text: `Gateway "${gw.name}" credentials deleted & removed!`
       });
     } catch (err: any) {
-      setBannerMsg({ type: 'error', text: 'Error disconnecting gateway: ' + err.message });
-      // Restore gateways on error
-      const fresh = await getPaymentGateways();
-      setGateways(fresh);
+      console.error('Delete Payment Gateway error:', err);
+      alert('Error removing payment gateway key: ' + (err?.message || 'Permission denied'));
+      setBannerMsg({ type: 'error', text: 'Error removing gateway: ' + err.message });
     }
   };
 

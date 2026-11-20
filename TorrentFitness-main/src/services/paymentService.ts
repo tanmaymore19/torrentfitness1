@@ -223,8 +223,8 @@ export const DEFAULT_RAZORPAY_GATEWAY: PaymentGateway = {
   isEnabled: true,
   isDefault: true,
   environment: 'live',
-  keyId: LIVE_RAZORPAY_KEY_ID,
-  keySecret: LIVE_RAZORPAY_KEY_SECRET,
+  keyId: '',
+  keySecret: '',
   merchantName: 'Torrent Fitness Club',
   themeColor: '#0284c7',
   currency: 'INR',
@@ -463,10 +463,14 @@ export async function getPaymentGateways(): Promise<PaymentGateway[]> {
       let merged: PaymentGateway;
 
       if (matches.length === 0) {
-        // Doc didn't exist; seed canonical doc
+        // Doc didn't exist; seed canonical doc with empty credentials
         merged = {
           ...defaultTemplate,
           id: canonicalId,
+          keyId: '',
+          keySecret: '',
+          appKeyId: '',
+          appKeySecret: '',
           isEnabled: prov === primaryActiveProvider,
           isDefault: prov === primaryActiveProvider
         };
@@ -793,10 +797,20 @@ export async function deletePaymentGateway(gatewayId: string): Promise<void> {
   const currentData = snap.exists() ? (snap.data() as PaymentGateway) : null;
   const wasActive = Boolean(currentData?.isEnabled || currentData?.isDefault);
 
-  // Fully delete the document — getPaymentGateways will re-seed a blank (unconfigured) template
+  // Overwrite with blank credentials and delete
   if (snap.exists()) {
-    await deleteDoc(canonicalDocRef);
+    await deleteDoc(canonicalDocRef).catch(() => {});
   }
+  await setDoc(canonicalDocRef, {
+    keyId: '',
+    keySecret: '',
+    appKeyId: '',
+    appKeySecret: '',
+    isConfigured: false,
+    isEnabled: false,
+    isDefault: false,
+    updatedAt: new Date().toISOString()
+  }, { merge: true }).catch(() => {});
 
   // Also delete and purge settings/payment_gateway
   await deleteDoc(doc(db, 'settings', 'payment_gateway')).catch(() => {});

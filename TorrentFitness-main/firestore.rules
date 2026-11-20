@@ -106,11 +106,11 @@ service cloud.firestore {
     // USER ALIASES, DIRECTORIES & AUDIT COLLECTIONS
     // ==========================================
     match /members/{memberId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     match /trainers/{trainerId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     match /usernames/{username} {
@@ -125,11 +125,11 @@ service cloud.firestore {
     // PROFILES
     // ==========================================
     match /clientProfiles/{userId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     match /trainerProfiles/{trainerId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     // ==========================================
@@ -143,8 +143,8 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    match /settings/{settingsId} {
-      allow read, write: if true;
+    match /settings/{docId} {
+      allow read, write, delete: if true;
     }
 
     match /gym_config/{configId} {
@@ -247,7 +247,7 @@ service cloud.firestore {
     }
 
     match /transactions/{transactionId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     match /payments/{paymentId} {
@@ -275,11 +275,11 @@ service cloud.firestore {
     }
 
     match /ptRequests/{requestId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     match /pt_requests/{requestId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     match /pt_chats/{chatId} {

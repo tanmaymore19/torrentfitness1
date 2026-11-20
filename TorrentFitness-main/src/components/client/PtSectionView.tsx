@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { db } from '../../firebase';
-import { collection, query, where, getDocs, doc, setDoc, updateDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, setDoc, updateDoc, onSnapshot, serverTimestamp, addDoc } from 'firebase/firestore';
 import { TrainerProfile, PtRequest, PtSchedule, DietPlan, PaymentGateway, PaymentTransaction } from '../../types';
 import { TrainerIdentityBadge } from '../common/Badge';
 import { RazorpayCheckoutModal } from '../common/RazorpayCheckoutModal';
@@ -284,7 +284,10 @@ export const PtSectionView: React.FC = () => {
 
   // Dual Checkout 2: Pay via Offline Cash Desk
   const handleOfflineCashCheckout = async () => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      alert('Please log in to submit a Personal Training request.');
+      return;
+    }
 
     // 1. Validate that no duplicate PENDING PT request already exists for this client
     if (
@@ -297,6 +300,7 @@ export const PtSectionView: React.FC = () => {
       clientProfile?.ptStatus === 'PENDING' ||
       clientProfile?.ptStatus === 'pending'
     ) {
+      alert('You already have a pending Personal Training request awaiting Admin approval.');
       setPtNotice('You already have a pending Personal Training request awaiting desk verification/Admin approval.');
       setOfflineToast('You already have a pending request awaiting verification.');
       setTimeout(() => setOfflineToast(null), 4000);
@@ -309,42 +313,12 @@ export const PtSectionView: React.FC = () => {
     try {
       const chosenTrainer = modalTrainer || selectedTrainer || trainers[0];
       const chosenPackage = selectedPackage;
-      const requestId = 'pt_req_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
-
-      // Attempt offline transaction logging
-      let transactionRef = '';
-      try {
-        const { transaction } = await submitOfflinePaymentRequest({
-          clientId: currentUser.uid,
-          clientName: (currentUser as any).fullName || currentUser.displayName || clientProfile?.displayName || 'Member',
-          clientPhone: currentUser.phone || (currentUser as any).mobileNumber || clientProfile?.phone || '',
-          clientEmail: clientProfile?.email || currentUser.email || '',
-          purpose: 'personal_training',
-          itemTitle: `${chosenPackage.name} with ${chosenTrainer?.displayName || 'Coach'}`,
-          planId: chosenPackage.id,
-          planName: `${chosenPackage.name} (${chosenTrainer?.displayName || 'Personal Trainer'})`,
-          durationMonths: chosenPackage.durationMonths || 1,
-          originalPrice: chosenPackage.price,
-          finalAmount: chosenPackage.price,
-          ptIncluded: true,
-          ptTrainerId: chosenTrainer?.trainerId || (chosenTrainer as any)?.id || '',
-          ptTrainerName: chosenTrainer?.displayName || (chosenTrainer as any)?.name || 'Coach',
-          metadata: {
-            packageId: chosenPackage.id,
-            sessionsCount: chosenPackage.sessions,
-            trainerId: chosenTrainer?.trainerId || (chosenTrainer as any)?.id || '',
-            trainerName: chosenTrainer?.displayName || (chosenTrainer as any)?.name || 'Coach'
-          }
-        });
-        transactionRef = transaction.id || transaction.referenceId || '';
-      } catch (txnErr) {
-        console.warn('submitOfflinePaymentRequest non-blocking notice:', txnErr);
-      }
-
-      // 2. Create clean request document in Firestore (pt_requests/{requestId})
       const nowIso = new Date().toISOString();
-      const ptReqPayload = {
-        id: requestId,
+
+      const newRequestData = {
+        status: 'PENDING',
+        paymentMode: 'OFFLINE_CASH',
+        paymentStatus: 'PENDING_DESK_VERIFICATION',
         clientId: currentUser.uid,
         clientName: (currentUser as any).fullName || currentUser.displayName || clientProfile?.displayName || 'Member',
         clientUsername: (currentUser as any).username || clientProfile?.username || '',
@@ -354,9 +328,6 @@ export const PtSectionView: React.FC = () => {
         planName: chosenPackage.name,
         durationMonths: chosenPackage.durationMonths || 1,
         amount: Number(chosenPackage.price) || 0,
-        paymentMode: 'OFFLINE_CASH',
-        paymentStatus: 'PENDING_DESK_VERIFICATION',
-        status: 'PENDING_ADMIN_APPROVAL',
         rejectionSeenByClient: false,
         createdAt: serverTimestamp(),
         // Backwards compatibility fields for legacy views
@@ -364,20 +335,35 @@ export const PtSectionView: React.FC = () => {
         trainerName: (chosenTrainer as any)?.fullName || chosenTrainer?.displayName || (chosenTrainer as any)?.name || 'Personal Trainer',
         fee: Number(chosenPackage.price) || 0,
         paidStatus: 'pending',
-        transactionId: transactionRef,
         clientPhotoUrl: currentUser.photoUrl || clientProfile?.photoUrl || '',
         requestedAt: nowIso,
         updatedAt: nowIso
       };
 
-      // Write to pt_requests AND mirror to ptRequests for backwards compatibility
-      await setDoc(doc(db, 'pt_requests', requestId), ptReqPayload, { merge: true });
-      await setDoc(doc(db, 'ptRequests', requestId), ptReqPayload, { merge: true });
+      // 2. Write directly to pt_requests using addDoc
+      const docRef = await addDoc(collection(db, 'pt_requests'), newRequestData);
+      const generatedId = docRef.id;
 
-      // 3. Update clientProfiles/{currentUser.uid} ({ merge: true }) with ptStatus: 'PENDING' and pendingPtRequestId: requestId
+      // Ensure id field is set
+      await setDoc(docRef, { id: generatedId }, { merge: true });
+
+      // Mirror to legacy ptRequests for full backward compatibility
+      await setDoc(doc(db, 'ptRequests', generatedId), {
+        ...newRequestData,
+        id: generatedId,
+        createdAt: nowIso
+      }, { merge: true });
+
+      // 3. Update clientProfiles/{clientId} and members/{clientId} ({ merge: true }) with ptStatus: 'PENDING'
       await setDoc(doc(db, 'clientProfiles', currentUser.uid), {
         ptStatus: 'PENDING',
-        pendingPtRequestId: requestId,
+        pendingPtRequestId: generatedId,
+        updatedAt: nowIso
+      }, { merge: true });
+
+      await setDoc(doc(db, 'members', currentUser.uid), {
+        ptStatus: 'PENDING',
+        pendingPtRequestId: generatedId,
         updatedAt: nowIso
       }, { merge: true });
 
@@ -385,13 +371,15 @@ export const PtSectionView: React.FC = () => {
         await updateClientProfile({ ptStatus: 'PENDING' as any });
       } catch {}
 
-      // 4. Show an immediate confirmation toast ("Offline PT request sent to Gym Desk! Waiting for Admin approval.") and close the modal cleanly.
+      // 4. Show success toast and close modal cleanly
       setIsPtPlansModalOpen(false);
-      setOfflineToast("Offline PT request sent to Gym Desk! Waiting for Admin approval.");
-      setPtNotice("Offline PT request sent to Gym Desk! Waiting for Admin approval.");
+      setOfflineToast('Offline PT request sent to Gym Desk! Waiting for Admin approval.');
+      setPtNotice('Offline PT request sent to Gym Desk! Waiting for Admin approval.');
       setTimeout(() => setOfflineToast(null), 6000);
     } catch (err: any) {
-      setPtNotice('Error submitting offline PT cash request: ' + err.message);
+      console.error('Error submitting offline PT request:', err);
+      alert('Error submitting request: ' + (err?.message || 'Permission denied or network failure.'));
+      setPtNotice('Error submitting offline PT request: ' + err.message);
     } finally {
       setIsPaying(false);
     }
@@ -1043,10 +1031,10 @@ export const PtSectionView: React.FC = () => {
                   type="button"
                   onClick={handleOfflineCashCheckout}
                   disabled={isPaying || isRzpModalOpen}
-                  className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white text-xs font-black rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.98]"
+                  className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white text-xs font-black rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.98] pointer-events-auto cursor-pointer"
                 >
                   <Banknote className="w-4 h-4" />
-                  <span>Pay via Offline Cash Desk</span>
+                  <span>Request Offline Desk PT</span>
                 </button>
               </div>
               <p className="text-[10px] text-slate-500 text-center italic">

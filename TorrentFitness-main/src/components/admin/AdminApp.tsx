@@ -14,7 +14,8 @@ import {
   onSnapshot,
   writeBatch,
   arrayUnion,
-  arrayRemove
+  arrayRemove,
+  serverTimestamp
 } from 'firebase/firestore';
 import {
   UserAccount,
@@ -1180,19 +1181,39 @@ export const AdminApp: React.FC = () => {
       const nowIso = new Date().toISOString();
       const trId = req.trainerId || (req as any).requestedTrainerId || '';
       const trName = (req as any).requestedTrainerName || req.trainerName || 'Trainer';
+      const durationMonths = Number((req as any).durationMonths) || 1;
+      const startDate = new Date();
+      const expiryDate = new Date();
+      expiryDate.setMonth(expiryDate.getMonth() + durationMonths);
+      const ptStartDate = startDate.toISOString().split('T')[0];
+      const ptExpiryDate = expiryDate.toISOString().split('T')[0];
+      const recAmount = Number((req as any).amount || req.fee || 3500);
 
       if (status === 'accepted') {
         const batch = writeBatch(db);
-        batch.set(doc(db, 'ptRequests', req.id), { status: 'accepted', updatedAt: nowIso }, { merge: true });
-        batch.set(doc(db, 'pt_requests', req.id), { status: 'accepted', updatedAt: nowIso }, { merge: true });
+        const reqUpdates = {
+          status: 'APPROVED',
+          paidStatus: 'paid',
+          paymentStatus: 'paid',
+          assignedTrainerId: trId,
+          assignedTrainerName: trName,
+          approvedAt: serverTimestamp(),
+          updatedAt: nowIso
+        };
+
+        batch.set(doc(db, 'ptRequests', req.id), reqUpdates, { merge: true });
+        batch.set(doc(db, 'pt_requests', req.id), reqUpdates, { merge: true });
 
         batch.set(
           doc(db, 'clientProfiles', req.clientId),
           {
             assignedTrainerId: trId,
             assignedTrainerName: trName,
-            ptStatus: 'active',
+            ptStatus: 'ACTIVE',
+            ptApprovedByAdmin: true,
             pendingPtRequestId: null,
+            ptStartDate,
+            ptExpiryDate,
             updatedAt: nowIso
           },
           { merge: true }
@@ -1203,7 +1224,10 @@ export const AdminApp: React.FC = () => {
           {
             assignedTrainerId: trId,
             assignedTrainerName: trName,
-            ptStatus: 'active',
+            ptStatus: 'ACTIVE',
+            ptApprovedByAdmin: true,
+            ptStartDate,
+            ptExpiryDate,
             updatedAt: nowIso
           },
           { merge: true }
@@ -1213,6 +1237,7 @@ export const AdminApp: React.FC = () => {
           batch.set(
             doc(db, 'trainers', trId),
             {
+              assignedClients: arrayUnion(req.clientId),
               assignedClientIds: arrayUnion(req.clientId),
               updatedAt: nowIso
             },
@@ -1221,6 +1246,7 @@ export const AdminApp: React.FC = () => {
           batch.set(
             doc(db, 'trainerProfiles', trId),
             {
+              assignedClients: arrayUnion(req.clientId),
               assignedClientIds: arrayUnion(req.clientId),
               updatedAt: nowIso
             },
@@ -1228,7 +1254,45 @@ export const AdminApp: React.FC = () => {
           );
         }
 
+        // Log offline transaction into transactions and paymentTransactions
+        const txId = (req as any).transactionId || `tx_pt_${req.id}_${Date.now()}`;
+        const receiptNo = `REC-PT-${Date.now().toString().slice(-6)}`;
+        const txRecord = {
+          id: txId,
+          transactionId: txId,
+          receiptNumber: receiptNo,
+          clientId: req.clientId,
+          clientName: req.clientName || 'Client',
+          clientPhone: (req as any).clientPhone || '',
+          amount: recAmount,
+          finalAmount: recAmount,
+          originalAmount: recAmount,
+          discountAmount: 0,
+          purpose: 'personal_training',
+          itemTitle: (req as any).planName || 'Personal Training',
+          planName: (req as any).planName || 'Personal Training',
+          paymentMode: (req.paymentMode === 'online' ? 'online' : 'cash'),
+          status: 'paid',
+          paymentStatus: 'paid',
+          verificationStatus: 'VERIFIED',
+          createdAt: nowIso,
+          paidAt: nowIso,
+          trainerId: trId,
+          trainerName: trName,
+          approvedBy: 'Master Admin'
+        };
+        batch.set(doc(db, 'transactions', txId), txRecord, { merge: true });
+        batch.set(doc(db, 'paymentTransactions', txId), txRecord, { merge: true });
+
         await batch.commit();
+
+        setPtRequests((prev) =>
+          prev.map((r) =>
+            r.id === req.id
+              ? { ...r, status: 'APPROVED', assignedTrainerId: trId, assignedTrainerName: trName, paidStatus: 'paid' } as any
+              : r
+          )
+        );
 
         setClients((prev) =>
           prev.map((c) =>
@@ -1237,15 +1301,27 @@ export const AdminApp: React.FC = () => {
               : c
           )
         );
+        showAdminNotice(`PT request APPROVED & Coach ${trName} linked!`, 'success');
       } else {
         const batch = writeBatch(db);
-        batch.set(doc(db, 'ptRequests', req.id), { status: 'rejected', updatedAt: nowIso }, { merge: true });
-        batch.set(doc(db, 'pt_requests', req.id), { status: 'rejected', updatedAt: nowIso }, { merge: true });
-        batch.set(doc(db, 'clientProfiles', req.clientId), { ptStatus: 'none', pendingPtRequestId: null, updatedAt: nowIso }, { merge: true });
+        const reqUpdates = { status: 'REJECTED', updatedAt: nowIso };
+        batch.set(doc(db, 'ptRequests', req.id), reqUpdates, { merge: true });
+        batch.set(doc(db, 'pt_requests', req.id), reqUpdates, { merge: true });
+        batch.set(doc(db, 'clientProfiles', req.clientId), { ptStatus: 'NONE', pendingPtRequestId: null, updatedAt: nowIso }, { merge: true });
+        batch.set(doc(db, 'members', req.clientId), { ptStatus: 'NONE', pendingPtRequestId: null, updatedAt: nowIso }, { merge: true });
         await batch.commit();
+
+        setPtRequests((prev) =>
+          prev.map((r) =>
+            r.id === req.id
+              ? { ...r, status: 'REJECTED' } as any
+              : r
+          )
+        );
+        showAdminNotice('PT request REJECTED.', 'info');
       }
-      showAdminNotice(`PT request ${status.toUpperCase()}!`, 'success');
     } catch (err: any) {
+      alert('Error updating PT request: ' + err.message);
       showAdminNotice('Error updating PT request: ' + err.message, 'error');
     }
   };
@@ -1371,13 +1447,16 @@ export const AdminApp: React.FC = () => {
       batch.set(
         doc(db, 'ptRequests', req.id),
         {
-          status: 'active',
+          status: 'APPROVED',
           paidStatus: 'paid',
           paymentMode: 'cash',
           cashReceivedAmount: recAmount,
           cashReceivedDate: recDate,
           cashNotes: cashVerifyNotes,
+          assignedTrainerId: trId,
+          assignedTrainerName: trName,
           assignedAt: nowIso,
+          approvedAt: serverTimestamp(),
           updatedAt: nowIso
         },
         { merge: true }
@@ -1387,13 +1466,16 @@ export const AdminApp: React.FC = () => {
         batch.set(
           doc(db, 'pt_requests', req.id),
           {
-            status: 'active',
+            status: 'APPROVED',
             paidStatus: 'paid',
             paymentMode: 'cash',
             cashReceivedAmount: recAmount,
             cashReceivedDate: recDate,
             cashNotes: cashVerifyNotes,
+            assignedTrainerId: trId,
+            assignedTrainerName: trName,
             assignedAt: nowIso,
+            approvedAt: serverTimestamp(),
             updatedAt: nowIso
           },
           { merge: true }
@@ -1405,7 +1487,8 @@ export const AdminApp: React.FC = () => {
         {
           assignedTrainerId: trId,
           assignedTrainerName: trName,
-          ptStatus: 'active',
+          ptStatus: 'ACTIVE',
+          ptApprovedByAdmin: true,
           pendingPtRequestId: null,
           ptStartDate: recDate,
           updatedAt: nowIso
@@ -1418,7 +1501,9 @@ export const AdminApp: React.FC = () => {
         {
           assignedTrainerId: trId,
           assignedTrainerName: trName,
-          ptStatus: 'active',
+          ptStatus: 'ACTIVE',
+          ptApprovedByAdmin: true,
+          ptStartDate: recDate,
           updatedAt: nowIso
         },
         { merge: true }
@@ -1428,6 +1513,7 @@ export const AdminApp: React.FC = () => {
         batch.set(
           doc(db, 'trainers', trId),
           {
+            assignedClients: arrayUnion(req.clientId),
             assignedClientIds: arrayUnion(req.clientId),
             updatedAt: nowIso
           },
@@ -1436,6 +1522,7 @@ export const AdminApp: React.FC = () => {
         batch.set(
           doc(db, 'trainerProfiles', trId),
           {
+            assignedClients: arrayUnion(req.clientId),
             assignedClientIds: arrayUnion(req.clientId),
             updatedAt: nowIso
           },
@@ -1443,20 +1530,36 @@ export const AdminApp: React.FC = () => {
         );
       }
 
-      if (req.transactionId) {
-        batch.set(
-          doc(db, 'paymentTransactions', req.transactionId),
-          {
-            status: 'completed',
-            paidStatus: 'paid',
-            amountReceived: recAmount,
-            paymentReceivedDate: recDate,
-            approvedAt: nowIso,
-            approvedBy: 'Master Admin'
-          },
-          { merge: true }
-        );
-      }
+      // Log offline transaction into transactions and paymentTransactions
+      const txId = req.transactionId || `tx_pt_${req.id}_${Date.now()}`;
+      const receiptNo = `REC-PT-${Date.now().toString().slice(-6)}`;
+      const txRecord = {
+        id: txId,
+        transactionId: txId,
+        receiptNumber: receiptNo,
+        clientId: req.clientId,
+        clientName: req.clientName || 'Client',
+        clientPhone: (req as any).clientPhone || '',
+        amount: recAmount,
+        finalAmount: recAmount,
+        originalAmount: recAmount,
+        discountAmount: 0,
+        purpose: 'personal_training',
+        itemTitle: (req as any).planName || 'Personal Training',
+        planName: (req as any).planName || 'Personal Training',
+        paymentMode: 'cash',
+        gatewayProvider: 'offline_cash',
+        status: 'paid',
+        paymentStatus: 'paid',
+        verificationStatus: 'VERIFIED',
+        createdAt: nowIso,
+        paidAt: recDate || nowIso,
+        trainerId: trId,
+        trainerName: trName,
+        approvedBy: 'Master Admin'
+      };
+      batch.set(doc(db, 'transactions', txId), txRecord, { merge: true });
+      batch.set(doc(db, 'paymentTransactions', txId), txRecord, { merge: true });
 
       await batch.commit();
 
@@ -1877,8 +1980,12 @@ export const AdminApp: React.FC = () => {
   const pendingPtRequestsCount = React.useMemo(() => ptRequests.filter(
     (r) =>
       r.status === 'pending' ||
+      r.status === 'PENDING' ||
+      r.status === 'PENDING_ADMIN_APPROVAL' ||
+      r.status === 'PENDING_CASH_CONFIRMATION' ||
       r.status === 'needs_action' ||
-      (r.paymentMode === 'cash' && r.paidStatus !== 'paid')
+      r.status === 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT' ||
+      ((r.paymentMode === 'cash' || r.paymentMode === 'OFFLINE_CASH') && r.status !== 'APPROVED' && r.status !== 'active')
   ).length, [ptRequests]);
 
   const totalLedgerRecordsCount = React.useMemo(() => {
@@ -4021,16 +4128,23 @@ export const AdminApp: React.FC = () => {
                         <tbody className="divide-y divide-slate-100">
                           {filteredRequests.map((r) => {
                             const isOnlinePaidNeedsAssign = r.status === 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT';
+                            const isActive = r.status === 'active' || r.status === 'accepted' || r.status === 'APPROVED';
                             const isCashPending =
-                              r.status === 'PENDING_CASH_CONFIRMATION' ||
-                              r.status === 'PENDING_DESK_VERIFICATION' ||
-                              r.paymentMode === 'OFFLINE_CASH' ||
-                              r.paymentMode === 'cash';
+                              !isActive &&
+                              r.status !== 'rejected' &&
+                              r.status !== 'REJECTED' &&
+                              (r.paymentMode === 'cash' ||
+                                r.paymentMode === 'OFFLINE_CASH' ||
+                                r.status === 'PENDING_CASH_CONFIRMATION' ||
+                                r.status === 'PENDING_DESK_VERIFICATION');
                             const isPending =
-                              r.status === 'pending' ||
-                              r.status === 'PENDING' ||
-                              r.status === 'PENDING_ADMIN_APPROVAL';
-                            const isActive = r.status === 'active' || r.status === 'accepted';
+                              !isActive &&
+                              r.status !== 'rejected' &&
+                              r.status !== 'REJECTED' &&
+                              (r.status === 'pending' ||
+                                r.status === 'PENDING' ||
+                                r.status === 'PENDING_ADMIN_APPROVAL' ||
+                                r.status === 'PENDING_CASH_CONFIRMATION');
 
                             return (
                               <tr key={r.id} className="hover:bg-slate-50/80 transition-colors">
@@ -4121,26 +4235,27 @@ export const AdminApp: React.FC = () => {
                                       <button
                                         type="button"
                                         onClick={() => openCashVerifyModal(r)}
-                                        className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10px] font-bold shadow-xs flex items-center gap-1"
+                                        className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10px] font-bold shadow-xs flex items-center gap-1 cursor-pointer pointer-events-auto"
                                       >
                                         <Banknote className="w-3 h-3" />
                                         <span>Verify Cash</span>
                                       </button>
                                     )}
 
-                                    {isPending && (
+                                    {(isPending || isCashPending) && (
                                       <>
                                         <button
                                           type="button"
                                           onClick={() => handleUpdatePtRequestStatus(r, 'accepted')}
-                                          className="px-2.5 py-1 bg-emerald-600 text-white rounded-lg text-[10px] font-bold"
+                                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-bold shadow-xs flex items-center gap-1 cursor-pointer pointer-events-auto"
                                         >
-                                          Approve
+                                          <CheckCircle className="w-3 h-3" />
+                                          <span>Approve & Assign PT</span>
                                         </button>
                                         <button
                                           type="button"
                                           onClick={() => handleUpdatePtRequestStatus(r, 'rejected')}
-                                          className="px-2.5 py-1 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg text-[10px] font-bold"
+                                          className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-[10px] font-bold cursor-pointer pointer-events-auto"
                                         >
                                           Reject
                                         </button>
@@ -4149,7 +4264,7 @@ export const AdminApp: React.FC = () => {
 
                                     {isActive && (
                                       <span className="text-[10px] text-emerald-700 font-bold flex items-center gap-1">
-                                        <CheckCircle className="w-3 h-3" /> Assigned
+                                        <CheckCircle className="w-3 h-3" /> Active Coaching (Assigned)
                                       </span>
                                     )}
                                   </div>
