@@ -46,7 +46,9 @@ import {
   deleteDoc,
   query,
   where,
-  arrayUnion
+  arrayUnion,
+  writeBatch,
+  serverTimestamp
 } from 'firebase/firestore';
 import {
   PaymentGateway,
@@ -1220,10 +1222,24 @@ export async function createPaymentTransaction(
 
   const cleanRecord = sanitizeFirestorePayload(rawRecord);
 
+  const transactionsDoc = sanitizeFirestorePayload({
+    ...cleanRecord,
+    clientId: data.clientId,
+    clientName: data.clientName,
+    clientUsername: (data as any).clientUsername || data.metadata?.clientUsername || data.clientId,
+    category: data.purpose === 'aerobics' ? 'AEROBICS' : 'MEMBERSHIP',
+    categoryType: data.purpose === 'aerobics' ? 'AEROBICS' : 'MEMBERSHIP',
+    planName: data.planName || data.itemTitle,
+    amount: enforcedFinal,
+    finalAmount: enforcedFinal,
+    status: data.status === 'success' ? 'COMPLETED' : data.status,
+    verificationStatus: data.status === 'success' ? 'ACTIVE' : cleanRecord.verificationStatus
+  });
+
   // Synchronously replicate transaction across all primary and alias financial collections
   await Promise.allSettled([
     setDoc(doc(db, 'paymentTransactions', txId), cleanRecord),
-    setDoc(doc(db, 'transactions', txId), cleanRecord),
+    setDoc(doc(db, 'transactions', txId), transactionsDoc),
     setDoc(doc(db, 'payments', txId), cleanRecord),
     setDoc(doc(db, 'invoices', txId), cleanRecord),
     setDoc(doc(db, 'billing_history', txId), cleanRecord)
@@ -1425,12 +1441,25 @@ export async function verifyAndActivateOnlinePayment(
       createdAt: nowIso
     });
 
-    await setDoc(doc(db, 'memberships', finalMemId), membershipRecord, { merge: true });
+    // Collect target IDs for the client across UID and username
+    const targetClientIds = new Set<string>([input.clientId]);
+    try {
+      const cSnap = await getDoc(doc(db, 'clientProfiles', input.clientId));
+      if (cSnap.exists()) {
+        const cData = cSnap.data();
+        if (cData?.userId) targetClientIds.add(cData.userId);
+        if (cData?.username) targetClientIds.add(cData.username);
+      }
+    } catch {}
 
-    let clientProfileUpdates: Record<string, any>;
+    const batch = writeBatch(db);
+
+    // Save membership record
+    batch.set(doc(db, 'memberships', finalMemId), membershipRecord, { merge: true });
+
     if (memStatus === 'queued') {
       // Seamless Stacking: Keep current active plan intact; queue the next plan
-      clientProfileUpdates = sanitizeFirestorePayload({
+      const queuedPayload = sanitizeFirestorePayload({
         userId: input.clientId,
         displayName: input.clientName,
         queuedPlanId: input.planId || 'custom',
@@ -1442,6 +1471,8 @@ export async function verifyAndActivateOnlinePayment(
         offlineRequestStatus: 'none',
         pendingOfflineRequestId: '',
         offlineRejectionReason: '',
+        updatedAt: serverTimestamp(),
+        updatedTimestamp: serverTimestamp(),
         ...(input.ptIncluded
           ? {
               ptStatus: 'active',
@@ -1450,12 +1481,23 @@ export async function verifyAndActivateOnlinePayment(
             }
           : {})
       });
+
+      targetClientIds.forEach((id) => {
+        batch.set(doc(db, 'clientProfiles', id), queuedPayload, { merge: true });
+        batch.set(doc(db, 'members', id), queuedPayload, { merge: true });
+        batch.set(doc(db, 'users', id), queuedPayload, { merge: true });
+      });
     } else {
-      clientProfileUpdates = sanitizeFirestorePayload({
+      // Atomic Multi-Collection Sync (writeBatch) across users, members, and clientProfiles
+      const activePayload = sanitizeFirestorePayload({
         userId: input.clientId,
+        uid: input.clientId,
         displayName: input.clientName,
         membershipStatus: 'ACTIVE',
+        status: 'ACTIVE',
+        isActive: true,
         currentPlan: input.planName || input.itemTitle,
+        planName: input.planName || input.itemTitle,
         membershipPlan: input.planName || input.itemTitle,
         membershipPlanId: input.planId || 'custom',
         membershipPlanName: input.planName || input.itemTitle,
@@ -1469,6 +1511,8 @@ export async function verifyAndActivateOnlinePayment(
         offlineRequestStatus: 'none',
         pendingOfflineRequestId: '',
         offlineRejectionReason: '',
+        updatedAt: serverTimestamp(),
+        updatedTimestamp: serverTimestamp(),
         ...(input.ptIncluded
           ? {
               ptStatus: 'active',
@@ -1477,38 +1521,34 @@ export async function verifyAndActivateOnlinePayment(
             }
           : {})
       });
+
+      targetClientIds.forEach((id) => {
+        batch.set(doc(db, 'clientProfiles', id), activePayload, { merge: true });
+        batch.set(doc(db, 'members', id), activePayload, { merge: true });
+        batch.set(doc(db, 'users', id), activePayload, { merge: true });
+      });
     }
 
-    await setDoc(doc(db, 'clientProfiles', input.clientId), clientProfileUpdates, {
-      merge: true
+    // Ensure transaction written to transactions/{txId} includes all required fields
+    const txSyncPayload = sanitizeFirestorePayload({
+      clientId: input.clientId,
+      clientName: input.clientName,
+      clientUsername: input.metadata?.clientUsername || input.clientId,
+      category: 'MEMBERSHIP',
+      categoryType: 'MEMBERSHIP',
+      planName: input.planName || input.itemTitle,
+      amount: enforcedPaid,
+      finalAmount: enforcedPaid,
+      status: 'COMPLETED',
+      verificationStatus: 'ACTIVE',
+      paymentId: cleanPaymentId,
+      referenceId: cleanPaymentId,
+      updatedAt: serverTimestamp()
     });
+    batch.set(doc(db, 'transactions', transaction.id), txSyncPayload, { merge: true });
+    batch.set(doc(db, 'paymentTransactions', transaction.id), txSyncPayload, { merge: true });
 
-    // Also sync members & top-level user document with ACTIVE status and expiry dates if newly active
-    if (memStatus === 'active') {
-      try {
-        const syncPayload = sanitizeFirestorePayload({
-          membershipStatus: 'ACTIVE',
-          currentPlan: input.planName || input.itemTitle,
-          membershipPlan: input.planName || input.itemTitle,
-          membershipPlanName: input.planName || input.itemTitle,
-          membershipPlanId: input.planId || 'custom',
-          planStartDate: effectiveStartDate,
-          membershipStartDate: effectiveStartDate,
-          planExpiryDate: effectiveEndDate,
-          membershipEndDate: effectiveEndDate,
-          membershipExpiryDate: effectiveEndDate,
-          lastPaymentId: cleanPaymentId,
-          pendingMembershipRequest: false
-        });
-
-        await Promise.allSettled([
-          setDoc(doc(db, 'members', input.clientId), syncPayload, { merge: true }),
-          setDoc(doc(db, 'users', input.clientId), syncPayload, { merge: true })
-        ]);
-      } catch (userSyncErr) {
-        console.warn('Could not sync members/users doc membership fields:', userSyncErr);
-      }
-    }
+    await batch.commit();
   } else if (input.purpose === 'aerobics') {
     const batchId = input.metadata?.batchId || input.planId || '';
     const batchName = input.metadata?.batchName || input.planName || input.itemTitle;
@@ -2039,37 +2079,109 @@ export async function approveOfflinePaymentRequest(
       });
     }
 
-    await setDoc(doc(db, 'clientProfiles', tx.clientId), clientUpdates, { merge: true });
-
-    if (memStatus === 'active') {
-      try {
-        const approvedMemberPayload = sanitizeFirestorePayload({
-          membershipStatus: 'ACTIVE',
-          currentPlan: tx.planName || tx.itemTitle,
-          membershipPlan: tx.planName || tx.itemTitle,
-          membershipPlanName: tx.planName || tx.itemTitle,
-          membershipPlanId: tx.planId || 'custom',
-          planStartDate: effectiveStartDate,
-          membershipStartDate: effectiveStartDate,
-          planExpiryDate: effectiveEndDate,
-          membershipEndDate: effectiveEndDate,
-          membershipExpiryDate: effectiveEndDate,
-          lastPaymentId: approvedRefId,
-          pendingMembershipRequest: false,
-          offlineRequestStatus: 'approved'
-        });
-
-        await Promise.allSettled([
-          setDoc(doc(db, 'members', tx.clientId), approvedMemberPayload, { merge: true }),
-          setDoc(doc(db, 'users', tx.clientId), approvedMemberPayload, { merge: true }),
-          setDoc(doc(db, 'membership_requests', transactionId), { status: 'APPROVED', approvedAt: nowIso }, { merge: true }),
-          setDoc(doc(db, 'membershipRequests', transactionId), { status: 'APPROVED', approvedAt: nowIso }, { merge: true }),
-          setDoc(doc(db, 'transactions', transactionId), { status: 'success', verificationStatus: 'ACTIVE', approvedAt: nowIso }, { merge: true })
-        ]);
-      } catch (e) {
-        console.warn('Could not sync members/users doc on offline approval:', e);
+    // Collect target IDs for the client across UID and username
+    const targetClientIds = new Set<string>([tx.clientId]);
+    try {
+      const cSnap = await getDoc(doc(db, 'clientProfiles', tx.clientId));
+      if (cSnap.exists()) {
+        const cData = cSnap.data();
+        if (cData?.userId) targetClientIds.add(cData.userId);
+        if (cData?.username) targetClientIds.add(cData.username);
       }
+    } catch {}
+
+    const batch = writeBatch(db);
+
+    if (memStatus === 'queued') {
+      const queuedUpdates = sanitizeFirestorePayload({
+        userId: tx.clientId,
+        displayName: tx.clientName,
+        queuedPlanId: tx.planId || 'custom',
+        queuedPlanName: tx.planName || tx.itemTitle,
+        queuedStartDate: effectiveStartDate,
+        queuedEndDate: effectiveEndDate,
+        queuedDurationMonths: durationMonths,
+        queuedAmountPaid: recordedAmount,
+        offlineRequestStatus: 'approved',
+        pendingOfflineRequestId: '',
+        offlineRejectionReason: '',
+        updatedAt: serverTimestamp(),
+        updatedTimestamp: serverTimestamp(),
+        ...(tx.ptIncluded && tx.ptTrainerId
+          ? {
+              ptStatus: 'active',
+              assignedTrainerId: tx.ptTrainerId,
+              ...(tx.ptTrainerName ? { assignedTrainerName: tx.ptTrainerName } : {})
+            }
+          : {})
+      });
+      targetClientIds.forEach((id) => {
+        batch.set(doc(db, 'clientProfiles', id), queuedUpdates, { merge: true });
+        batch.set(doc(db, 'members', id), queuedUpdates, { merge: true });
+        batch.set(doc(db, 'users', id), queuedUpdates, { merge: true });
+      });
+    } else {
+      // Atomic Multi-Collection Sync on Offline Cash Approval
+      const approvedPayload = sanitizeFirestorePayload({
+        userId: tx.clientId,
+        uid: tx.clientId,
+        displayName: tx.clientName,
+        membershipStatus: 'ACTIVE',
+        status: 'ACTIVE',
+        isActive: true,
+        currentPlan: tx.planName || tx.itemTitle,
+        planName: tx.planName || tx.itemTitle,
+        membershipPlan: tx.planName || tx.itemTitle,
+        membershipPlanId: tx.planId || 'custom',
+        membershipPlanName: tx.planName || tx.itemTitle,
+        planStartDate: effectiveStartDate,
+        membershipStartDate: effectiveStartDate,
+        planExpiryDate: effectiveEndDate,
+        membershipEndDate: effectiveEndDate,
+        membershipExpiryDate: effectiveEndDate,
+        lastPaymentId: approvedRefId,
+        pendingMembershipRequest: false,
+        offlineRequestStatus: 'approved',
+        pendingOfflineRequestId: '',
+        offlineRejectionReason: '',
+        updatedAt: serverTimestamp(),
+        updatedTimestamp: serverTimestamp(),
+        ...(tx.ptIncluded && tx.ptTrainerId
+          ? {
+              ptStatus: 'active',
+              assignedTrainerId: tx.ptTrainerId,
+              ...(tx.ptTrainerName ? { assignedTrainerName: tx.ptTrainerName } : {})
+            }
+          : {})
+      });
+      targetClientIds.forEach((id) => {
+        batch.set(doc(db, 'clientProfiles', id), approvedPayload, { merge: true });
+        batch.set(doc(db, 'members', id), approvedPayload, { merge: true });
+        batch.set(doc(db, 'users', id), approvedPayload, { merge: true });
+      });
     }
+
+    batch.set(doc(db, 'transactions', transactionId), {
+      clientId: tx.clientId,
+      clientName: tx.clientName,
+      clientUsername: tx.clientUsername || tx.clientId,
+      category: 'MEMBERSHIP',
+      categoryType: 'MEMBERSHIP',
+      planName: tx.planName || tx.itemTitle,
+      amount: recordedAmount,
+      finalAmount: recordedAmount,
+      status: 'COMPLETED',
+      verificationStatus: 'ACTIVE',
+      paymentId: approvedRefId,
+      referenceId: approvedRefId,
+      approvedAt: nowIso,
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+
+    batch.set(doc(db, 'membership_requests', transactionId), { status: 'APPROVED', approvedAt: nowIso }, { merge: true });
+    batch.set(doc(db, 'membershipRequests', transactionId), { status: 'APPROVED', approvedAt: nowIso }, { merge: true });
+
+    await batch.commit();
   } else if (tx.purpose === 'aerobics') {
     const batchId = tx.metadata?.batchId || tx.planId || '';
     const batchName = tx.metadata?.batchName || tx.planName || tx.itemTitle;

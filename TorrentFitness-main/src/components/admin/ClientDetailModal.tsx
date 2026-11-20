@@ -5,6 +5,7 @@ import { ClientProfile, UserAccount, AttendanceRecord, MembershipRecord, Fitness
 import { DeleteAccountTarget } from './DeleteAccountModal';
 import { copyToClipboard } from '../../utils/clipboard';
 import { formatHeight } from '../../utils/heightUtils';
+import { isClientActiveMembership } from '../../utils/memberStatus';
 
 const ClientAttendanceAnalytics = React.lazy(() =>
   import('./ClientAttendanceAnalytics').then((m) => ({ default: m.ClientAttendanceAnalytics }))
@@ -339,12 +340,12 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
                 </span>
                 <span
                   className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                    client.membershipStatus === 'active'
+                    isClientActiveMembership(client)
                       ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                       : 'bg-rose-50 text-rose-700 border border-rose-200'
                   }`}
                 >
-                  {client.membershipStatus.toUpperCase()}
+                  {isClientActiveMembership(client) ? 'ACTIVE' : 'INACTIVE'}
                 </span>
               </div>
               <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">

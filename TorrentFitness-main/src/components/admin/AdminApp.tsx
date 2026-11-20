@@ -128,6 +128,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { formatHeight, parseHeight } from '../../utils/heightUtils';
+import { isClientActiveMembership } from '../../utils/memberStatus';
 
 export type DomainId =
   | 'domain_01'
@@ -959,9 +960,9 @@ export const AdminApp: React.FC = () => {
         try {
           const targetClients =
             scope === 'active'
-              ? clients.filter(c => c.membershipStatus === 'active' && !c.isSelfDeleted)
+              ? clients.filter(c => isClientActiveMembership(c))
               : scope === 'expired'
-              ? clients.filter(c => c.membershipStatus !== 'active' && !c.isSelfDeleted)
+              ? clients.filter(c => !c.isSelfDeleted && !isClientActiveMembership(c))
               : clients;
 
           await exportClientRecordsToPdf({
@@ -2225,8 +2226,8 @@ export const AdminApp: React.FC = () => {
     return Array.from(map.values());
   }, [trainers, allUsers]);
 
-  const activeClientsCount = React.useMemo(() => clients.filter(c => c.membershipStatus === 'active' && !c.isSelfDeleted).length, [clients]);
-  const expiredClientsCount = React.useMemo(() => clients.filter(c => c.membershipStatus !== 'active' && !c.isSelfDeleted).length, [clients]);
+  const activeClientsCount = React.useMemo(() => clients.filter(c => isClientActiveMembership(c)).length, [clients]);
+  const expiredClientsCount = React.useMemo(() => clients.filter(c => !c.isSelfDeleted && !isClientActiveMembership(c)).length, [clients]);
   const selfDeletedClientsCount = React.useMemo(() => clients.filter(c => c.isSelfDeleted).length, [clients]);
   const activeTrainersCount = React.useMemo(() => safeTrainers.filter(t => t.status === 'active').length, [safeTrainers]);
   const pendingTrainersCount = React.useMemo(() => safeTrainers.filter(t => t.status === 'pending' || t.status === 'pending_verification').length, [safeTrainers]);
@@ -2690,12 +2691,12 @@ export const AdminApp: React.FC = () => {
                 </span>
                 <span
                   className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                    client.membershipStatus === 'active' && !isSelfDel
+                    isClientActiveMembership(client) && !isSelfDel
                       ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
                       : 'bg-slate-100 text-slate-600 border border-slate-200'
                   }`}
                 >
-                  {client.membershipStatus.toUpperCase()}
+                  {isSelfDel ? 'SELF-DELETED' : isClientActiveMembership(client) ? 'ACTIVE' : 'INACTIVE'}
                 </span>
                 {isAerobicsEnrolled(client.userId) && (
                   <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-gradient-to-r from-rose-500 to-fuchsia-600 text-white shadow-2xs">
@@ -3516,12 +3517,12 @@ export const AdminApp: React.FC = () => {
                                   className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
                                     isSelfDel
                                       ? 'bg-rose-50 text-rose-700 border-rose-300'
-                                      : client.membershipStatus === 'active'
+                                      : isClientActiveMembership(client)
                                       ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
                                       : 'bg-slate-100 text-slate-600 border-slate-200'
                                   }`}
                                 >
-                                  {isSelfDel ? 'SELF-DELETED' : client.membershipStatus.toUpperCase()}
+                                  {isSelfDel ? 'SELF-DELETED' : isClientActiveMembership(client) ? 'ACTIVE' : 'INACTIVE'}
                                 </span>
                               </td>
                               <td className="py-3 px-4">
@@ -3685,12 +3686,12 @@ export const AdminApp: React.FC = () => {
                     .filter((c) => {
                       if (
                         clientFilterTab === 'active' &&
-                        (c.membershipStatus !== 'active' || c.isSelfDeleted)
+                        (!isClientActiveMembership(c) || c.isSelfDeleted)
                       )
                         return false;
                       if (
                         clientFilterTab === 'expired' &&
-                        (c.membershipStatus === 'active' || c.isSelfDeleted)
+                        (isClientActiveMembership(c) || c.isSelfDeleted)
                       )
                         return false;
                       if (clientFilterTab === 'deleted' && !c.isSelfDeleted) return false;

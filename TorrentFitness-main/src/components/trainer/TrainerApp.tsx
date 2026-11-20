@@ -28,6 +28,7 @@ import {
 } from '../../types';
 import { INITIAL_AEROBICS_BATCHES, INITIAL_ANNOUNCEMENTS } from '../../services/db';
 import { getCachedData, setCachedData } from '../../services/cacheService';
+import { isClientActiveMembership } from '../../utils/memberStatus';
 import { Header } from '../common/Header';
 import { TrainerIdentityBadge } from '../common/Badge';
 import { PhotoUploader } from '../common/PhotoUploader';
@@ -1602,12 +1603,12 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
                         </div>
                         <span
                           className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                            client.membershipStatus === 'active'
+                            isClientActiveMembership(client)
                               ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/30'
                               : 'bg-[#E2EAF3] text-slate-600 border-white/80'
                           }`}
                         >
-                          {client.membershipStatus.toUpperCase()}
+                          {isClientActiveMembership(client) ? 'ACTIVE' : 'INACTIVE'}
                         </span>
                       </div>
                       <span className="text-[11px] text-slate-600">

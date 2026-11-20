@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { ClientProfile, UserAccount, AttendanceRecord } from '../../types';
 import { exportIndividualAttendancePdf } from '../../services/pdfExportService';
 import { usePdfDownload } from '../../context/PdfDownloadContext';
+import { isClientActiveMembership } from '../../utils/memberStatus';
 import {
   Calendar,
   Clock,
@@ -280,11 +281,11 @@ export const ClientAttendanceAnalytics: React.FC<ClientAttendanceAnalyticsProps>
                 ID: {client.userId}
               </span>
               <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                client.membershipStatus === 'active'
+                isClientActiveMembership(client)
                   ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/40'
                   : 'bg-slate-800 text-slate-600 border border-slate-100'
               }`}>
-                {client.membershipStatus.toUpperCase()}
+                {isClientActiveMembership(client) ? 'ACTIVE' : 'INACTIVE'}
               </span>
             </div>
             <p className="text-xs text-slate-600 mt-0.5">

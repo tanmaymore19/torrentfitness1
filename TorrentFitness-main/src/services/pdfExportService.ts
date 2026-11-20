@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { ClientProfile, UserAccount, AttendanceRecord, MembershipRecord } from '../types';
+import { isClientActiveMembership } from '../utils/memberStatus';
 
 export interface PdfExportOptions {
   clients: ClientProfile[];
@@ -116,7 +117,7 @@ export const exportClientRecordsToPdf = async ({
 
     // Summary KPI Block
     const totalClients = clients.length;
-    const activeMembers = clients.filter(c => c.membershipStatus === 'active').length;
+    const activeMembers = clients.filter(c => isClientActiveMembership(c)).length;
     const inactiveMembers = totalClients - activeMembers;
     const activePtClients = clients.filter(c => c.ptStatus === 'active').length;
 

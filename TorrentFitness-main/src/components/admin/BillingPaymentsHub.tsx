@@ -16,6 +16,7 @@ import {
   exportBulkPaymentsLedgerPdf
 } from '../../services/pdfExportService';
 import { usePdfDownload } from '../../context/PdfDownloadContext';
+import { isClientActiveMembership } from '../../utils/memberStatus';
 import { PaymentGatewaysManager } from './PaymentGatewaysManager';
 import { UnifiedMembershipManager } from './UnifiedMembershipManager';
 import { PtPlansManager } from './PtPlansManager';
@@ -464,7 +465,7 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
   const totalRevenueThisMonth = settledThisMonthEntries.reduce((sum, e) => sum + e.finalAmount, 0);
 
   const totalActivePaidClients = clients.filter(
-    (c) => c.membershipStatus === 'active' && !c.isSelfDeleted
+    (c) => isClientActiveMembership(c)
   ).length;
 
   const totalDiscountGiven = settledMetricsEntries.reduce((sum, e) => sum + e.discountAmount, 0);

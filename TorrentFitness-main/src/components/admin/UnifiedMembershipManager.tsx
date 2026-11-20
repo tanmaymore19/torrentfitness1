@@ -21,6 +21,7 @@ import {
   exportBulkPaymentsLedgerPdf
 } from '../../services/pdfExportService';
 import { usePdfDownload } from '../../context/PdfDownloadContext';
+import { isClientActiveMembership } from '../../utils/memberStatus';
 import { GlobalDeleteConfirmModal } from '../common/GlobalDeleteConfirmModal';
 import {
   CreditCard,
@@ -1069,11 +1070,11 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
 
     // Seed from all registered clients
     clients.forEach((c) => {
-      const isClientActive = String(c.membershipStatus || '').toLowerCase() === 'active';
-      const sDate = c.membershipStartDate || '-';
+      const isClientActive = isClientActiveMembership(c);
+      const sDate = c.membershipStartDate || c.planStartDate || '-';
       const eDate = c.membershipEndDate || c.membershipExpiryDate || c.planExpiryDate || '-';
-      const isStillValid = eDate !== '-' && eDate >= todayStr;
-      const liveStatus: 'ACTIVE' | 'INACTIVE' = isClientActive && isStillValid ? 'ACTIVE' : 'INACTIVE';
+      const isDateValid = eDate === '-' || eDate >= todayStr;
+      const liveStatus: 'ACTIVE' | 'INACTIVE' = isClientActive && isDateValid ? 'ACTIVE' : 'INACTIVE';
 
       map.set(c.userId, {
         id: `client_${c.userId}`,
@@ -1081,8 +1082,8 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
         clientName: c.displayName || c.fullName || 'Member',
         clientPhone: c.phone || '',
         clientUsername: c.username || c.userId,
-        planName: c.membershipPlan || c.membershipPlanName || (liveStatus === 'ACTIVE' ? 'Active Membership' : 'No Active Plan'),
-        durationMonths: liveStatus === 'ACTIVE' ? 1 : 0,
+        planName: c.membershipPlan || c.membershipPlanName || c.currentPlan || c.planName || (liveStatus === 'ACTIVE' ? 'Active Membership' : 'No Active Plan'),
+        durationMonths: liveStatus === 'ACTIVE' ? (c.durationMonths || c.planDurationMonths || 1) : 0,
         startDate: sDate,
         endDate: eDate,
         status: liveStatus,
