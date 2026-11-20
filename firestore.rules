@@ -100,6 +100,11 @@ rules_version = '2';
 // Fields:
 //   - Active and historical gym membership records
 //
+// Collection: membership_requests / membershipRequests
+// Document ID: {requestId}
+// Fields:
+//   - Member registration and plan enrollment requests
+//
 // ===============================================================
 
 service cloud.firestore {
@@ -215,6 +220,14 @@ service cloud.firestore {
       allow read, write, delete: if true;
     }
 
+    match /membership_requests/{requestId} {
+      allow read, write, delete: if true;
+    }
+
+    match /membershipRequests/{requestId} {
+      allow read, write, delete: if true;
+    }
+
     match /workouts/{workoutId} {
       allow read, write: if true;
     }
@@ -284,7 +297,7 @@ service cloud.firestore {
     }
 
     match /paymentTransactions/{transactionId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     match /transactions/{transactionId} {

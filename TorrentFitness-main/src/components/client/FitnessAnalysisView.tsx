@@ -354,11 +354,10 @@ export const FitnessAnalysisView: React.FC<FitnessAnalysisViewProps> = ({
     };
   }, [photoPreviewUrl]);
 
-  // PT Status & Rate-Limiting Quotas
+  // PT Status & Rate-Limiting Quotas (Strictly active only, not PENDING or unverified)
   const isPtClient =
-    clientProfile?.ptStatus === 'active' ||
-    (clientProfile as any)?.hasActivePT === true ||
-    Boolean(clientProfile?.assignedTrainerId && clientProfile?.ptStatus !== 'none');
+    String(clientProfile?.ptStatus || '').toLowerCase() === 'active' ||
+    (Boolean(clientProfile?.assignedTrainerId) && String(clientProfile?.ptStatus || '').toLowerCase() === 'active');
 
   // Cooldown rules:
   // Standard members (Without PT): exactly 1 scan every 30 days

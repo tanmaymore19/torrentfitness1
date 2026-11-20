@@ -1249,11 +1249,17 @@ export async function initializeDatabaseSeed(force: boolean = false): Promise<vo
             }
           ];
 
-          // Always guarantee payment gateway configuration persistence
-          const restorationTasks: Promise<any>[] = [
-            setDoc(doc(db, 'gym_config', 'payment_gateways'), liveRzp, { merge: true }),
-            setDoc(doc(db, 'paymentGateways', 'gw_razorpay_main'), liveRzp, { merge: true })
-          ];
+          // Guarantee payment gateway configuration ONLY if not already configured in Firestore
+          const restorationTasks: Promise<any>[] = [];
+          try {
+            const existingRzpSnap = await getDoc(doc(db, 'paymentGateways', 'gw_razorpay_main')).catch(() => null);
+            if (!existingRzpSnap || !existingRzpSnap.exists()) {
+              restorationTasks.push(
+                setDoc(doc(db, 'paymentGateways', 'gw_razorpay_main'), liveRzp, { merge: true }),
+                setDoc(doc(db, 'gym_config', 'payment_gateways'), liveRzp, { merge: true })
+              );
+            }
+          } catch {}
 
           // Check if tanmay1_19 was explicitly deleted by Admin to prevent ghost account resurrection
           const isTanmayDeletedLocally = typeof window !== 'undefined' && localStorage.getItem('tf_deleted_tanmay1_19') === 'true';
@@ -1261,32 +1267,37 @@ export async function initializeDatabaseSeed(force: boolean = false): Promise<vo
           const isTanmayDeleted = isTanmayDeletedLocally || Boolean(tanmayDeletedDoc?.exists());
 
           if (!isTanmayDeleted) {
-            restorationTasks.push(
-              setDoc(doc(db, 'users', 'tanmay1_19'), tanmayAccount, { merge: true }),
-              setDoc(doc(db, 'members', 'tanmay1_19'), { ...tanmayAccount, profilePhoto: tanmayAccount.photoUrl }, { merge: true }),
-              setDoc(doc(db, 'clientProfiles', 'tanmay1_19'), tanmayProfile, { merge: true }),
-              setDoc(doc(db, 'usernames', 'tanmay1_19'), {
-                uid: 'tanmay1_19',
-                username: 'tanmay1_19',
-                email: 'tanmaymore0220@gmail.com'
-              }, { merge: true }),
-              // Sync historical attendance logs across both attendance and attendance_logs
-              ...historicalAttendanceLogs.flatMap((log) => [
-                setDoc(doc(db, 'attendance', log.id), log, { merge: true }),
-                setDoc(doc(db, 'attendance_logs', log.id), log, { merge: true })
-              ])
-            );
+            // Only seed tanmay account if it doesn't already exist in users
+            const existingTanmaySnap = await getDoc(doc(db, 'users', 'tanmay1_19')).catch(() => null);
+            if (!existingTanmaySnap || !existingTanmaySnap.exists()) {
+              restorationTasks.push(
+                setDoc(doc(db, 'users', 'tanmay1_19'), tanmayAccount, { merge: true }),
+                setDoc(doc(db, 'members', 'tanmay1_19'), { ...tanmayAccount, profilePhoto: tanmayAccount.photoUrl }, { merge: true }),
+                setDoc(doc(db, 'clientProfiles', 'tanmay1_19'), tanmayProfile, { merge: true }),
+                setDoc(doc(db, 'usernames', 'tanmay1_19'), {
+                  uid: 'tanmay1_19',
+                  username: 'tanmay1_19',
+                  email: 'tanmaymore0220@gmail.com'
+                }, { merge: true }),
+                // Sync historical attendance logs across both attendance and attendance_logs
+                ...historicalAttendanceLogs.flatMap((log) => [
+                  setDoc(doc(db, 'attendance', log.id), log, { merge: true }),
+                  setDoc(doc(db, 'attendance_logs', log.id), log, { merge: true })
+                ])
+              );
+            }
           }
 
-          await Promise.allSettled(restorationTasks);
+          if (restorationTasks.length > 0) {
+            await Promise.allSettled(restorationTasks);
+          }
         } catch (restoreErr) {
           console.warn('Pre-9AM account & gateway restoration note:', restoreErr);
         }
       })()
     ]);
 
-    // Execute one-time historical purge and reset of all memberships to INACTIVE
-    await executeOneTimeHistoricalReset();
+    // Background auto-purge permanently neutralized to guarantee permanent data persistence
 
     if (typeof window !== 'undefined') {
       localStorage.setItem(SEED_CACHE_FLAG_KEY, 'done');
@@ -1297,134 +1308,14 @@ export async function initializeDatabaseSeed(force: boolean = false): Promise<vo
 }
 
 /**
- * One-Time Historical Reset:
- * Updates all existing client documents (clientProfiles and members) to set:
- * membershipStatus: 'INACTIVE', currentPlan: null, planExpiryDate: null, ptStatus: 'NONE', assignedTrainerId: null
- * Purges all historical records from transactions, invoices, bills, paymentTransactions, payments, billing_history, memberships.
- * Guarded by system_meta/initial_purge_v1 to run strictly ONCE.
+ * Permanently Neutralized:
+ * Background Auto-Purge and Reset routines are eliminated.
+ * Transactions and Revenue MUST NEVER be deleted unless Master Admin explicitly
+ * clicks the individual row "Delete" button and confirms the 2-step modal.
  */
 export async function executeOneTimeHistoricalReset(): Promise<void> {
-  try {
-    const purgeFlagRef = doc(db, 'system_meta', 'initial_purge_v1');
-    const purgeSnap = await getDoc(purgeFlagRef).catch(() => null);
-    if (purgeSnap?.exists() && purgeSnap.data()?.completed === true) {
-      return;
-    }
-
-    console.log('[System Reset] Executing one-time historical reset & purge...');
-
-    // 1. Update ALL clientProfiles to INACTIVE & clear paymentHistory
-    const clientProfilesSnap = await getDocs(collection(db, 'clientProfiles')).catch(() => null);
-    if (clientProfilesSnap && !clientProfilesSnap.empty) {
-      const batch = writeBatch(db);
-      clientProfilesSnap.docs.forEach((d) => {
-        batch.set(
-          d.ref,
-          {
-            membershipStatus: 'INACTIVE',
-            currentPlan: null,
-            membershipPlan: null,
-            membershipPlanName: null,
-            membershipPlanId: null,
-            membershipStartDate: null,
-            membershipEndDate: null,
-            membershipExpiryDate: null,
-            planExpiryDate: null,
-            ptStatus: 'NONE',
-            assignedTrainerId: null,
-            assignedTrainerName: null,
-            ptApprovedByAdmin: false,
-            pendingPtRequestId: null,
-            paymentHistory: [],
-            billingHistory: []
-          },
-          { merge: true }
-        );
-      });
-      await batch.commit().catch((e) => console.warn('Reset clientProfiles batch note:', e));
-    }
-
-    // 2. Update ALL members to INACTIVE
-    const membersSnap = await getDocs(collection(db, 'members')).catch(() => null);
-    if (membersSnap && !membersSnap.empty) {
-      const batch = writeBatch(db);
-      membersSnap.docs.forEach((d) => {
-        batch.set(
-          d.ref,
-          {
-            membershipStatus: 'INACTIVE',
-            currentPlan: null,
-            membershipPlan: null,
-            membershipPlanName: null,
-            membershipPlanId: null,
-            membershipStartDate: null,
-            membershipEndDate: null,
-            membershipExpiryDate: null,
-            planExpiryDate: null,
-            ptStatus: 'NONE',
-            assignedTrainerId: null,
-            assignedTrainerName: null,
-            ptApprovedByAdmin: false,
-            pendingPtRequestId: null,
-            paymentHistory: [],
-            billingHistory: []
-          },
-          { merge: true }
-        );
-      });
-      await batch.commit().catch((e) => console.warn('Reset members batch note:', e));
-    }
-
-    // 3. Purge all documents from financial and billing collections
-    const collectionsToPurge = [
-      'transactions',
-      'invoices',
-      'bills',
-      'paymentTransactions',
-      'payments',
-      'billing_history',
-      'memberships'
-    ];
-
-    for (const collName of collectionsToPurge) {
-      try {
-        const snap = await getDocs(collection(db, collName)).catch(() => null);
-        if (snap && !snap.empty) {
-          const b = writeBatch(db);
-          snap.docs.forEach((d) => b.delete(d.ref));
-          await b.commit();
-        }
-      } catch (err) {
-        console.warn(`Purging ${collName} note:`, err);
-      }
-    }
-
-    // 4. Mark one-time purge completed
-    await setDoc(
-      purgeFlagRef,
-      {
-        completed: true,
-        executedAt: new Date().toISOString(),
-        target: 'v1_initial_reset'
-      },
-      { merge: true }
-    );
-
-    // Clear local storage cache
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.removeItem('admin_payment_transactions');
-        localStorage.removeItem('admin_payment_tx');
-        localStorage.removeItem('admin_pt_requests');
-        localStorage.removeItem('admin_memberships');
-        localStorage.removeItem('tf_cached_admin_revenue');
-      } catch {}
-    }
-
-    console.log('[System Reset] One-time historical reset completed successfully.');
-  } catch (err) {
-    console.warn('[System Reset] Error in executeOneTimeHistoricalReset:', err);
-  }
+  // Permanently disabled to protect production data persistence
+  return;
 }
 
 

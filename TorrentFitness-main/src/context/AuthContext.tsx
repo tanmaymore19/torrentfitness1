@@ -228,7 +228,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState<boolean>(false);
   const [isLoggingOut, setIsLoggingOut] = useState<boolean>(false);
 
-  // Helper to purge entire session and show deleted alert
+  // Helper to purge user session and show deleted alert (preserves system configuration)
   const purgeSessionAndAlertDeleted = async () => {
     if (auth && auth.currentUser) {
       try {
@@ -240,8 +240,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       sessionStorage.removeItem(LOCAL_STORAGE_SESSION_KEY);
       localStorage.removeItem(AUTH_TOKEN_KEY);
       sessionStorage.removeItem(AUTH_TOKEN_KEY);
-      localStorage.clear();
-      sessionStorage.clear();
     } catch {}
     setCurrentUser(null);
     setClientProfile(null);
@@ -387,15 +385,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       (snap) => {
         if (snap.exists()) {
           const cData = snap.data() as ClientProfile;
-          const normalizedStatus =
-            String(cData.membershipStatus || '').toLowerCase() === 'active'
-              ? 'active'
-              : 'inactive';
+          const expiryDate = cData.planExpiryDate || cData.membershipEndDate || cData.membershipExpiryDate;
+          const isDateValid = expiryDate ? new Date(expiryDate).getTime() > Date.now() : false;
+          const rawStatus = String(cData.membershipStatus || '').toLowerCase();
+          // Ensure membershipStatus is NEVER reverted to inactive while planExpiryDate is in the future
+          const normalizedStatus = (rawStatus === 'active' || isDateValid) ? 'active' : 'inactive';
           const normalizedProfile: ClientProfile = {
             ...cData,
             membershipStatus: normalizedStatus,
             membershipPlanName: cData.membershipPlanName || cData.membershipPlan,
-            membershipEndDate: cData.membershipEndDate || cData.membershipExpiryDate,
+            membershipEndDate: cData.membershipEndDate || cData.membershipExpiryDate || cData.planExpiryDate,
             gender: cData.gender || currentUser.gender
           };
           setClientProfile(normalizedProfile);
@@ -422,15 +421,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (!cData.gender && user.gender) {
             cData.gender = user.gender;
           }
-          const normalizedStatus =
-            String(cData.membershipStatus || '').toLowerCase() === 'active'
-              ? 'active'
-              : 'inactive';
+          const expiryDate = cData.planExpiryDate || cData.membershipEndDate || cData.membershipExpiryDate;
+          const isDateValid = expiryDate ? new Date(expiryDate).getTime() > Date.now() : false;
+          const rawStatus = String(cData.membershipStatus || '').toLowerCase();
+          // Guarantee membershipStatus is preserved as active if planExpiryDate is valid
+          const normalizedStatus = (rawStatus === 'active' || isDateValid) ? 'active' : 'inactive';
           const normalizedProfile: ClientProfile = {
             ...cData,
             membershipStatus: normalizedStatus,
             membershipPlanName: cData.membershipPlanName || cData.membershipPlan,
-            membershipEndDate: cData.membershipEndDate || cData.membershipExpiryDate
+            membershipEndDate: cData.membershipEndDate || cData.membershipExpiryDate || cData.planExpiryDate
           };
           setClientProfile(normalizedProfile);
           setCachedData(`client_profile_${user.uid}`, normalizedProfile);
@@ -563,15 +563,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const cleanInput = (inputPassword || '').trim();
     if (!cleanInput) return false;
 
-    // 1. Check local storage override first (resilient fallback against Firestore permission or network blocks)
-    try {
-      const localCustomHash = localStorage.getItem('master_admin_password_hash') || sessionStorage.getItem('master_admin_password_hash');
-      if (localCustomHash) {
-        return await verifyClientPassword(cleanInput, localCustomHash);
-      }
-    } catch {}
-
-    // 2. Read from Firestore system_settings/master_admin_auth
+    // 1. ALWAYS read directly from Cloud Firestore system_settings/master_admin_auth first (bypassing stale cache)
     try {
       const authSnap = await withTimeout(
         getDoc(doc(db, 'system_settings', 'master_admin_auth')),
@@ -585,17 +577,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             localStorage.setItem('master_admin_password_hash', authData.passwordHash);
             sessionStorage.setItem('master_admin_password_hash', authData.passwordHash);
           } catch {}
+          // Strict: When custom password is set in Cloud Firestore, ONLY that password is valid
+          // Old password 'torrent#19@fit1' is permanently deactivated across all devices
           return await verifyClientPassword(cleanInput, authData.passwordHash);
+        } else if (authData?.hasCustomPassword === false) {
+          return (
+            cleanInput === 'torrent#19@fit1' ||
+            cleanInput.toLowerCase() === 'torrent#19@fit1'
+          );
         }
       }
     } catch (fsErr) {
-      console.warn('[Admin Auth] Firestore read warning:', fsErr);
+      console.warn('[Admin Auth] Firestore read warning (checking local storage fallback):', fsErr);
     }
 
-    // 3. If no custom password hash is saved either locally or in Firestore, validate default bootstrap password
+    // 2. Offline / Network error fallback: Check local storage
+    try {
+      const localCustomHash = localStorage.getItem('master_admin_password_hash') || sessionStorage.getItem('master_admin_password_hash');
+      if (localCustomHash) {
+        return await verifyClientPassword(cleanInput, localCustomHash);
+      }
+    } catch {}
+
+    // 3. Initial Default Bootstrap Password (only if neither Firestore nor localStorage has any custom password)
     const isDefaultMatch =
       cleanInput === 'torrent#19@fit1' ||
-      cleanInput === 'Torrent#19@Fit1' ||
       cleanInput.toLowerCase() === 'torrent#19@fit1';
 
     if (isDefaultMatch) {
@@ -1874,7 +1880,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.warn('[Admin Auth] Local save warning:', lsErr);
       }
 
-      // 6. Overwrite Firestore system_settings/master_admin_auth as best effort
+      // 6. Overwrite Firestore system_settings/master_admin_auth permanently
       try {
         await withTimeout(
           setDoc(
@@ -1883,11 +1889,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               passwordHash: newHash,
               hasCustomPassword: true,
               updatedAt: now,
+              updatedTimestamp: serverTimestamp(),
               officialEmail: 'torrentfitness1@gmail.com',
               updatedBy: 'Master Admin'
-            }
+            },
+            { merge: true }
           ),
-          3000
+          4000
         ).catch((e) => console.warn('[Admin Auth] Firestore master_admin_auth write note:', e));
       } catch {}
 

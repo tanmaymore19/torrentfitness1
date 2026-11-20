@@ -463,18 +463,41 @@ export async function getPaymentGateways(): Promise<PaymentGateway[]> {
       let merged: PaymentGateway;
 
       if (matches.length === 0) {
-        // Doc didn't exist; seed canonical doc with empty credentials
+        // Doc didn't exist in paymentGateways; check settings/payment_gateway or gym_config/payment_gateways before defaulting to empty
+        let existingKeyId = '';
+        let existingKeySecret = '';
+        try {
+          const setSnap = await getDoc(doc(db, 'settings', 'payment_gateway')).catch(() => null);
+          if (setSnap?.exists()) {
+            const sd = setSnap.data() as any;
+            if (sd.provider === prov || (!sd.provider && prov === 'razorpay')) {
+              existingKeyId = sd.keyId || sd.appKeyId || '';
+              existingKeySecret = sd.keySecret || sd.appKeySecret || '';
+            }
+          }
+          if (!existingKeyId) {
+            const cfgSnap = await getDoc(doc(db, 'gym_config', 'payment_gateways')).catch(() => null);
+            if (cfgSnap?.exists()) {
+              const cd = cfgSnap.data() as any;
+              if (cd.provider === prov || (!cd.provider && prov === 'razorpay')) {
+                existingKeyId = cd.keyId || cd.appKeyId || '';
+                existingKeySecret = cd.keySecret || cd.appKeySecret || '';
+              }
+            }
+          }
+        } catch {}
+
         merged = {
           ...defaultTemplate,
           id: canonicalId,
-          keyId: '',
-          keySecret: '',
-          appKeyId: '',
-          appKeySecret: '',
+          keyId: existingKeyId,
+          keySecret: existingKeySecret,
+          appKeyId: existingKeyId,
+          appKeySecret: existingKeySecret,
           isEnabled: prov === primaryActiveProvider,
           isDefault: prov === primaryActiveProvider
         };
-        await setDoc(doc(db, 'paymentGateways', canonicalId), merged);
+        await setDoc(doc(db, 'paymentGateways', canonicalId), merged, { merge: true });
       } else {
         // Pick best doc (prefer canonical ID or one with credentials)
         const canonicalDoc = matches.find(m => m.id === canonicalId) || matches[0];
@@ -1431,13 +1454,18 @@ export async function verifyAndActivateOnlinePayment(
       clientProfileUpdates = sanitizeFirestorePayload({
         userId: input.clientId,
         displayName: input.clientName,
-        membershipStatus: 'active',
+        membershipStatus: 'ACTIVE',
+        currentPlan: input.planName || input.itemTitle,
         membershipPlan: input.planName || input.itemTitle,
         membershipPlanId: input.planId || 'custom',
         membershipPlanName: input.planName || input.itemTitle,
+        planStartDate: effectiveStartDate,
         membershipStartDate: effectiveStartDate,
+        planExpiryDate: effectiveEndDate,
         membershipEndDate: effectiveEndDate,
         membershipExpiryDate: effectiveEndDate,
+        lastPaymentId: cleanPaymentId,
+        pendingMembershipRequest: false,
         offlineRequestStatus: 'none',
         pendingOfflineRequestId: '',
         offlineRejectionReason: '',
@@ -1455,21 +1483,30 @@ export async function verifyAndActivateOnlinePayment(
       merge: true
     });
 
-    // Also sync top-level user document with ACTIVE status and expiry dates if newly active
+    // Also sync members & top-level user document with ACTIVE status and expiry dates if newly active
     if (memStatus === 'active') {
       try {
-        await setDoc(
-          doc(db, 'users', input.clientId),
-          sanitizeFirestorePayload({
-            membershipStatus: 'ACTIVE',
-            membershipPlan: input.planName || input.itemTitle,
-            membershipStartDate: effectiveStartDate,
-            membershipExpiryDate: effectiveEndDate
-          }),
-          { merge: true }
-        );
+        const syncPayload = sanitizeFirestorePayload({
+          membershipStatus: 'ACTIVE',
+          currentPlan: input.planName || input.itemTitle,
+          membershipPlan: input.planName || input.itemTitle,
+          membershipPlanName: input.planName || input.itemTitle,
+          membershipPlanId: input.planId || 'custom',
+          planStartDate: effectiveStartDate,
+          membershipStartDate: effectiveStartDate,
+          planExpiryDate: effectiveEndDate,
+          membershipEndDate: effectiveEndDate,
+          membershipExpiryDate: effectiveEndDate,
+          lastPaymentId: cleanPaymentId,
+          pendingMembershipRequest: false
+        });
+
+        await Promise.allSettled([
+          setDoc(doc(db, 'members', input.clientId), syncPayload, { merge: true }),
+          setDoc(doc(db, 'users', input.clientId), syncPayload, { merge: true })
+        ]);
       } catch (userSyncErr) {
-        console.warn('Could not sync users doc membership fields:', userSyncErr);
+        console.warn('Could not sync members/users doc membership fields:', userSyncErr);
       }
     }
   } else if (input.purpose === 'aerobics') {
@@ -1649,6 +1686,20 @@ export async function submitOfflinePaymentRequest(
     await setDoc(doc(db, 'memberships', memId), membershipRecord);
   }
 
+  let isCurrentlyActive = false;
+  try {
+    const clientSnap = await getDoc(doc(db, 'clientProfiles', input.clientId)).catch(() => null);
+    if (clientSnap?.exists()) {
+      const cData = clientSnap.data();
+      const curStatus = String(cData.membershipStatus || '').toLowerCase();
+      const curExpiry = cData.membershipEndDate || cData.membershipExpiryDate || cData.planExpiryDate || '';
+      const todayStr = new Date().toISOString().split('T')[0];
+      if (curStatus === 'active' && curExpiry && curExpiry >= todayStr) {
+        isCurrentlyActive = true;
+      }
+    }
+  } catch {}
+
   const transaction: PaymentTransaction = sanitizeFirestorePayload({
     id: txId,
     receiptNumber,
@@ -1691,21 +1742,60 @@ export async function submitOfflinePaymentRequest(
     createdAt: nowIso
   });
 
-  await setDoc(doc(db, 'paymentTransactions', txId), transaction);
+  const membershipRequestDoc = sanitizeFirestorePayload({
+    id: txId,
+    requestId: txId,
+    transactionId: txId,
+    referenceId: refId,
+    receiptNumber,
+    status: 'PENDING',
+    paymentMode: 'OFFLINE_CASH',
+    paymentStatus: 'PENDING_CASH_CONFIRMATION',
+    clientId: input.clientId,
+    clientName: input.clientName,
+    clientPhone: input.clientPhone || '',
+    clientEmail: input.clientEmail || '',
+    planId: input.planId || '',
+    planName: input.planName,
+    durationMonths: input.durationMonths,
+    amount: enforcedFinal,
+    originalPrice: input.originalPrice,
+    couponCode: input.couponCode || '',
+    discountAmount: enforcedDiscount,
+    discountPercent: input.discountPercent || 0,
+    ptIncluded: Boolean(input.ptIncluded),
+    ptTrainerId: input.ptTrainerId || '',
+    ptTrainerName: input.ptTrainerName || '',
+    requestedAt: nowIso,
+    createdAt: nowIso,
+    updatedAt: nowIso
+  });
 
-  // Mark client profile as having a pending offline verification request (membership stays inactive/locked until approved)
+  // Permanently record offline request across financial and membership approval collections
+  await Promise.allSettled([
+    setDoc(doc(db, 'membership_requests', txId), membershipRequestDoc),
+    setDoc(doc(db, 'membershipRequests', txId), membershipRequestDoc),
+    setDoc(doc(db, 'paymentTransactions', txId), transaction),
+    setDoc(doc(db, 'transactions', txId), transaction)
+  ]);
+
+  // Mark client profile and members record as having a pending offline request
+  // Membership strictly remains INACTIVE (or unchanged if renewing active) until Admin manually approves
   try {
-    await setDoc(
-      doc(db, 'clientProfiles', input.clientId),
-      {
-        pendingOfflineRequestId: txId,
-        offlineRequestStatus: 'pending',
-        offlineRejectionReason: ''
-      },
-      { merge: true }
-    );
+    const pendingUpdates = sanitizeFirestorePayload({
+      pendingMembershipRequest: true,
+      pendingOfflineRequestId: txId,
+      offlineRequestStatus: 'pending',
+      offlineRejectionReason: '',
+      membershipStatus: isCurrentlyActive ? 'active' : 'inactive'
+    });
+
+    await Promise.allSettled([
+      setDoc(doc(db, 'clientProfiles', input.clientId), pendingUpdates, { merge: true }),
+      setDoc(doc(db, 'members', input.clientId), pendingUpdates, { merge: true })
+    ]);
   } catch (e) {
-    console.warn('Could not update clientProfile pending status:', e);
+    console.warn('Could not update clientProfile/members pending status:', e);
   }
 
   return { transaction, membershipRecord };
@@ -1924,13 +2014,18 @@ export async function approveOfflinePaymentRequest(
       });
     } else {
       clientUpdates = sanitizeFirestorePayload({
-        membershipStatus: 'active',
+        membershipStatus: 'ACTIVE',
+        currentPlan: tx.planName || tx.itemTitle,
         membershipPlan: tx.planName || tx.itemTitle,
         membershipPlanId: tx.planId || 'custom',
         membershipPlanName: tx.planName || tx.itemTitle,
         membershipStartDate: effectiveStartDate,
+        planStartDate: effectiveStartDate,
         membershipEndDate: effectiveEndDate,
         membershipExpiryDate: effectiveEndDate,
+        planExpiryDate: effectiveEndDate,
+        lastPaymentId: approvedRefId,
+        pendingMembershipRequest: false,
         offlineRequestStatus: 'approved',
         pendingOfflineRequestId: '',
         offlineRejectionReason: '',
@@ -1948,18 +2043,31 @@ export async function approveOfflinePaymentRequest(
 
     if (memStatus === 'active') {
       try {
-        await setDoc(
-          doc(db, 'users', tx.clientId),
-          sanitizeFirestorePayload({
-            membershipStatus: 'ACTIVE',
-            membershipPlan: tx.planName || tx.itemTitle,
-            membershipStartDate: effectiveStartDate,
-            membershipExpiryDate: effectiveEndDate
-          }),
-          { merge: true }
-        );
+        const approvedMemberPayload = sanitizeFirestorePayload({
+          membershipStatus: 'ACTIVE',
+          currentPlan: tx.planName || tx.itemTitle,
+          membershipPlan: tx.planName || tx.itemTitle,
+          membershipPlanName: tx.planName || tx.itemTitle,
+          membershipPlanId: tx.planId || 'custom',
+          planStartDate: effectiveStartDate,
+          membershipStartDate: effectiveStartDate,
+          planExpiryDate: effectiveEndDate,
+          membershipEndDate: effectiveEndDate,
+          membershipExpiryDate: effectiveEndDate,
+          lastPaymentId: approvedRefId,
+          pendingMembershipRequest: false,
+          offlineRequestStatus: 'approved'
+        });
+
+        await Promise.allSettled([
+          setDoc(doc(db, 'members', tx.clientId), approvedMemberPayload, { merge: true }),
+          setDoc(doc(db, 'users', tx.clientId), approvedMemberPayload, { merge: true }),
+          setDoc(doc(db, 'membership_requests', transactionId), { status: 'APPROVED', approvedAt: nowIso }, { merge: true }),
+          setDoc(doc(db, 'membershipRequests', transactionId), { status: 'APPROVED', approvedAt: nowIso }, { merge: true }),
+          setDoc(doc(db, 'transactions', transactionId), { status: 'success', verificationStatus: 'ACTIVE', approvedAt: nowIso }, { merge: true })
+        ]);
       } catch (e) {
-        console.warn('Could not sync users doc on offline approval:', e);
+        console.warn('Could not sync members/users doc on offline approval:', e);
       }
     }
   } else if (tx.purpose === 'aerobics') {
