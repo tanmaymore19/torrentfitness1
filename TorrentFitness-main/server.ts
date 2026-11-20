@@ -502,7 +502,15 @@ async function startServer() {
       const userRef = doc(db, 'users', cleanUser);
       const existing = await getDoc(userRef).catch(() => null);
       if (existing?.exists()) {
-        return res.status(400).json({ success: false, error: `Username "${username}" is already taken. Please choose another.` });
+        const uData = existing.data() as any;
+        const isDeleted =
+          uData?.status === 'deleted' ||
+          uData?.isSelfDeleted === true ||
+          !!uData?.deletedAt ||
+          uData?.status === 'inactive_deleted';
+        if (!isDeleted) {
+          return res.status(400).json({ success: false, error: `Username "${username}" is already taken. Please choose another.` });
+        }
       }
 
       const formattedPhone = `+91 ${cleanPhone.slice(-10)}`;
@@ -595,7 +603,14 @@ async function startServer() {
       const userRef = doc(db, 'users', cleanUser);
       const existing = await getDoc(userRef).catch(() => null);
       if (existing?.exists()) {
-        return res.status(400).json({ success: false, error: `Trainer ID "${cleanUser}" is already taken.` });
+        const uData = existing.data() as any;
+        const isDeleted =
+          uData?.status === 'deleted' ||
+          uData?.isSelfDeleted === true ||
+          !!uData?.deletedAt;
+        if (!isDeleted) {
+          return res.status(400).json({ success: false, error: `Trainer ID "${cleanUser}" is already taken.` });
+        }
       }
 
       const formattedPhone = `+91 ${cleanPhone.slice(-10)}`;

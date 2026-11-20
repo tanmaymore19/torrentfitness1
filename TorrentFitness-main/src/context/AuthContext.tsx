@@ -773,12 +773,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.warn('Server signup API notice, using direct persistence fallback:', apiErr);
       }
 
-      // 2. Direct Firestore fallback
+      // 2. Direct Firestore fallback with deleted account reclamation
       const userRef = doc(db, 'users', cleanUser);
-      const exists = await getDoc(userRef);
-      if (exists.exists()) {
-        throw new Error(`Username "${username}" is already taken. Please choose another.`);
+      const exists = await getDoc(userRef).catch(() => null);
+      if (exists?.exists()) {
+        const uData = exists.data() as any;
+        const isDeleted =
+          uData?.status === 'deleted' ||
+          uData?.isSelfDeleted === true ||
+          !!uData?.deletedAt ||
+          uData?.status === 'inactive_deleted';
+        if (!isDeleted) {
+          throw new Error(`Username "${username}" is already taken. Please choose another.`);
+        }
       }
+
+      // Check if any other active document in users has this username
+      try {
+        const qUsers = query(collection(db, 'users'), where('username', '==', cleanUser));
+        const qSnap = await getDocs(qUsers);
+        const activeDoc = qSnap.docs.find((d) => {
+          const dData = d.data() as any;
+          return !(dData?.status === 'deleted' || dData?.isSelfDeleted === true || !!dData?.deletedAt);
+        });
+        if (activeDoc && activeDoc.id !== cleanUser) {
+          throw new Error(`Username "${username}" is already taken. Please choose another.`);
+        }
+      } catch {}
+
+      // Reclaim usernames doc and delete any old tombstone
+      try {
+        await setDoc(doc(db, 'usernames', cleanUser), {
+          uid: cleanUser,
+          username: cleanUser,
+          role: 'client',
+          claimedAt: new Date().toISOString()
+        }, { merge: true });
+        await deleteDoc(doc(db, 'deleted_users', cleanUser)).catch(() => {});
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem(`tf_deleted_${cleanUser}`);
+          sessionStorage.removeItem(`tf_deleted_${cleanUser}`);
+        }
+      } catch {}
 
       const formattedPhone = `+91 ${cleanPhone.slice(-10)}`;
       const newUser: UserAccount = {
@@ -894,12 +930,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.warn('Server trainer signup API notice, using direct persistence fallback:', apiErr);
       }
 
-      // 2. Direct Firestore Fallback
+      // 2. Direct Firestore Fallback with deleted trainer reclamation
       const userRef = doc(db, 'users', cleanUser);
-      const exists = await getDoc(userRef);
-      if (exists.exists() && exists.data()?.status === 'active') {
-        throw new Error(`Trainer Username "${cleanUser}" is already registered. Please choose another ID or switch to Log In.`);
+      const exists = await getDoc(userRef).catch(() => null);
+      if (exists?.exists()) {
+        const uData = exists.data() as any;
+        const isDeleted =
+          uData?.status === 'deleted' ||
+          uData?.isSelfDeleted === true ||
+          !!uData?.deletedAt;
+        if (!isDeleted && uData?.status === 'active') {
+          throw new Error(`Trainer Username "${cleanUser}" is already registered. Please choose another ID or switch to Log In.`);
+        }
       }
+
+      try {
+        const qUsers = query(collection(db, 'users'), where('username', '==', cleanUser));
+        const qSnap = await getDocs(qUsers);
+        const activeDoc = qSnap.docs.find((d) => {
+          const dData = d.data() as any;
+          return !(dData?.status === 'deleted' || dData?.isSelfDeleted === true || !!dData?.deletedAt);
+        });
+        if (activeDoc && activeDoc.id !== cleanUser && (activeDoc.data() as any)?.status === 'active') {
+          throw new Error(`Trainer Username "${cleanUser}" is already registered. Please choose another ID or switch to Log In.`);
+        }
+      } catch {}
+
+      try {
+        await setDoc(doc(db, 'usernames', cleanUser), {
+          uid: cleanUser,
+          username: cleanUser,
+          role: 'trainer',
+          claimedAt: new Date().toISOString()
+        }, { merge: true });
+        await deleteDoc(doc(db, 'deleted_users', cleanUser)).catch(() => {});
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem(`tf_deleted_${cleanUser}`);
+          sessionStorage.removeItem(`tf_deleted_${cleanUser}`);
+        }
+      } catch {}
 
       const formattedPhone = `+91 ${cleanPhone.slice(-10)}`;
       const cleanGender = gender.trim();

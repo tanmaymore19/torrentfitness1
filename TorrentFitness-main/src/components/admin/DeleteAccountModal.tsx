@@ -113,8 +113,27 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
         }
       };
 
-      // Base user document
+      // Base user document across all potential keys
       addDocToDelete(doc(db, 'users', uid));
+      if (cleanUsername) addDocToDelete(doc(db, 'users', cleanUsername));
+      if (registeredUsername) addDocToDelete(doc(db, 'users', registeredUsername));
+
+      // Always remove from ALL collections (users, members, clientProfiles, trainers, trainerProfiles)
+      addDocToDelete(doc(db, 'clientProfiles', uid));
+      if (cleanUsername) addDocToDelete(doc(db, 'clientProfiles', cleanUsername));
+      if (registeredUsername) addDocToDelete(doc(db, 'clientProfiles', registeredUsername));
+
+      addDocToDelete(doc(db, 'members', uid));
+      if (cleanUsername) addDocToDelete(doc(db, 'members', cleanUsername));
+      if (registeredUsername) addDocToDelete(doc(db, 'members', registeredUsername));
+
+      addDocToDelete(doc(db, 'trainers', uid));
+      if (cleanUsername) addDocToDelete(doc(db, 'trainers', cleanUsername));
+      if (registeredUsername) addDocToDelete(doc(db, 'trainers', registeredUsername));
+
+      addDocToDelete(doc(db, 'trainerProfiles', uid));
+      if (cleanUsername) addDocToDelete(doc(db, 'trainerProfiles', cleanUsername));
+      if (registeredUsername) addDocToDelete(doc(db, 'trainerProfiles', registeredUsername));
 
       // Query any other matching docs in users
       try {
@@ -124,6 +143,10 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
           const uQueryName = await getDocs(query(collection(db, 'users'), where('username', '==', cleanUsername)));
           uQueryName.forEach(d => addDocToDelete(d.ref));
         }
+        if (registeredUsername && registeredUsername !== cleanUsername) {
+          const uQueryReg = await getDocs(query(collection(db, 'users'), where('username', '==', registeredUsername)));
+          uQueryReg.forEach(d => addDocToDelete(d.ref));
+        }
       } catch (err) {
         console.warn('Query users note:', err);
       }
@@ -132,30 +155,43 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
       if (cleanUsername) {
         addDocToDelete(doc(db, 'usernames', cleanUsername));
       }
-      if (registeredUsername && registeredUsername.toLowerCase().trim() !== cleanUsername) {
+      if (rawUsername) {
+        addDocToDelete(doc(db, 'usernames', rawUsername));
+      }
+      if (registeredUsername) {
+        addDocToDelete(doc(db, 'usernames', registeredUsername));
         addDocToDelete(doc(db, 'usernames', registeredUsername.toLowerCase().trim()));
       }
-      if (uid.toLowerCase() !== cleanUsername) {
-        addDocToDelete(doc(db, 'usernames', uid.toLowerCase().trim()));
+      addDocToDelete(doc(db, 'usernames', uid));
+      addDocToDelete(doc(db, 'usernames', uid.toLowerCase().trim()));
+
+      // Query usernames collection to find any matching docs
+      try {
+        const unQueries = [
+          query(collection(db, 'usernames'), where('uid', '==', uid)),
+          query(collection(db, 'usernames'), where('username', '==', cleanUsername))
+        ];
+        if (registeredUsername && registeredUsername !== cleanUsername) {
+          unQueries.push(query(collection(db, 'usernames'), where('username', '==', registeredUsername)));
+        }
+        if (rawUsername && rawUsername !== cleanUsername) {
+          unQueries.push(query(collection(db, 'usernames'), where('username', '==', rawUsername)));
+        }
+        for (const q of unQueries) {
+          const s = await getDocs(q);
+          s.forEach(d => addDocToDelete(d.ref));
+        }
+      } catch (err) {
+        console.warn('Query usernames cleanup note:', err);
       }
+
+      // Remove any tombstone records so the username can be reused immediately
+      addDocToDelete(doc(db, 'deleted_users', uid));
+      if (cleanUsername) addDocToDelete(doc(db, 'deleted_users', cleanUsername));
+      if (registeredUsername) addDocToDelete(doc(db, 'deleted_users', registeredUsername));
 
       // Initialize atomic batch
       const batch = writeBatch(db);
-
-      // Audit tombstone record in deleted_users so background seed scripts never revive this account
-      const tombstoneRef = doc(db, 'deleted_users', uid);
-      batch.set(
-        tombstoneRef,
-        {
-          uid,
-          role: target.role,
-          displayName: target.displayName || '',
-          email: target.email || '',
-          deletedAt: new Date().toISOString(),
-          deletedBy: 'admintorrentfitness1'
-        },
-        { merge: true }
-      );
 
       // Handle Role-Specific Deletion & Reference Cleanup
       if (target.role === 'client') {
@@ -278,13 +314,17 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
         }
       }
 
-      // 4. Update localStorage tombstones so client-side cache and reloads never revive
+      // 4. Clear any local storage tombstones so immediate reuse of the username is permitted
       if (typeof window !== 'undefined') {
         try {
-          localStorage.setItem(`tf_deleted_${uid}`, 'true');
-          sessionStorage.setItem(`tf_deleted_${uid}`, 'true');
+          localStorage.removeItem(`tf_deleted_${uid}`);
+          sessionStorage.removeItem(`tf_deleted_${uid}`);
+          if (cleanUsername) {
+            localStorage.removeItem(`tf_deleted_${cleanUsername}`);
+            sessionStorage.removeItem(`tf_deleted_${cleanUsername}`);
+          }
           if (uid === 'tanmay1_19') {
-            localStorage.setItem('tf_deleted_tanmay1_19', 'true');
+            localStorage.removeItem('tf_deleted_tanmay1_19');
           }
         } catch {}
       }

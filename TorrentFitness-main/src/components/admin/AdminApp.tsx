@@ -1178,210 +1178,148 @@ export const AdminApp: React.FC = () => {
 
   // PT Request Approval/Rejection with Atomic Multi-Collection Sync
   const handleUpdatePtRequestStatus = async (req: PtRequest, status: 'accepted' | 'rejected') => {
-    try {
-      const nowIso = new Date().toISOString();
-      const trId = req.trainerId || (req as any).requestedTrainerId || '';
-      const trName = (req as any).requestedTrainerName || req.trainerName || 'Trainer';
-      const durationMonths = Number((req as any).durationMonths) || 1;
-      const startDate = new Date();
-      const expiryDate = new Date();
-      expiryDate.setMonth(expiryDate.getMonth() + durationMonths);
-      const ptStartDate = startDate.toISOString().split('T')[0];
-      const ptExpiryDate = expiryDate.toISOString().split('T')[0];
-      const recAmount = Number((req as any).amount || req.fee || 3500);
-
-      if (status === 'accepted') {
-        const batch = writeBatch(db);
-        const reqUpdates = {
-          status: 'APPROVED',
-          paidStatus: 'paid',
-          paymentStatus: 'paid',
-          assignedTrainerId: trId,
-          assignedTrainerName: trName,
-          approvedAt: serverTimestamp(),
-          updatedAt: nowIso
-        };
-
-        batch.set(doc(db, 'ptRequests', req.id), reqUpdates, { merge: true });
-        batch.set(doc(db, 'pt_requests', req.id), reqUpdates, { merge: true });
-
-        batch.set(
-          doc(db, 'clientProfiles', req.clientId),
-          {
-            assignedTrainerId: trId,
-            assignedTrainerName: trName,
-            ptStatus: 'ACTIVE',
-            ptApprovedByAdmin: true,
-            pendingPtRequestId: null,
-            ptStartDate,
-            ptExpiryDate,
-            updatedAt: nowIso
-          },
-          { merge: true }
-        );
-
-        batch.set(
-          doc(db, 'members', req.clientId),
-          {
-            assignedTrainerId: trId,
-            assignedTrainerName: trName,
-            ptStatus: 'ACTIVE',
-            ptApprovedByAdmin: true,
-            ptStartDate,
-            ptExpiryDate,
-            updatedAt: nowIso
-          },
-          { merge: true }
-        );
-
-        if (trId) {
-          batch.set(
-            doc(db, 'trainers', trId),
-            {
-              assignedClients: arrayUnion(req.clientId),
-              assignedClientIds: arrayUnion(req.clientId),
-              updatedAt: nowIso
-            },
-            { merge: true }
-          );
-          batch.set(
-            doc(db, 'trainerProfiles', trId),
-            {
-              assignedClients: arrayUnion(req.clientId),
-              assignedClientIds: arrayUnion(req.clientId),
-              updatedAt: nowIso
-            },
-            { merge: true }
-          );
-        }
-
-        // Log offline transaction into transactions and paymentTransactions
-        const txId = (req as any).transactionId || `tx_pt_${req.id}_${Date.now()}`;
-        const receiptNo = `REC-PT-${Date.now().toString().slice(-6)}`;
-        const txRecord = {
-          id: txId,
-          transactionId: txId,
-          receiptNumber: receiptNo,
-          clientId: req.clientId,
-          clientName: req.clientName || 'Client',
-          clientPhone: (req as any).clientPhone || '',
-          amount: recAmount,
-          finalAmount: recAmount,
-          originalAmount: recAmount,
-          discountAmount: 0,
-          purpose: 'personal_training',
-          itemTitle: (req as any).planName || 'Personal Training',
-          planName: (req as any).planName || 'Personal Training',
-          paymentMode: (req.paymentMode === 'online' ? 'online' : 'cash'),
-          status: 'paid',
-          paymentStatus: 'paid',
-          verificationStatus: 'VERIFIED',
-          createdAt: nowIso,
-          paidAt: nowIso,
-          trainerId: trId,
-          trainerName: trName,
-          approvedBy: 'Master Admin'
-        };
-        batch.set(doc(db, 'transactions', txId), txRecord, { merge: true });
-        batch.set(doc(db, 'paymentTransactions', txId), txRecord, { merge: true });
-
-        await batch.commit();
-
-        setPtRequests((prev) =>
-          prev.map((r) =>
-            r.id === req.id
-              ? { ...r, status: 'APPROVED', assignedTrainerId: trId, assignedTrainerName: trName, paidStatus: 'paid' } as any
-              : r
-          )
-        );
-
-        setClients((prev) =>
-          prev.map((c) =>
-            c.userId === req.clientId
-              ? { ...c, assignedTrainerId: trId, assignedTrainerName: trName, ptStatus: 'active' }
-              : c
-          )
-        );
-        showAdminNotice(`PT request APPROVED & Coach ${trName} linked!`, 'success');
-      } else {
-        const batch = writeBatch(db);
-        const reqUpdates = { status: 'REJECTED', updatedAt: nowIso };
-        batch.set(doc(db, 'ptRequests', req.id), reqUpdates, { merge: true });
-        batch.set(doc(db, 'pt_requests', req.id), reqUpdates, { merge: true });
-        batch.set(doc(db, 'clientProfiles', req.clientId), { ptStatus: 'NONE', pendingPtRequestId: null, updatedAt: nowIso }, { merge: true });
-        batch.set(doc(db, 'members', req.clientId), { ptStatus: 'NONE', pendingPtRequestId: null, updatedAt: nowIso }, { merge: true });
-        await batch.commit();
-
-        setPtRequests((prev) =>
-          prev.map((r) =>
-            r.id === req.id
-              ? { ...r, status: 'REJECTED' } as any
-              : r
-          )
-        );
-        showAdminNotice('PT request REJECTED.', 'info');
-      }
-    } catch (err: any) {
-      alert('Error updating PT request: ' + err.message);
-      showAdminNotice('Error updating PT request: ' + err.message, 'error');
+    if (status === 'accepted') {
+      return handleVerifyCashAndAssignPtDirect(req);
+    } else {
+      return handleDeclinePtRequestDirect(req);
     }
   };
 
-  // 1-Click Offline Cash Verification & Coach Assignment for High-Priority Action Queue
+  // 1-Click Offline Cash Verification & Coach Assignment for High-Priority Action Queue & PT Tables
   const handleVerifyCashAndAssignPtDirect = async (req: PtRequest) => {
     if (!req) return;
-    const reqId = req.id || (req as any).requestId;
+    const reqId = req.id || (req as any).requestId || (req as any).transactionId || '';
     if (!reqId) {
       alert('Error: Request ticket ID is missing.');
       return;
     }
 
-    // Resolve client UID safely
-    let clientId = req.clientId || (req as any).userId || (req as any).uid || '';
-    if (!clientId && req.clientName) {
-      const matchedClient = clients.find(
-        (c) =>
-          c.displayName.toLowerCase() === req.clientName.toLowerCase() ||
-          c.fullName?.toLowerCase() === req.clientName.toLowerCase()
-      );
-      if (matchedClient) clientId = matchedClient.userId;
-    }
-
-    if (!clientId) {
-      alert('Error: Client record could not be resolved for this request ticket.');
-      return;
-    }
-
-    // Resolve trainer UID safely
-    let trId = (req as any).requestedTrainerId || req.trainerId || '';
-    let trName = (req as any).requestedTrainerName || req.trainerName || 'Coach';
-
-    if (!trId && trName) {
-      const matchedTrainer = safeTrainers.find(
-        (t) =>
-          t.fullName.toLowerCase() === trName.toLowerCase() ||
-          t.displayName.toLowerCase() === trName.toLowerCase() ||
-          t.username.toLowerCase() === trName.toLowerCase()
-      );
-      if (matchedTrainer) {
-        trId = matchedTrainer.trainerId || matchedTrainer.id;
-        trName = matchedTrainer.fullName || matchedTrainer.displayName;
-      }
-    }
-
     setPtActionProcessingId(reqId);
     try {
+      // 1. Resolve client UID safely
+      let clientId = req.clientId || (req as any).userId || (req as any).uid || (req as any).memberId || '';
+      const rawClientUsername = String((req as any).clientUsername || (req as any).username || '').replace(/^@/, '').trim();
+      const rawClientName = String(req.clientName || '').trim();
+
+      if (!clientId) {
+        const matchedClient = clients.find(
+          (c) =>
+            (rawClientUsername && (
+              c.username?.toLowerCase() === rawClientUsername.toLowerCase() ||
+              c.userId?.toLowerCase() === rawClientUsername.toLowerCase()
+            )) ||
+            (rawClientName && (
+              c.displayName?.toLowerCase() === rawClientName.toLowerCase() ||
+              c.fullName?.toLowerCase() === rawClientName.toLowerCase()
+            ))
+        );
+        if (matchedClient) clientId = matchedClient.userId;
+      }
+
+      if (!clientId && allUsers.length > 0) {
+        const matchedUser = allUsers.find(
+          (u) =>
+            (rawClientUsername && (
+              u.username?.toLowerCase() === rawClientUsername.toLowerCase() ||
+              u.uid?.toLowerCase() === rawClientUsername.toLowerCase()
+            )) ||
+            (rawClientName && (
+              u.displayName?.toLowerCase() === rawClientName.toLowerCase() ||
+              (u as any).fullName?.toLowerCase() === rawClientName.toLowerCase()
+            ))
+        );
+        if (matchedUser) clientId = matchedUser.uid;
+      }
+
+      if (!clientId && rawClientUsername) {
+        try {
+          const uSnap = await getDoc(doc(db, 'users', rawClientUsername));
+          if (uSnap.exists()) clientId = uSnap.id;
+        } catch {}
+        if (!clientId) {
+          try {
+            const uSnap2 = await getDoc(doc(db, 'clientProfiles', rawClientUsername));
+            if (uSnap2.exists()) clientId = uSnap2.id;
+          } catch {}
+        }
+        if (!clientId) {
+          try {
+            const unSnap = await getDoc(doc(db, 'usernames', rawClientUsername));
+            if (unSnap.exists()) {
+              const unData = unSnap.data() as any;
+              if (unData?.uid) clientId = unData.uid;
+            }
+          } catch {}
+        }
+        if (!clientId) {
+          try {
+            const q = query(collection(db, 'users'), where('username', '==', rawClientUsername), limit(1));
+            const qs = await getDocs(q);
+            if (!qs.empty) clientId = qs.docs[0].id;
+          } catch {}
+        }
+      }
+
+      if (!clientId && rawClientName) {
+        try {
+          const q = query(collection(db, 'users'), where('displayName', '==', rawClientName), limit(1));
+          const qs = await getDocs(q);
+          if (!qs.empty) clientId = qs.docs[0].id;
+        } catch {}
+      }
+
+      if (!clientId) {
+        clientId = rawClientUsername || reqId;
+      }
+
+      // 2. Resolve trainer UID & Trainer Name safely
+      let trId = (req as any).requestedTrainerId || req.trainerId || '';
+      let trName = (req as any).requestedTrainerName || req.trainerName || '';
+
+      if (!trId || !trName) {
+        const searchTrainerName = (trName || (req as any).requestedTrainerName || req.trainerName || '').toLowerCase().trim();
+        const matchedTrainer = safeTrainers.find((t) =>
+          (searchTrainerName && (
+            t.fullName.toLowerCase() === searchTrainerName ||
+            t.displayName.toLowerCase() === searchTrainerName ||
+            t.username.toLowerCase() === searchTrainerName
+          )) ||
+          (trId && (t.trainerId === trId || t.id === trId))
+        );
+        if (matchedTrainer) {
+          trId = matchedTrainer.trainerId || matchedTrainer.id;
+          trName = matchedTrainer.fullName || matchedTrainer.displayName;
+        }
+      }
+
+      if (!trId && trName) {
+        try {
+          const q = query(collection(db, 'trainers'), where('fullName', '==', trName), limit(1));
+          const qs = await getDocs(q);
+          if (!qs.empty) {
+            trId = qs.docs[0].id;
+            trName = (qs.docs[0].data() as any).fullName || trName;
+          }
+        } catch {}
+      }
+
+      if (!trId && safeTrainers.length > 0) {
+        trId = safeTrainers[0].trainerId || safeTrainers[0].id;
+        trName = safeTrainers[0].fullName || safeTrainers[0].displayName || 'Dedicated Coach';
+      }
+      if (!trName) trName = 'Dedicated Coach';
+
       const nowIso = new Date().toISOString();
       const todayDate = nowIso.split('T')[0];
       const durationMonths = Number((req as any).durationMonths) || 1;
       const expDate = new Date();
       expDate.setMonth(expDate.getMonth() + durationMonths);
-      const ptExpiryDate = expDate.toISOString().split('T')[0];
-      const recAmount = Number((req as any).amount || req.fee || 3500);
+      const calculatedExpiryISO = expDate.toISOString().split('T')[0];
+      const recAmount = Number((req as any).amount || req.fee || (req as any).finalAmount || 3500);
 
       const batch = writeBatch(db);
 
-      // 1. Update pt_requests and legacy ptRequests
+      // (A) Update pt_requests and legacy ptRequests
       const reqUpdates = {
         status: 'APPROVED',
         paymentStatus: 'PAID',
@@ -1394,28 +1332,81 @@ export const AdminApp: React.FC = () => {
         trainerId: trId,
         trainerName: trName,
         approvedAt: serverTimestamp(),
+        verifiedAt: serverTimestamp(),
+        verifiedByAdmin: true,
+        rejectionSeenByClient: false,
         updatedAt: nowIso
       };
 
       batch.set(doc(db, 'pt_requests', reqId), reqUpdates, { merge: true });
       batch.set(doc(db, 'ptRequests', reqId), reqUpdates, { merge: true });
 
-      // 2. Update clientProfiles and members
-      const clientUpdates = {
-        ptStatus: 'ACTIVE',
-        assignedTrainerId: trId,
-        assignedTrainerName: trName,
-        ptApprovedByAdmin: true,
-        ptStartDate: todayDate,
-        ptExpiryDate: ptExpiryDate,
-        pendingPtRequestId: null,
-        updatedAt: nowIso
+      // (B) Update/Create transactions/{txnId} and paymentTransactions/{txnId}
+      const txnId = (req as any).transactionId || (reqId.startsWith('txn_') ? reqId : `txn_cash_${Date.now()}_${Math.floor(Math.random() * 1000)}`);
+      const receiptNumber = (req as any).receiptNumber || `REC-PT-${Date.now().toString().slice(-6)}`;
+      const txRecord = {
+        id: txnId,
+        transactionId: txnId,
+        receiptNumber,
+        referenceId: (req as any).referenceId || (req as any).transactionId || receiptNumber,
+        clientId,
+        clientName: req.clientName || 'Member',
+        clientPhone: (req as any).clientPhone || '',
+        purpose: 'personal_training',
+        itemTitle: (req as any).planName || '1-on-1 Personal Training',
+        planName: (req as any).planName || '1-on-1 Personal Training',
+        durationMonths,
+        originalPrice: recAmount,
+        amount: recAmount,
+        finalAmount: recAmount,
+        discountAmount: 0,
+        discountPercent: 0,
+        paymentMode: 'cash',
+        gatewayProvider: 'offline_cash',
+        gatewayName: 'Offline Cash Desk',
+        status: 'COMPLETED',
+        paidStatus: 'paid',
+        paymentStatus: 'PAID',
+        verificationStatus: 'VERIFIED',
+        verifiedByAdmin: true,
+        verifiedAt: serverTimestamp(),
+        createdAt: (req as any).createdAt || nowIso,
+        timestamp: nowIso,
+        approvedAt: nowIso,
+        paidAt: todayDate,
+        trainerId: trId,
+        trainerName: trName,
+        approvedBy: 'Master Admin'
       };
 
-      batch.set(doc(db, 'clientProfiles', clientId), clientUpdates, { merge: true });
-      batch.set(doc(db, 'members', clientId), clientUpdates, { merge: true });
+      batch.set(doc(db, 'transactions', txnId), txRecord, { merge: true });
+      batch.set(doc(db, 'paymentTransactions', txnId), txRecord, { merge: true });
 
-      // 3. Update trainers & trainerProfiles roster
+      if (reqId.startsWith('txn_')) {
+        batch.set(doc(db, 'transactions', reqId), { status: 'COMPLETED', paymentStatus: 'PAID', verifiedByAdmin: true, verifiedAt: serverTimestamp() }, { merge: true });
+        batch.set(doc(db, 'paymentTransactions', reqId), { status: 'COMPLETED', paymentStatus: 'PAID', verifiedByAdmin: true, verifiedAt: serverTimestamp() }, { merge: true });
+      }
+
+      // (C) Update clientProfiles/{clientId} and members/{clientId}
+      if (clientId) {
+        const clientUpdates = {
+          ptStatus: 'ACTIVE',
+          assignedTrainerId: trId,
+          assignedTrainerName: trName,
+          ptApprovedByAdmin: true,
+          ptStartDate: todayDate,
+          ptExpiryDate: calculatedExpiryISO,
+          pendingPtRequestId: null,
+          pendingOfflineRequestId: null,
+          offlineRequestStatus: 'approved',
+          updatedAt: nowIso
+        };
+
+        batch.set(doc(db, 'clientProfiles', clientId), clientUpdates, { merge: true });
+        batch.set(doc(db, 'members', clientId), clientUpdates, { merge: true });
+      }
+
+      // (D) Update trainers/{trId} & trainerProfiles/{trId}
       if (trId) {
         batch.set(
           doc(db, 'trainers', trId),
@@ -1437,98 +1428,54 @@ export const AdminApp: React.FC = () => {
         );
       }
 
-      // 4. Create verified cash transaction in transactions & paymentTransactions
-      const txId = (req as any).transactionId || `tx_pt_${reqId}_${Date.now()}`;
-      const receiptNumber = `REC-PT-${Date.now().toString().slice(-6)}`;
-      const txRecord = {
-        id: txId,
-        transactionId: txId,
-        receiptNumber,
-        referenceId: (req as any).transactionId || receiptNumber,
-        clientId,
-        clientName: req.clientName || 'Member',
-        clientPhone: (req as any).clientPhone || '',
-        purpose: 'personal_training',
-        itemTitle: (req as any).planName || '1-on-1 Personal Training',
-        planName: (req as any).planName || '1-on-1 Personal Training',
-        durationMonths,
-        originalPrice: recAmount,
-        amount: recAmount,
-        finalAmount: recAmount,
-        discountAmount: 0,
-        discountPercent: 0,
-        paymentMode: 'cash',
-        gatewayProvider: 'offline_cash',
-        gatewayName: 'Offline Cash Desk',
-        status: 'success',
-        paidStatus: 'paid',
-        paymentStatus: 'paid',
-        verificationStatus: 'VERIFIED',
-        createdAt: nowIso,
-        timestamp: nowIso,
-        approvedAt: nowIso,
-        paidAt: todayDate,
-        trainerId: trId,
-        trainerName: trName,
-        approvedBy: 'Master Admin'
-      };
-
-      batch.set(doc(db, 'transactions', txId), txRecord, { merge: true });
-      batch.set(doc(db, 'paymentTransactions', txId), txRecord, { merge: true });
-
       await batch.commit();
 
       // Immediately sync local state
       setPtRequests((prev) =>
         prev.map((r) =>
-          r.id === reqId
+          r.id === reqId || (r as any).transactionId === txnId
             ? ({
                 ...r,
                 status: 'APPROVED',
                 paidStatus: 'paid',
                 paymentStatus: 'PAID',
                 assignedTrainerId: trId,
-                assignedTrainerName: trName
+                assignedTrainerName: trName,
+                trainerId: trId,
+                trainerName: trName
               } as any)
             : r
         )
       );
 
-      setClients((prev) =>
-        prev.map((c) =>
-          c.userId === clientId
-            ? { ...c, ptStatus: 'active', assignedTrainerId: trId, assignedTrainerName: trName }
-            : c
-        )
-      );
+      if (clientId) {
+        setClients((prev) =>
+          prev.map((c) =>
+            c.userId === clientId
+              ? { ...c, ptStatus: 'active', assignedTrainerId: trId, assignedTrainerName: trName }
+              : c
+          )
+        );
+      }
 
       showAdminNotice(
-        `✓ Cash (₹${recAmount.toLocaleString('en-IN')}) verified & Coach ${trName} assigned to ${req.clientName}!`,
+        `✓ Cash verified & PT assigned successfully! Coach ${trName} linked to ${req.clientName || 'Member'}.`,
         'success'
       );
     } catch (err: any) {
-      alert('Error verifying cash and assigning PT: ' + err.message);
-      showAdminNotice('Error verifying cash: ' + err.message, 'error');
+      console.error('Error verifying PT cash & assigning coach:', err);
+      alert('Error verifying PT cash & assigning coach: ' + (err?.message || err));
+      showAdminNotice('Error verifying cash: ' + (err?.message || err), 'error');
     } finally {
       setPtActionProcessingId(null);
     }
   };
 
-  // 1-Click Decline for High-Priority PT Action Queue
+  // 1-Click Decline for High-Priority PT Action Queue & PT Tables
   const handleDeclinePtRequestDirect = async (req: PtRequest) => {
     if (!req) return;
-    const reqId = req.id || (req as any).requestId;
+    const reqId = req.id || (req as any).requestId || (req as any).transactionId || '';
     if (!reqId) return;
-
-    let clientId = req.clientId || (req as any).userId || (req as any).uid || '';
-    if (!clientId && req.clientName) {
-      const matchedClient = clients.find(
-        (c) =>
-          c.displayName.toLowerCase() === req.clientName.toLowerCase() ||
-          c.fullName?.toLowerCase() === req.clientName.toLowerCase()
-      );
-      if (matchedClient) clientId = matchedClient.userId;
-    }
 
     if (!window.confirm(`Are you sure you want to decline this PT request from ${req.clientName || 'Client'}?`)) {
       return;
@@ -1536,11 +1483,39 @@ export const AdminApp: React.FC = () => {
 
     setPtActionProcessingId(reqId);
     try {
+      // 1. Resolve client UID safely
+      let clientId = req.clientId || (req as any).userId || (req as any).uid || (req as any).memberId || '';
+      const rawClientUsername = String((req as any).clientUsername || (req as any).username || '').replace(/^@/, '').trim();
+      const rawClientName = String(req.clientName || '').trim();
+
+      if (!clientId) {
+        const matchedClient = clients.find(
+          (c) =>
+            (rawClientUsername && (
+              c.username?.toLowerCase() === rawClientUsername.toLowerCase() ||
+              c.userId?.toLowerCase() === rawClientUsername.toLowerCase()
+            )) ||
+            (rawClientName && (
+              c.displayName?.toLowerCase() === rawClientName.toLowerCase() ||
+              c.fullName?.toLowerCase() === rawClientName.toLowerCase()
+            ))
+        );
+        if (matchedClient) clientId = matchedClient.userId;
+      }
+
+      if (!clientId && rawClientUsername) {
+        try {
+          const uSnap = await getDoc(doc(db, 'users', rawClientUsername));
+          if (uSnap.exists()) clientId = uSnap.id;
+        } catch {}
+      }
+
       const nowIso = new Date().toISOString();
       const batch = writeBatch(db);
 
       const reqUpdates = {
         status: 'REJECTED',
+        paymentStatus: 'REJECTED',
         rejectionSeenByClient: false,
         rejectedAt: serverTimestamp(),
         updatedAt: nowIso
@@ -1549,12 +1524,22 @@ export const AdminApp: React.FC = () => {
       batch.set(doc(db, 'pt_requests', reqId), reqUpdates, { merge: true });
       batch.set(doc(db, 'ptRequests', reqId), reqUpdates, { merge: true });
 
+      const txnId = (req as any).transactionId || (reqId.startsWith('txn_') ? reqId : '');
+      if (txnId) {
+        batch.set(doc(db, 'transactions', txnId), { status: 'rejected', paymentStatus: 'REJECTED', rejectedAt: serverTimestamp() }, { merge: true });
+        batch.set(doc(db, 'paymentTransactions', txnId), { status: 'rejected', paymentStatus: 'REJECTED', rejectedAt: serverTimestamp() }, { merge: true });
+      }
+
       if (clientId) {
         batch.set(
           doc(db, 'clientProfiles', clientId),
           {
             ptStatus: 'REJECTED',
+            assignedTrainerId: null,
+            assignedTrainerName: null,
             pendingPtRequestId: null,
+            pendingOfflineRequestId: null,
+            offlineRequestStatus: 'rejected',
             updatedAt: nowIso
           },
           { merge: true }
@@ -1563,7 +1548,11 @@ export const AdminApp: React.FC = () => {
           doc(db, 'members', clientId),
           {
             ptStatus: 'REJECTED',
+            assignedTrainerId: null,
+            assignedTrainerName: null,
             pendingPtRequestId: null,
+            pendingOfflineRequestId: null,
+            offlineRequestStatus: 'rejected',
             updatedAt: nowIso
           },
           { merge: true }
@@ -1574,16 +1563,27 @@ export const AdminApp: React.FC = () => {
 
       setPtRequests((prev) =>
         prev.map((r) =>
-          r.id === reqId
+          r.id === reqId || (r as any).transactionId === txnId
             ? ({ ...r, status: 'REJECTED' } as any)
             : r
         )
       );
 
+      if (clientId) {
+        setClients((prev) =>
+          prev.map((c) =>
+            c.userId === clientId
+              ? { ...c, ptStatus: 'REJECTED' as any, assignedTrainerId: null, assignedTrainerName: null }
+              : c
+          )
+        );
+      }
+
       showAdminNotice(`PT request from ${req.clientName || 'Client'} declined.`, 'info');
     } catch (err: any) {
-      alert('Error declining PT request: ' + err.message);
-      showAdminNotice('Error declining PT request: ' + err.message, 'error');
+      console.error('Error declining PT request:', err);
+      alert('Error declining PT request: ' + (err?.message || err));
+      showAdminNotice('Error declining PT request: ' + (err?.message || err), 'error');
     } finally {
       setPtActionProcessingId(null);
     }
@@ -1696,151 +1696,16 @@ export const AdminApp: React.FC = () => {
   const handleConfirmCashPtPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!cashVerifyModalReq) return;
+    const req = cashVerifyModalReq;
+    const recAmount = Number(cashVerifyAmount) || req.fee || (req as any).amount || 3500;
     setCashVerifying(true);
+    setCashVerifyModalReq(null);
     try {
-      const req = cashVerifyModalReq;
-      const recAmount = Number(cashVerifyAmount) || req.fee || (req as any).amount || 3500;
-      const recDate = cashVerifyDate || new Date().toISOString().split('T')[0];
-      const nowIso = new Date().toISOString();
-      const trId = req.trainerId || (req as any).requestedTrainerId || '';
-      const trName = (req as any).requestedTrainerName || req.trainerName || 'Trainer';
-
-      const batch = writeBatch(db);
-
-      batch.set(
-        doc(db, 'ptRequests', req.id),
-        {
-          status: 'APPROVED',
-          paidStatus: 'paid',
-          paymentMode: 'cash',
-          cashReceivedAmount: recAmount,
-          cashReceivedDate: recDate,
-          cashNotes: cashVerifyNotes,
-          assignedTrainerId: trId,
-          assignedTrainerName: trName,
-          assignedAt: nowIso,
-          approvedAt: serverTimestamp(),
-          updatedAt: nowIso
-        },
-        { merge: true }
-      );
-
-      try {
-        batch.set(
-          doc(db, 'pt_requests', req.id),
-          {
-            status: 'APPROVED',
-            paidStatus: 'paid',
-            paymentMode: 'cash',
-            cashReceivedAmount: recAmount,
-            cashReceivedDate: recDate,
-            cashNotes: cashVerifyNotes,
-            assignedTrainerId: trId,
-            assignedTrainerName: trName,
-            assignedAt: nowIso,
-            approvedAt: serverTimestamp(),
-            updatedAt: nowIso
-          },
-          { merge: true }
-        );
-      } catch {}
-
-      batch.set(
-        doc(db, 'clientProfiles', req.clientId),
-        {
-          assignedTrainerId: trId,
-          assignedTrainerName: trName,
-          ptStatus: 'ACTIVE',
-          ptApprovedByAdmin: true,
-          pendingPtRequestId: null,
-          ptStartDate: recDate,
-          updatedAt: nowIso
-        },
-        { merge: true }
-      );
-
-      batch.set(
-        doc(db, 'members', req.clientId),
-        {
-          assignedTrainerId: trId,
-          assignedTrainerName: trName,
-          ptStatus: 'ACTIVE',
-          ptApprovedByAdmin: true,
-          ptStartDate: recDate,
-          updatedAt: nowIso
-        },
-        { merge: true }
-      );
-
-      if (trId) {
-        batch.set(
-          doc(db, 'trainers', trId),
-          {
-            assignedClients: arrayUnion(req.clientId),
-            assignedClientIds: arrayUnion(req.clientId),
-            updatedAt: nowIso
-          },
-          { merge: true }
-        );
-        batch.set(
-          doc(db, 'trainerProfiles', trId),
-          {
-            assignedClients: arrayUnion(req.clientId),
-            assignedClientIds: arrayUnion(req.clientId),
-            updatedAt: nowIso
-          },
-          { merge: true }
-        );
-      }
-
-      // Log offline transaction into transactions and paymentTransactions
-      const txId = req.transactionId || `tx_pt_${req.id}_${Date.now()}`;
-      const receiptNo = `REC-PT-${Date.now().toString().slice(-6)}`;
-      const txRecord = {
-        id: txId,
-        transactionId: txId,
-        receiptNumber: receiptNo,
-        clientId: req.clientId,
-        clientName: req.clientName || 'Client',
-        clientPhone: (req as any).clientPhone || '',
-        amount: recAmount,
-        finalAmount: recAmount,
-        originalAmount: recAmount,
-        discountAmount: 0,
-        purpose: 'personal_training',
-        itemTitle: (req as any).planName || 'Personal Training',
-        planName: (req as any).planName || 'Personal Training',
-        paymentMode: 'cash',
-        gatewayProvider: 'offline_cash',
-        status: 'paid',
-        paymentStatus: 'paid',
-        verificationStatus: 'VERIFIED',
-        createdAt: nowIso,
-        paidAt: recDate || nowIso,
-        trainerId: trId,
-        trainerName: trName,
-        approvedBy: 'Master Admin'
-      };
-      batch.set(doc(db, 'transactions', txId), txRecord, { merge: true });
-      batch.set(doc(db, 'paymentTransactions', txId), txRecord, { merge: true });
-
-      await batch.commit();
-
-      setClients((prev) =>
-        prev.map((c) =>
-          c.userId === req.clientId
-            ? { ...c, assignedTrainerId: req.trainerId, assignedTrainerName: req.trainerName, ptStatus: 'active' }
-            : c
-        )
-      );
-
-      showAdminNotice(
-        `Cash (₹${recAmount.toLocaleString('en-IN')}) verified & Coach ${req.trainerName} assigned to ${req.clientName}!`,
-        'success'
-      );
-      setCashVerifyModalReq(null);
-    } catch (err: any) {
-      showAdminNotice('Error confirming cash PT: ' + err.message, 'error');
+      await handleVerifyCashAndAssignPtDirect({
+        ...req,
+        fee: recAmount,
+        amount: recAmount
+      } as any);
     } finally {
       setCashVerifying(false);
     }
@@ -4120,53 +3985,71 @@ export const AdminApp: React.FC = () => {
           )}
 
           {selectedDomain === 'domain_06' && activeSubFeature === 'd6_pt_allocations' && (() => {
+            const isRequestActive = (status?: string) => {
+              const s = (status || '').toUpperCase();
+              return s === 'APPROVED' || s === 'ACTIVE' || s === 'ACCEPTED' || s === 'COMPLETED';
+            };
+            const isRequestRejected = (status?: string) => {
+              const s = (status || '').toUpperCase();
+              return s === 'REJECTED' || s === 'CANCELLED' || s === 'DECLINED';
+            };
+
             const needsAssignmentRequests = ptRequests.filter(
               r => r.status === 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT'
             );
-            const pendingCashRequests = ptRequests.filter(
-              r =>
-                r.status === 'PENDING_CASH_CONFIRMATION' ||
-                r.status === 'PENDING_ADMIN_APPROVAL' ||
-                r.status === 'PENDING' ||
-                r.status === 'pending' ||
+            const pendingCashRequests = ptRequests.filter((r) => {
+              if (isRequestActive(r.status) || isRequestRejected(r.status)) return false;
+              if (r.paidStatus === 'paid' && (r.assignedTrainerId || (r as any).trainerId)) return false;
+              const s = (r.status || '').toUpperCase();
+              return (
+                s === 'PENDING_CASH_CONFIRMATION' ||
+                s === 'PENDING_ADMIN_APPROVAL' ||
+                s === 'PENDING_DESK_VERIFICATION' ||
+                s === 'PENDING' ||
+                s === 'NEEDS_ACTION' ||
                 r.paymentMode === 'OFFLINE_CASH' ||
                 r.paymentMode === 'cash'
-            );
+              );
+            });
             const activePtClients = clients.filter(
               c => c.ptStatus === 'active' || c.assignedTrainerName
             );
 
-            const filteredRequests = ptRequests.filter(r => {
+            const filteredRequests = ptRequests.filter((r) => {
               if (ptFilterStatus === 'needs_action') {
+                if (isRequestActive(r.status) || isRequestRejected(r.status)) return false;
                 return (
                   r.status === 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT' ||
                   r.status === 'PENDING_CASH_CONFIRMATION' ||
                   r.status === 'PENDING_ADMIN_APPROVAL' ||
+                  r.status === 'PENDING_DESK_VERIFICATION' ||
                   r.status === 'PENDING' ||
-                  r.status === 'pending'
+                  r.status === 'pending' ||
+                  r.paymentMode === 'OFFLINE_CASH' ||
+                  r.paymentMode === 'cash'
                 );
               }
               if (ptFilterStatus === 'online_paid') {
-                return r.status === 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT' || (r.paymentMode === 'online' && r.paidStatus === 'paid');
+                return (
+                  r.status === 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT' ||
+                  (r.paymentMode === 'online' && (r.paidStatus === 'paid' || (r as any).paymentStatus === 'PAID'))
+                );
               }
               if (ptFilterStatus === 'cash_pending') {
+                if (isRequestActive(r.status) || isRequestRejected(r.status)) return false;
+                const s = (r.status || '').toUpperCase();
                 return (
-                  r.status === 'PENDING_CASH_CONFIRMATION' ||
-                  r.status === 'PENDING_ADMIN_APPROVAL' ||
-                  r.status === 'PENDING' ||
-                  r.status === 'pending' ||
-                  r.paymentMode === 'cash' ||
-                  r.paymentMode === 'OFFLINE_CASH'
+                  s === 'PENDING_CASH_CONFIRMATION' ||
+                  s === 'PENDING_ADMIN_APPROVAL' ||
+                  s === 'PENDING_DESK_VERIFICATION' ||
+                  s === 'PENDING' ||
+                  s === 'NEEDS_ACTION' ||
+                  r.paymentMode === 'OFFLINE_CASH' ||
+                  r.paymentMode === 'cash'
                 );
               }
               if (ptFilterStatus === 'active') {
-                return (
-                  r.status === 'active' ||
-                  r.status === 'accepted' ||
-                  r.status === 'APPROVED' ||
-                  r.status === 'completed' ||
-                  r.status === 'COMPLETED'
-                );
+                return isRequestActive(r.status);
               }
               return true;
             });
@@ -4505,11 +4388,12 @@ export const AdminApp: React.FC = () => {
                                     {isCashPending && (
                                       <button
                                         type="button"
-                                        onClick={() => openCashVerifyModal(r)}
-                                        className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10px] font-bold shadow-xs flex items-center gap-1 cursor-pointer pointer-events-auto"
+                                        disabled={ptActionProcessingId === r.id}
+                                        onClick={() => handleVerifyCashAndAssignPtDirect(r)}
+                                        className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10px] font-bold shadow-xs flex items-center gap-1 cursor-pointer pointer-events-auto transition-all disabled:opacity-50"
                                       >
                                         <Banknote className="w-3 h-3" />
-                                        <span>Verify Cash</span>
+                                        <span>{ptActionProcessingId === r.id ? 'Processing...' : 'Verify Cash'}</span>
                                       </button>
                                     )}
 
@@ -4517,16 +4401,18 @@ export const AdminApp: React.FC = () => {
                                       <>
                                         <button
                                           type="button"
-                                          onClick={() => handleUpdatePtRequestStatus(r, 'accepted')}
-                                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-bold shadow-xs flex items-center gap-1 cursor-pointer pointer-events-auto"
+                                          disabled={ptActionProcessingId === r.id}
+                                          onClick={() => handleVerifyCashAndAssignPtDirect(r)}
+                                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-bold shadow-xs flex items-center gap-1 cursor-pointer pointer-events-auto transition-all disabled:opacity-50"
                                         >
                                           <CheckCircle className="w-3 h-3" />
-                                          <span>Approve & Assign PT</span>
+                                          <span>{ptActionProcessingId === r.id ? 'Processing...' : 'Approve & Assign PT'}</span>
                                         </button>
                                         <button
                                           type="button"
-                                          onClick={() => handleUpdatePtRequestStatus(r, 'rejected')}
-                                          className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-[10px] font-bold cursor-pointer pointer-events-auto"
+                                          disabled={ptActionProcessingId === r.id}
+                                          onClick={() => handleDeclinePtRequestDirect(r)}
+                                          className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-[10px] font-bold cursor-pointer pointer-events-auto transition-all disabled:opacity-50"
                                         >
                                           Reject
                                         </button>
