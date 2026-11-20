@@ -252,45 +252,58 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
     setDietFeedback('');
     try {
       const nowIso = new Date().toISOString();
-      const dietData = {
-        id: `diet_${client.userId}`,
-        clientId: client.userId,
-        clientName: client.displayName,
-        title: dietTitle.trim() || `${client.displayName}'s Nutrition Protocol`,
-        dailyCalories: Number(dietCalories) || 2000,
-        proteinGrams: Number(dietProtein) || 120,
-        carbsGrams: Number(dietCarbs) || 200,
-        fatsGrams: Number(dietFats) || 50,
-        waterIntakeLiters: Number(dietWater) || 3.0,
-        breakfast: dietBreakfast.trim(),
-        lunch: dietLunch.trim(),
-        snacks: dietSnacks.trim(),
-        dinner: dietDinner.trim(),
-        guidelines: dietGuidelines.trim(),
-        supplements: dietSupplements.trim(),
+      // 1. Primary Core Firestore write: clientProfiles and members
+      const clientUpdate = {
+        dietPlan: `${dietBreakfast.trim()}\n${dietLunch.trim()}\n${dietSnacks.trim()}\n${dietDinner.trim()}`.trim(),
+        assignedDietPlan: dietTitle.trim() || `${client.displayName}'s Nutrition Protocol`,
+        dietNotes: `${dietGuidelines.trim()}\n${dietSupplements.trim()}`.trim(),
+        targetCalories: Number(dietCalories) || 2000,
         assignedBy: 'Master Admin',
-        assignedByAdminName: 'Master Admin',
         assignedAt: serverTimestamp(),
-        updatedAt: nowIso,
-        createdAt: nowIso
+        dietUpdatedAt: nowIso,
+        updatedAt: nowIso
       };
 
       await Promise.all([
-        setDoc(doc(db, 'dietPlans', `diet_${client.userId}`), dietData, { merge: true }),
-        setDoc(doc(db, 'diet_plans', `diet_${client.userId}`), dietData, { merge: true }),
-        setDoc(doc(db, 'clientProfiles', client.userId), {
-          dietPlan: `${dietBreakfast.trim()}\n${dietLunch.trim()}\n${dietSnacks.trim()}\n${dietDinner.trim()}`.trim(),
-          assignedDietPlan: dietTitle.trim() || `${client.displayName}'s Nutrition Protocol`,
-          dietNotes: `${dietGuidelines.trim()}\n${dietSupplements.trim()}`.trim(),
-          targetCalories: Number(dietCalories) || 2000,
-          assignedBy: 'Master Admin',
-          assignedAt: serverTimestamp(),
-          dietUpdatedAt: nowIso,
-          updatedAt: nowIso
-        }, { merge: true })
+        setDoc(doc(db, 'clientProfiles', client.userId), clientUpdate, { merge: true }),
+        setDoc(doc(db, 'members', client.userId), clientUpdate, { merge: true })
       ]);
 
+      // CORE SUCCESS CONDITION MET: immediately trigger green feedback
       setDietFeedback('Diet plan assigned to client successfully!');
+
+      // 2. Secondary non-blocking writes (dietPlans, diet_plans) wrapped in independent inner try/catch
+      try {
+        const dietData = {
+          id: `diet_${client.userId}`,
+          clientId: client.userId,
+          clientName: client.displayName,
+          title: dietTitle.trim() || `${client.displayName}'s Nutrition Protocol`,
+          dailyCalories: Number(dietCalories) || 2000,
+          proteinGrams: Number(dietProtein) || 120,
+          carbsGrams: Number(dietCarbs) || 200,
+          fatsGrams: Number(dietFats) || 50,
+          waterIntakeLiters: Number(dietWater) || 3.0,
+          breakfast: dietBreakfast.trim(),
+          lunch: dietLunch.trim(),
+          snacks: dietSnacks.trim(),
+          dinner: dietDinner.trim(),
+          guidelines: dietGuidelines.trim(),
+          supplements: dietSupplements.trim(),
+          assignedBy: 'Master Admin',
+          assignedByAdminName: 'Master Admin',
+          assignedAt: serverTimestamp(),
+          updatedAt: nowIso,
+          createdAt: nowIso
+        };
+
+        await Promise.allSettled([
+          setDoc(doc(db, 'dietPlans', `diet_${client.userId}`), dietData, { merge: true }),
+          setDoc(doc(db, 'diet_plans', `diet_${client.userId}`), dietData, { merge: true })
+        ]);
+      } catch (secondaryErr) {
+        console.warn('[ClientDetailModal] Secondary diet write note:', secondaryErr);
+      }
       setTimeout(() => setDietFeedback(''), 4000);
     } catch (err: any) {
       console.error('Error saving diet plan:', err);

@@ -1462,7 +1462,7 @@ export const AdminApp: React.FC = () => {
         paymentMode: 'cash',
         gatewayProvider: 'offline_cash',
         gatewayName: 'Offline Cash Desk',
-        status: 'COMPLETED',
+        status: 'success',
         paidStatus: 'paid',
         paymentStatus: 'PAID',
         verificationStatus: 'VERIFIED',
@@ -1481,8 +1481,8 @@ export const AdminApp: React.FC = () => {
       batch.set(doc(db, 'paymentTransactions', txnId), txRecord, { merge: true });
 
       if (reqId.startsWith('txn_')) {
-        batch.set(doc(db, 'transactions', reqId), { status: 'COMPLETED', paymentStatus: 'PAID', verifiedByAdmin: true, verifiedAt: serverTimestamp() }, { merge: true });
-        batch.set(doc(db, 'paymentTransactions', reqId), { status: 'COMPLETED', paymentStatus: 'PAID', verifiedByAdmin: true, verifiedAt: serverTimestamp() }, { merge: true });
+        batch.set(doc(db, 'transactions', reqId), { status: 'success', paymentStatus: 'PAID', verifiedByAdmin: true, verifiedAt: serverTimestamp() }, { merge: true });
+        batch.set(doc(db, 'paymentTransactions', reqId), { status: 'success', paymentStatus: 'PAID', verifiedByAdmin: true, verifiedAt: serverTimestamp() }, { merge: true });
       }
 
       // (C) Update clientProfiles/{clientId} and members/{clientId}
@@ -1919,63 +1919,72 @@ export const AdminApp: React.FC = () => {
 
       const nowIso = new Date().toISOString();
 
-      // 1. Write to clientProfiles
-      await setDoc(
-        doc(db, 'clientProfiles', calcClientId),
-        {
-          weight: calcWeight,
-          height: calcHeight,
-          age: calcAge,
-          gender: calcGender,
-          bmi: bmiVal,
-          bmr: bmrVal,
-          targetCalories,
-          dietPlan: dietMealPlanText,
-          assignedDietPlan: dietMealPlanText,
-          dietNotes: dietNotesText,
-          dietUpdatedAt: nowIso,
-          assignedAt: serverTimestamp(),
-          assignedBy: 'Master Admin',
-          updatedAt: nowIso
-        },
-        { merge: true }
-      );
-
-      // 2. Prepare comprehensive DietPlan record
-      const dietDocData = {
-        id: `diet_${calcClientId}`,
-        clientId: calcClientId,
-        clientName,
-        title: 'Personalized Nutrition & Diet Protocol',
-        dailyCalories: targetCalories,
-        proteinGrams,
-        carbsGrams: carbGrams,
-        fatsGrams: fatGrams,
-        waterIntakeLiters: 3.5,
-        breakfast: breakfastText || dietMealPlanText,
-        lunch: lunchText || 'Nutritious balanced lunch according to macro split',
-        snacks: snacksText || 'High-protein pre-workout snack or shake',
-        dinner: dinnerText || 'Lean protein dinner with greens',
-        guidelines: dietNotesText,
-        supplements: 'Whey Protein, Creatine Monohydrate, Multivitamins as recommended',
-        fullDietPlanText: dietMealPlanText,
+      // 1. Primary Core Firestore write: clientProfiles and members
+      const clientUpdateData = {
+        weight: calcWeight,
+        height: calcHeight,
+        age: calcAge,
+        gender: calcGender,
+        bmi: bmiVal,
+        bmr: bmrVal,
+        targetCalories,
         dietPlan: dietMealPlanText,
         assignedDietPlan: dietMealPlanText,
         dietNotes: dietNotesText,
-        assignedBy: 'Master Admin',
-        assignedByAdminName: 'Master Admin',
+        dietUpdatedAt: nowIso,
         assignedAt: serverTimestamp(),
-        updatedAt: nowIso,
-        createdAt: nowIso
+        assignedBy: 'Master Admin',
+        updatedAt: nowIso
       };
 
-      // 3. Write to both dietPlans and diet_plans collections
       await Promise.all([
-        setDoc(doc(db, 'dietPlans', `diet_${calcClientId}`), dietDocData, { merge: true }),
-        setDoc(doc(db, 'diet_plans', `diet_${calcClientId}`), dietDocData, { merge: true })
+        setDoc(doc(db, 'clientProfiles', calcClientId), clientUpdateData, { merge: true }),
+        setDoc(doc(db, 'members', calcClientId), clientUpdateData, { merge: true })
       ]);
 
+      // CORE SUCCESS CONDITION MET: immediately trigger green success notification
       showAdminNotice('Diet plan assigned to client successfully!', 'success');
+
+      // Reset / clean up assignment form state
+      setDietMealPlanText('');
+      setDietNotesText('');
+
+      // 2. Secondary non-blocking writes (dietPlans, diet_plans, audit logs) wrapped in independent inner try/catch
+      try {
+        const dietDocData = {
+          id: `diet_${calcClientId}`,
+          clientId: calcClientId,
+          clientName,
+          title: 'Personalized Nutrition & Diet Protocol',
+          dailyCalories: targetCalories,
+          proteinGrams,
+          carbsGrams: carbGrams,
+          fatsGrams: fatGrams,
+          waterIntakeLiters: 3.5,
+          breakfast: breakfastText || dietMealPlanText,
+          lunch: lunchText || 'Nutritious balanced lunch according to macro split',
+          snacks: snacksText || 'High-protein pre-workout snack or shake',
+          dinner: dinnerText || 'Lean protein dinner with greens',
+          guidelines: dietNotesText,
+          supplements: 'Whey Protein, Creatine Monohydrate, Multivitamins as recommended',
+          fullDietPlanText: dietMealPlanText,
+          dietPlan: dietMealPlanText,
+          assignedDietPlan: dietMealPlanText,
+          dietNotes: dietNotesText,
+          assignedBy: 'Master Admin',
+          assignedByAdminName: 'Master Admin',
+          assignedAt: serverTimestamp(),
+          updatedAt: nowIso,
+          createdAt: nowIso
+        };
+
+        await Promise.allSettled([
+          setDoc(doc(db, 'dietPlans', `diet_${calcClientId}`), dietDocData, { merge: true }),
+          setDoc(doc(db, 'diet_plans', `diet_${calcClientId}`), dietDocData, { merge: true })
+        ]);
+      } catch (secondaryErr) {
+        console.warn('[Diet Plan] Non-blocking secondary sync warning:', secondaryErr);
+      }
     } catch (err: any) {
       showAdminNotice('Error saving diet prescription: ' + err.message, 'error');
     } finally {
@@ -2232,7 +2241,8 @@ export const AdminApp: React.FC = () => {
   const settledPaymentsRevenue = React.useMemo(() => {
     let total = 0;
     paymentTransactions.forEach((tx) => {
-      if (tx.status === 'success' && !tx.isTest) {
+      const s = String(tx.status || '').toLowerCase();
+      if ((s === 'success' || s === 'completed' || s === 'active') && !tx.isTest) {
         total += tx.finalAmount ?? tx.amount ?? 0;
       }
     });
@@ -2246,7 +2256,8 @@ export const AdminApp: React.FC = () => {
     let monthTotal = 0;
 
     paymentTransactions.forEach((tx) => {
-      if (tx.status === 'success' && !tx.isTest) {
+      const s = String(tx.status || '').toLowerCase();
+      if ((s === 'success' || s === 'completed' || s === 'active') && !tx.isTest) {
         const dt = new Date(tx.createdAt || '');
         if (!isNaN(dt.getTime()) && dt.getFullYear() === curYear && dt.getMonth() === curMonth) {
           monthTotal += tx.finalAmount ?? tx.amount ?? 0;

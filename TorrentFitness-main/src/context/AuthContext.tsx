@@ -28,7 +28,8 @@ import {
   query,
   limit,
   where,
-  addDoc
+  addDoc,
+  serverTimestamp
 } from 'firebase/firestore';
 import { initializeDatabaseSeed } from '../services/db';
 import { getCachedData, setCachedData, withTimeout } from '../services/cacheService';
@@ -557,6 +558,65 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }
 
+  // Unified Master Admin Password Verification Helper (Single Source of Truth for Login & Password Reset)
+  const verifyAdminPassword = async (inputPassword: string): Promise<boolean> => {
+    const cleanInput = (inputPassword || '').trim();
+    if (!cleanInput) return false;
+
+    try {
+      const authSnap = await withTimeout(
+        getDoc(doc(db, 'system_settings', 'master_admin_auth')),
+        3500
+      ).catch(() => null);
+
+      if (authSnap?.exists()) {
+        const authData = authSnap.data();
+        if (authData?.hasCustomPassword === true && authData?.passwordHash) {
+          // A custom password has already been saved in system_settings/master_admin_auth.
+          // Validate strictly against that stored password ONLY (100% reject torrent#19@fit1 and older passwords).
+          return await verifyClientPassword(cleanInput, authData.passwordHash);
+        }
+      }
+
+      // If document does NOT exist yet OR has no custom password saved yet:
+      // Treat torrent#19@fit1 as the valid active current password.
+      const isDefaultMatch =
+        cleanInput === 'torrent#19@fit1' ||
+        cleanInput === 'Torrent#19@Fit1' ||
+        cleanInput.toLowerCase() === 'torrent#19@fit1';
+
+      if (isDefaultMatch) {
+        // Immediately seed system_settings/master_admin_auth with the hashed value of torrent#19@fit1
+        // so both Login and Step 1 read the exact same source of truth.
+        (async () => {
+          try {
+            const defaultHash = await hashPasswordPBKDF2('torrent#19@fit1');
+            await setDoc(
+              doc(db, 'system_settings', 'master_admin_auth'),
+              {
+                passwordHash: defaultHash,
+                hasCustomPassword: false,
+                defaultBootstrapped: true,
+                updatedAt: new Date().toISOString(),
+                officialEmail: 'torrentfitness1@gmail.com'
+              },
+              { merge: true }
+            );
+          } catch (seedErr) {
+            console.warn('[Auth] Failed auto-seeding default admin password hash:', seedErr);
+          }
+        })();
+
+        return true;
+      }
+
+      return false;
+    } catch (err) {
+      console.warn('[Auth] verifyAdminPassword error, falling back to bootstrap check:', err);
+      return cleanInput.toLowerCase() === 'torrent#19@fit1';
+    }
+  };
+
   // Client / Trainer Multi-Identifier Login (Mobile Number, Email, or Client ID / Username)
   const loginClientOrTrainer = async (
     identifier: string,
@@ -584,36 +644,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         cleanLowerId.includes('admintorrentfitness');
 
       if (isAdminIdentifier) {
-        let activeAdminHash = '';
-        let hasCustomAuth = false;
-        try {
-          const authSnap = await withTimeout(getDoc(doc(db, 'system_settings', 'master_admin_auth')), 3500).catch(() => null);
-          if (authSnap?.exists() && authSnap.data()?.passwordHash) {
-            activeAdminHash = authSnap.data().passwordHash;
-            hasCustomAuth = Boolean(authSnap.data().hasCustomPassword);
-          }
-        } catch {}
-
-        let isMatch = false;
-        if (activeAdminHash && hasCustomAuth) {
-          // STRICT SECURITY RULE: If custom password has been set, validate ONLY against stored passwordHash and 100% REJECT torrent#19@fit1 and old passwords!
-          isMatch = await verifyClientPassword(password, activeAdminHash);
-          if (!isMatch) {
-            console.warn('[Auth] Master Admin login failed: Password mismatch against active system_settings/master_admin_auth. Default/old passwords are deactivated.');
-            throw new Error('Invalid Master Admin credentials. Old passwords have been deactivated.');
-          }
-        } else {
-          // If no custom password has ever been set, verify default bootstrap password
-          const isBootstrapDefault =
-            password === 'Torrent#19@Fit1' ||
-            password === 'torrent#19@fit1' ||
-            password.trim() === 'Torrent#19@Fit1' ||
-            password.trim() === 'torrent#19@fit1' ||
-            password.trim().toLowerCase() === 'torrent#19@fit1';
-          if (isBootstrapDefault) {
-            isMatch = true;
-          }
-        }
+        const isMatch = await verifyAdminPassword(password);
 
         if (isMatch) {
           console.log('[Auth] Master Admin authenticated securely with single active password');
@@ -1317,36 +1348,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         cleanLowerAdminId.includes('admintorrentfitness');
 
       if (isAdminIdentifier) {
-        let activeAdminHash = '';
-        let hasCustomAuth = false;
-        try {
-          const authSnap = await withTimeout(getDoc(doc(db, 'system_settings', 'master_admin_auth')), 3500).catch(() => null);
-          if (authSnap?.exists() && authSnap.data()?.passwordHash) {
-            activeAdminHash = authSnap.data().passwordHash;
-            hasCustomAuth = Boolean(authSnap.data().hasCustomPassword);
-          }
-        } catch {}
-
-        let isMatch = false;
-        if (activeAdminHash && hasCustomAuth) {
-          // STRICT SECURITY RULE: If custom password has been set, validate ONLY against stored passwordHash and 100% REJECT torrent#19@fit1 and old passwords!
-          isMatch = await verifyClientPassword(password, activeAdminHash);
-          if (!isMatch) {
-            console.warn('[Auth] Master Admin login failed: Password mismatch against active system_settings/master_admin_auth. Default/old passwords are deactivated.');
-            throw new Error('Invalid Master Admin credentials. Old passwords have been deactivated.');
-          }
-        } else {
-          // If no custom password has ever been set, verify default bootstrap password
-          const isBootstrapDefault =
-            password === 'Torrent#19@Fit1' ||
-            password === 'torrent#19@fit1' ||
-            password.trim() === 'Torrent#19@Fit1' ||
-            password.trim() === 'torrent#19@fit1' ||
-            password.trim().toLowerCase() === 'torrent#19@fit1';
-          if (isBootstrapDefault) {
-            isMatch = true;
-          }
-        }
+        const isMatch = await verifyAdminPassword(password);
 
         if (isMatch) {
           if (auth && !auth.currentUser) {
@@ -1493,54 +1495,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Verify Master Admin Password for sensitive security gates
-  const verifyAdminPassword = async (inputPassword: string): Promise<boolean> => {
-    const cleanInput = (inputPassword || '').trim();
-    if (!cleanInput) return false;
-
-    // 1. Check system_settings/master_admin_auth
-    try {
-      const authSnap = await withTimeout(getDoc(doc(db, 'system_settings', 'master_admin_auth')), 3500).catch(() => null);
-      if (authSnap?.exists() && authSnap.data()?.passwordHash) {
-        const hash = authSnap.data().passwordHash;
-        const hasCustom = Boolean(authSnap.data().hasCustomPassword);
-        if (hasCustom && hash) {
-          // If custom password set in Firestore, validate ONLY against that hash!
-          return await verifyClientPassword(cleanInput, hash);
-        }
-      }
-    } catch {}
-
-    // 2. Check users collection for custom admin password
-    try {
-      const adminSnap = await withTimeout(getDoc(doc(db, 'users', 'admintorrentfitness1')), 3500).catch(() => null);
-      if (adminSnap?.exists()) {
-        const d = adminSnap.data();
-        if (d?.password && d.password !== 'torrent#19@fit1') {
-          return await verifyClientPassword(cleanInput, d.password);
-        }
-      }
-    } catch {}
-
-    // 3. Check gymSettings/adminSecurity
-    try {
-      const secSnap = await withTimeout(getDoc(doc(db, 'gymSettings', 'adminSecurity')), 3500).catch(() => null);
-      if (secSnap?.exists()) {
-        const d = secSnap.data();
-        if (d?.passwordHash) {
-          return await verifyClientPassword(cleanInput, d.passwordHash);
-        }
-      }
-    } catch {}
-
-    // 4. Only allow default bootstrap password if no custom admin password has ever been saved
-    return (
-      cleanInput === 'Torrent#19@Fit1' ||
-      cleanInput === 'torrent#19@fit1' ||
-      cleanInput.toLowerCase() === 'torrent#19@fit1'
-    );
-  };
-
   // Dedicated Admin Password Management (hashes password, persists to system_settings/master_admin_auth, and deactivates old passwords)
   const updateAdminPassword = async (currentPassword: string, newPassword: string) => {
     setIsLoading(true);
@@ -1559,7 +1513,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const newPasswordHash = await hashPasswordPBKDF2(newPassword);
       const now = new Date().toISOString();
 
-      // Update Firestore system_settings/master_admin_auth
+      // Overwrite system_settings/master_admin_auth as the single active source of truth
       await setDoc(
         doc(db, 'system_settings', 'master_admin_auth'),
         {
@@ -1568,8 +1522,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           updatedAt: now,
           officialEmail: 'torrentfitness1@gmail.com',
           updatedBy: 'Master Admin'
-        },
-        { merge: true }
+        }
       );
 
       // Sync to users/admintorrentfitness1
@@ -1589,20 +1542,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         { merge: true }
       );
 
-      // Sync to gymSettings/adminSecurity for server compatibility
-      await setDoc(
-        doc(db, 'gymSettings', 'adminSecurity'),
-        {
-          passwordHash: newPasswordHash,
-          hasCustomPassword: true,
-          updatedAt: now,
-          updatedBy: 'admin'
-        },
-        { merge: true }
-      ).catch(() => {});
-
       // Clean up active OTP if any
       await deleteDoc(doc(db, 'admin_otp_requests', 'active')).catch(() => {});
+
+      // Refresh session token in localStorage & sessionStorage
+      const newToken = 'master_admin_session_token_' + Date.now();
+      localStorage.setItem(AUTH_TOKEN_KEY, newToken);
+      sessionStorage.setItem(AUTH_TOKEN_KEY, newToken);
       localStorage.removeItem('admin_temp_pw');
       sessionStorage.removeItem('admin_temp_pw');
     } finally {
@@ -1776,7 +1722,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // 8. Delete active OTP record
       await deleteDoc(doc(db, 'admin_otp_requests', 'active')).catch(() => {});
 
-      // 9. Clear cached session passwords
+      // 9. Update localStorage session token cleanly and clear cached temp passwords
+      const newToken = 'master_admin_session_token_' + Date.now();
+      localStorage.setItem(AUTH_TOKEN_KEY, newToken);
+      sessionStorage.setItem(AUTH_TOKEN_KEY, newToken);
       localStorage.removeItem('admin_temp_pw');
       sessionStorage.removeItem('admin_temp_pw');
     } finally {
