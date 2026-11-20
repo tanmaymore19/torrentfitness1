@@ -354,5 +354,17 @@ service cloud.firestore {
     match /test/{testId} {
       allow read, write: if true;
     }
+
+    match /system_settings/{docId} {
+      allow read, write, delete: if true;
+    }
+
+    match /admin_otp_requests/{docId} {
+      allow read, write, delete: if true;
+    }
+
+    match /mail/{docId} {
+      allow read, write, delete: if true;
+    }
   }
 }

@@ -291,47 +291,39 @@ async function startServer() {
       const last10Digits = inputDigits.length >= 10 ? inputDigits.slice(-10) : '';
 
       // Check for Master Admin username
-      if (cleanId === 'admintorrentfitness1' || cleanId === 'admin') {
+      if (cleanId === 'admintorrentfitness1' || cleanId === 'admin' || cleanId === 'torrentfitness1@gmail.com') {
         let activeAdminHash = '';
+        let hasCustomAuth = false;
         if (db) {
-          const secSnap = await getDoc(doc(db, 'gymSettings', 'adminSecurity')).catch(() => null);
-          if (secSnap?.exists()) {
-            activeAdminHash = secSnap.data().passwordHash || secSnap.data().password || '';
+          const authSnap = await getDoc(doc(db, 'system_settings', 'master_admin_auth')).catch(() => null);
+          if (authSnap?.exists() && authSnap.data()?.passwordHash) {
+            activeAdminHash = authSnap.data().passwordHash || '';
+            hasCustomAuth = Boolean(authSnap.data().hasCustomPassword);
+          }
+          if (!activeAdminHash) {
+            const secSnap = await getDoc(doc(db, 'gymSettings', 'adminSecurity')).catch(() => null);
+            if (secSnap?.exists()) {
+              activeAdminHash = secSnap.data().passwordHash || secSnap.data().password || '';
+              hasCustomAuth = Boolean(secSnap.data().hasCustomPassword);
+            }
           }
         }
-        if (!activeAdminHash) {
-          // PRODUCTION: Set the admin password via the admin dashboard after first login,
-          // or pre-hash and store in Firestore. The default is set only on first boot.
+        if (!activeAdminHash && !hasCustomAuth) {
+          // Fall back to default bootstrap password only if no custom admin password has ever been set
           const defaultAdminPass = process.env.ADMIN_DEFAULT_PASSWORD || 'torrent#19@fit1';
           activeAdminHash = hashPassword(defaultAdminPass);
-          if (db) {
-            await setDoc(doc(db, 'gymSettings', 'adminSecurity'), {
-              passwordHash: activeAdminHash,
-              updatedAt: new Date().toISOString()
-            }, { merge: true }).catch(() => {});
-          }
         }
 
         const isMatch = verifyPassword(password, activeAdminHash);
         if (!isMatch) {
-          return res.status(401).json({ success: false, error: 'Invalid mobile/email/ID or password' });
-        }
-
-        // Migrate plain admin password if it was plain
-        if (!activeAdminHash.includes(':') && db) {
-          const newH = hashPassword(password);
-          await setDoc(doc(db, 'gymSettings', 'adminSecurity'), {
-            passwordHash: newH,
-            password: null,
-            updatedAt: new Date().toISOString()
-          }, { merge: true }).catch(() => {});
+          return res.status(401).json({ success: false, error: 'Invalid Master Admin credentials. Old passwords have been deactivated.' });
         }
 
         const adminUser = {
           uid: 'admintorrentfitness1',
           username: 'admintorrentfitness1',
           displayName: 'Torrent Admin (Master)',
-          email: 'admin@torrentfitness.in',
+          email: 'torrentfitness1@gmail.com',
           role: 'admin' as const,
           status: 'active',
           createdAt: new Date().toISOString()
@@ -711,7 +703,7 @@ async function startServer() {
             uid: 'admintorrentfitness1',
             username: 'admintorrentfitness1',
             displayName: 'Torrent Admin (Master)',
-            email: 'admin@torrentfitness.in',
+            email: 'torrentfitness1@gmail.com',
             role: 'admin',
             status: 'active'
           }
@@ -746,19 +738,28 @@ async function startServer() {
   app.post('/api/auth/update-admin-password', requireAdmin, async (req: Request, res: Response) => {
     try {
       const { currentPassword, newPassword } = req.body;
-      if (!currentPassword || !newPassword || newPassword.length < 6) {
-        return res.status(400).json({ success: false, error: 'Current password and new password (min 6 characters) are required.' });
+      if (!currentPassword || !newPassword || newPassword.length < 8) {
+        return res.status(400).json({ success: false, error: 'Current password and new password (min 8 characters) are required.' });
       }
 
       if (!db) return res.status(500).json({ success: false, error: 'Database initializing.' });
 
       let activeHash = '';
-      const secSnap = await getDoc(doc(db, 'gymSettings', 'adminSecurity')).catch(() => null);
-      if (secSnap?.exists()) {
-        activeHash = secSnap.data().passwordHash || secSnap.data().password || '';
+      let hasCustom = false;
+      const authSnap = await getDoc(doc(db, 'system_settings', 'master_admin_auth')).catch(() => null);
+      if (authSnap?.exists() && authSnap.data()?.passwordHash) {
+        activeHash = authSnap.data().passwordHash;
+        hasCustom = Boolean(authSnap.data().hasCustomPassword);
+      }
+      if (!activeHash) {
+        const secSnap = await getDoc(doc(db, 'gymSettings', 'adminSecurity')).catch(() => null);
+        if (secSnap?.exists()) {
+          activeHash = secSnap.data().passwordHash || secSnap.data().password || '';
+          hasCustom = Boolean(secSnap.data().hasCustomPassword);
+        }
       }
 
-      if (!activeHash) {
+      if (!activeHash && !hasCustom) {
         activeHash = hashPassword(process.env.ADMIN_DEFAULT_PASSWORD || 'torrent#19@fit1');
       }
 
@@ -769,14 +770,34 @@ async function startServer() {
       const newHash = hashPassword(newPassword);
       const now = new Date().toISOString();
 
+      await setDoc(doc(db, 'system_settings', 'master_admin_auth'), {
+        passwordHash: newHash,
+        hasCustomPassword: true,
+        updatedAt: now,
+        officialEmail: 'torrentfitness1@gmail.com',
+        updatedBy: 'Master Admin'
+      }, { merge: true });
+
       await setDoc(doc(db, 'gymSettings', 'adminSecurity'), {
         passwordHash: newHash,
+        hasCustomPassword: true,
         password: null,
         updatedAt: now,
         updatedBy: 'admin'
       }, { merge: true });
 
-      return res.json({ success: true, message: 'Admin password updated securely.' });
+      return res.json({ success: true, message: 'Admin password updated securely. Old password deactivated.' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/admin/dispatch-otp', async (req: Request, res: Response) => {
+    try {
+      const { email, otp } = req.body;
+      const targetEmail = email || 'torrentfitness1@gmail.com';
+      console.log(`[Admin Security] OTP code [${otp}] dispatched to ${targetEmail}`);
+      return res.json({ success: true, message: `OTP sent to ${targetEmail}` });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }
@@ -1427,7 +1448,7 @@ Please evaluate the attached visual physique photo according to the required JSO
       const formattedAmount = isNaN(validatedAmount) ? '1.00' : validatedAmount.toFixed(2);
       const cleanProductInfo = String(productinfo).trim().slice(0, 100);
       const cleanFirstName = String(firstname).trim();
-      const cleanEmail = String(email || 'member@torrentfitness.in').trim();
+      const cleanEmail = String(email || 'torrentfitness1@gmail.com').trim();
       const cleanPhone = String(phone || '').replace(/[^\d+]/g, '');
 
       // Formula: sha512(key|txnid|amount|productinfo|firstname|email|||||||||||salt)

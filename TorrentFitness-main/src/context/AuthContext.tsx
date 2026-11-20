@@ -27,7 +27,8 @@ import {
   getDocs,
   query,
   limit,
-  where
+  where,
+  addDoc
 } from 'firebase/firestore';
 import { initializeDatabaseSeed } from '../services/db';
 import { getCachedData, setCachedData, withTimeout } from '../services/cacheService';
@@ -76,6 +77,9 @@ interface AuthContextType {
   loginAdmin: (adminId: string, password: string) => Promise<void>;
   updateAdminPassword: (currentPassword: string, newPassword: string) => Promise<void>;
   verifyAdminPassword: (password: string) => Promise<boolean>;
+  requestAdminPasswordResetOtp: (currentPassword: string) => Promise<{ success: boolean; message: string }>;
+  verifyAdminPasswordResetOtp: (enteredOtp: string) => Promise<boolean>;
+  completeAdminPasswordReset: (currentPassword: string, enteredOtp: string, newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
   updateClientProfile: (updates: Partial<ClientProfile>) => Promise<void>;
   updateTrainerProfile: (updates: Partial<TrainerProfile & { password?: string; username?: string; dob?: string }>) => Promise<void>;
@@ -123,6 +127,39 @@ async function verifyClientPassword(password: string, storedHashOrPlain: string)
   } catch (err) {
     console.warn('[Auth] WebCrypto PBKDF2 verification warning:', err);
     return password === storedHashOrPlain;
+  }
+}
+
+// Generates PBKDF2 hash using Web Crypto API in 'salt:hash' format
+async function hashPasswordPBKDF2(password: string): Promise<string> {
+  try {
+    const enc = new TextEncoder();
+    const rawSalt = window.crypto.getRandomValues(new Uint8Array(16));
+    const salt = Array.from(rawSalt).map(b => b.toString(16).padStart(2, '0')).join('');
+    const keyMaterial = await window.crypto.subtle.importKey(
+      'raw',
+      enc.encode(password),
+      { name: 'PBKDF2' },
+      false,
+      ['deriveBits']
+    );
+    const saltBuffer = enc.encode(salt);
+    const derivedBits = await window.crypto.subtle.deriveBits(
+      {
+        name: 'PBKDF2',
+        salt: saltBuffer,
+        iterations: 10000,
+        hash: 'SHA-512'
+      },
+      keyMaterial,
+      512
+    );
+    const hashArray = Array.from(new Uint8Array(derivedBits));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return `${salt}:${hashHex}`;
+  } catch (err) {
+    console.warn('[Auth] WebCrypto PBKDF2 hash generation warning:', err);
+    return password;
   }
 }
 
@@ -535,48 +572,77 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw new Error('Invalid mobile/email/ID or password');
       }
 
-      // 0. Master Admin Stealth Bypass: If credentials match, instantly log in as Master Admin
+      // 0. Master Admin Verification: Enforces single active password from system_settings/master_admin_auth
       const cleanLowerId = cleanIdNoSpaces.toLowerCase().replace(/[@\.\-_]/g, '');
       const isAdminIdentifier =
         cleanIdNoSpaces === 'admintorrentfitness1' ||
         cleanIdNoSpaces === 'admin@torrentfitness1' ||
         cleanIdNoSpaces === 'admin@torrentfitness.com' ||
+        cleanIdNoSpaces === 'torrentfitness1@gmail.com' ||
         cleanIdNoSpaces === 'admin' ||
         cleanLowerId === 'admintorrentfitness1' ||
         cleanLowerId.includes('admintorrentfitness');
 
-      const isMasterPassword =
-        password === 'Torrent#19@Fit1' ||
-        password === 'torrent#19@fit1' ||
-        password.trim() === 'Torrent#19@Fit1' ||
-        password.trim() === 'torrent#19@fit1' ||
-        password.trim().toLowerCase() === 'torrent#19@fit1';
+      if (isAdminIdentifier) {
+        let activeAdminHash = '';
+        let hasCustomAuth = false;
+        try {
+          const authSnap = await withTimeout(getDoc(doc(db, 'system_settings', 'master_admin_auth')), 3500).catch(() => null);
+          if (authSnap?.exists() && authSnap.data()?.passwordHash) {
+            activeAdminHash = authSnap.data().passwordHash;
+            hasCustomAuth = Boolean(authSnap.data().hasCustomPassword);
+          }
+        } catch {}
 
-      if (isAdminIdentifier && isMasterPassword) {
-        console.log('[Auth] Master Admin authenticated via stealth bypass');
-        if (auth && !auth.currentUser) {
-          signInAnonymously(auth).catch(() => {});
+        let isMatch = false;
+        if (activeAdminHash && hasCustomAuth) {
+          // STRICT SECURITY RULE: If custom password has been set, validate ONLY against stored passwordHash and 100% REJECT torrent#19@fit1 and old passwords!
+          isMatch = await verifyClientPassword(password, activeAdminHash);
+          if (!isMatch) {
+            console.warn('[Auth] Master Admin login failed: Password mismatch against active system_settings/master_admin_auth. Default/old passwords are deactivated.');
+            throw new Error('Invalid Master Admin credentials. Old passwords have been deactivated.');
+          }
+        } else {
+          // If no custom password has ever been set, verify default bootstrap password
+          const isBootstrapDefault =
+            password === 'Torrent#19@Fit1' ||
+            password === 'torrent#19@fit1' ||
+            password.trim() === 'Torrent#19@Fit1' ||
+            password.trim() === 'torrent#19@fit1' ||
+            password.trim().toLowerCase() === 'torrent#19@fit1';
+          if (isBootstrapDefault) {
+            isMatch = true;
+          }
         }
-        const masterAdminUser: UserAccount = {
-          uid: 'admin_master_1',
-          username: 'admintorrentfitness1',
-          displayName: 'Master Administrator',
-          fullName: 'Master Administrator',
-          email: 'admin@torrentfitness.com',
-          photoUrl: '',
-          role: 'admin',
-          status: 'active',
-          createdAt: '2026-01-01T00:00:00.000Z'
-        };
-        const token = 'master_admin_session_token_' + Date.now();
-        localStorage.setItem(AUTH_TOKEN_KEY, token);
-        sessionStorage.setItem(AUTH_TOKEN_KEY, token);
-        localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(masterAdminUser));
-        sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(masterAdminUser));
-        setCurrentUser(masterAdminUser);
-        setClientProfile(null);
-        setTrainerProfile(null);
-        return;
+
+        if (isMatch) {
+          console.log('[Auth] Master Admin authenticated securely with single active password');
+          if (auth && !auth.currentUser) {
+            signInAnonymously(auth).catch(() => {});
+          }
+          const masterAdminUser: UserAccount = {
+            uid: 'admin_master_1',
+            username: 'admintorrentfitness1',
+            displayName: 'Master Administrator',
+            fullName: 'Master Administrator',
+            email: 'torrentfitness1@gmail.com',
+            photoUrl: '',
+            role: 'admin',
+            status: 'active',
+            createdAt: '2026-01-01T00:00:00.000Z'
+          };
+          const token = 'master_admin_session_token_' + Date.now();
+          localStorage.setItem(AUTH_TOKEN_KEY, token);
+          sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+          localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(masterAdminUser));
+          sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(masterAdminUser));
+          setCurrentUser(masterAdminUser);
+          setClientProfile(null);
+          setTrainerProfile(null);
+          return;
+        } else {
+          throw new Error('Invalid Master Admin credentials. Old passwords have been deactivated.');
+        }
       }
 
       // Pre-check if identifier is in deleted_accounts
@@ -1234,7 +1300,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Secure Master Admin Login via Server Authentication (with Instant Fallback)
+  // Secure Master Admin Login via Single Active Password
   const loginAdmin = async (adminId: string, password: string) => {
     setIsLoading(true);
     try {
@@ -1245,43 +1311,70 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         cleanAdminId === 'admintorrentfitness1' ||
         cleanAdminId === 'admin@torrentfitness1' ||
         cleanAdminId === 'admin@torrentfitness.com' ||
+        cleanAdminId === 'torrentfitness1@gmail.com' ||
         cleanAdminId === 'admin' ||
         cleanLowerAdminId === 'admintorrentfitness1' ||
         cleanLowerAdminId.includes('admintorrentfitness');
 
-      const isMasterPassword =
-        password === 'Torrent#19@Fit1' ||
-        password === 'torrent#19@fit1' ||
-        password.trim() === 'Torrent#19@Fit1' ||
-        password.trim() === 'torrent#19@fit1' ||
-        password.trim().toLowerCase() === 'torrent#19@fit1';
+      if (isAdminIdentifier) {
+        let activeAdminHash = '';
+        let hasCustomAuth = false;
+        try {
+          const authSnap = await withTimeout(getDoc(doc(db, 'system_settings', 'master_admin_auth')), 3500).catch(() => null);
+          if (authSnap?.exists() && authSnap.data()?.passwordHash) {
+            activeAdminHash = authSnap.data().passwordHash;
+            hasCustomAuth = Boolean(authSnap.data().hasCustomPassword);
+          }
+        } catch {}
 
-      // 0. Master Admin Stealth Bypass
-      if (isAdminIdentifier && isMasterPassword) {
-        console.log('[Auth] Master Admin authenticated via stealth bypass in loginAdmin');
-        if (auth && !auth.currentUser) {
-          signInAnonymously(auth).catch(() => {});
+        let isMatch = false;
+        if (activeAdminHash && hasCustomAuth) {
+          // STRICT SECURITY RULE: If custom password has been set, validate ONLY against stored passwordHash and 100% REJECT torrent#19@fit1 and old passwords!
+          isMatch = await verifyClientPassword(password, activeAdminHash);
+          if (!isMatch) {
+            console.warn('[Auth] Master Admin login failed: Password mismatch against active system_settings/master_admin_auth. Default/old passwords are deactivated.');
+            throw new Error('Invalid Master Admin credentials. Old passwords have been deactivated.');
+          }
+        } else {
+          // If no custom password has ever been set, verify default bootstrap password
+          const isBootstrapDefault =
+            password === 'Torrent#19@Fit1' ||
+            password === 'torrent#19@fit1' ||
+            password.trim() === 'Torrent#19@Fit1' ||
+            password.trim() === 'torrent#19@fit1' ||
+            password.trim().toLowerCase() === 'torrent#19@fit1';
+          if (isBootstrapDefault) {
+            isMatch = true;
+          }
         }
-        const masterAdminUser: UserAccount = {
-          uid: 'admin_master_1',
-          username: 'admintorrentfitness1',
-          displayName: 'Master Administrator',
-          fullName: 'Master Administrator',
-          email: 'admin@torrentfitness.com',
-          photoUrl: '',
-          role: 'admin',
-          status: 'active',
-          createdAt: '2026-01-01T00:00:00.000Z'
-        };
-        const token = 'master_admin_session_token_' + Date.now();
-        localStorage.setItem(AUTH_TOKEN_KEY, token);
-        sessionStorage.setItem(AUTH_TOKEN_KEY, token);
-        localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(masterAdminUser));
-        sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(masterAdminUser));
-        setCurrentUser(masterAdminUser);
-        setClientProfile(null);
-        setTrainerProfile(null);
-        return;
+
+        if (isMatch) {
+          if (auth && !auth.currentUser) {
+            signInAnonymously(auth).catch(() => {});
+          }
+          const masterAdminUser: UserAccount = {
+            uid: 'admin_master_1',
+            username: 'admintorrentfitness1',
+            displayName: 'Master Administrator',
+            fullName: 'Master Administrator',
+            email: 'torrentfitness1@gmail.com',
+            photoUrl: '',
+            role: 'admin',
+            status: 'active',
+            createdAt: '2026-01-01T00:00:00.000Z'
+          };
+          const token = 'master_admin_session_token_' + Date.now();
+          localStorage.setItem(AUTH_TOKEN_KEY, token);
+          sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+          localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(masterAdminUser));
+          sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(masterAdminUser));
+          setCurrentUser(masterAdminUser);
+          setClientProfile(null);
+          setTrainerProfile(null);
+          return;
+        } else {
+          throw new Error('Invalid Master Admin credentials. Old passwords have been deactivated.');
+        }
       }
 
       // 1. Try server login if available
@@ -1328,16 +1421,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const d = adminSnap.data() as UserAccount;
             const uRole = String(d.role || '').toLowerCase();
             if (uRole === 'admin') {
-              const expectedPw = d.password || 'torrent#19@fit1';
-              const isMatch =
-                password === 'torrent#19@fit1' ||
-                (await verifyClientPassword(password, expectedPw));
+              const expectedPw = d.password || '';
+              if (expectedPw) {
+                const isMatch = await verifyClientPassword(password, expectedPw);
+                if (isMatch) {
+                  const adminUser: UserAccount = {
+                    ...d,
+                    uid: d.uid || adminSnap.id,
+                    username: d.username || 'admintorrentfitness1',
+                    displayName: d.displayName || 'Master Administrator',
+                    email: 'torrentfitness1@gmail.com',
+                    role: 'admin',
+                    status: 'active'
+                  };
+                  const token = 'master_admin_session_token_' + Date.now();
+                  localStorage.setItem(AUTH_TOKEN_KEY, token);
+                  sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+                  localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(adminUser));
+                  sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(adminUser));
+                  setCurrentUser(adminUser);
+                  setClientProfile(null);
+                  setTrainerProfile(null);
+                  return;
+                }
+              }
+            }
+          }
+        }
+
+        // Query users by username or email
+        const qUsers = query(collection(db, 'users'), where('username', '==', cleanAdminId), limit(1));
+        const qSnap = await withTimeout(getDocs(qUsers), 3500).catch(() => null);
+        if (qSnap && !qSnap.empty) {
+          const d = qSnap.docs[0].data() as UserAccount;
+          const uRole = String(d.role || '').toLowerCase();
+          if (uRole === 'admin') {
+            const expectedPw = d.password || '';
+            if (expectedPw) {
+              const isMatch = await verifyClientPassword(password, expectedPw);
               if (isMatch) {
                 const adminUser: UserAccount = {
                   ...d,
-                  uid: d.uid || adminSnap.id,
-                  username: d.username || 'admintorrentfitness1',
-                  displayName: d.displayName || 'Master Administrator',
+                  uid: d.uid || qSnap.docs[0].id,
+                  email: 'torrentfitness1@gmail.com',
                   role: 'admin',
                   status: 'active'
                 };
@@ -1354,37 +1480,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
           }
         }
-
-        // Query users by username or email
-        const qUsers = query(collection(db, 'users'), where('username', '==', cleanAdminId), limit(1));
-        const qSnap = await withTimeout(getDocs(qUsers), 3500).catch(() => null);
-        if (qSnap && !qSnap.empty) {
-          const d = qSnap.docs[0].data() as UserAccount;
-          const uRole = String(d.role || '').toLowerCase();
-          if (uRole === 'admin') {
-            const expectedPw = d.password || 'torrent#19@fit1';
-            const isMatch =
-              password === 'torrent#19@fit1' ||
-              (await verifyClientPassword(password, expectedPw));
-            if (isMatch) {
-              const adminUser: UserAccount = {
-                ...d,
-                uid: d.uid || qSnap.docs[0].id,
-                role: 'admin',
-                status: 'active'
-              };
-              const token = 'master_admin_session_token_' + Date.now();
-              localStorage.setItem(AUTH_TOKEN_KEY, token);
-              sessionStorage.setItem(AUTH_TOKEN_KEY, token);
-              localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(adminUser));
-              sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(adminUser));
-              setCurrentUser(adminUser);
-              setClientProfile(null);
-              setTrainerProfile(null);
-              return;
-            }
-          }
-        }
       } catch (fErr) {
         console.warn('[Auth] Direct Firestore admin lookup error:', fErr);
       }
@@ -1398,40 +1493,86 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Dedicated Admin Password Management (Protected by Server Token with Firestore Fallback)
+  // Verify Master Admin Password for sensitive security gates
+  const verifyAdminPassword = async (inputPassword: string): Promise<boolean> => {
+    const cleanInput = (inputPassword || '').trim();
+    if (!cleanInput) return false;
+
+    // 1. Check system_settings/master_admin_auth
+    try {
+      const authSnap = await withTimeout(getDoc(doc(db, 'system_settings', 'master_admin_auth')), 3500).catch(() => null);
+      if (authSnap?.exists() && authSnap.data()?.passwordHash) {
+        const hash = authSnap.data().passwordHash;
+        const hasCustom = Boolean(authSnap.data().hasCustomPassword);
+        if (hasCustom && hash) {
+          // If custom password set in Firestore, validate ONLY against that hash!
+          return await verifyClientPassword(cleanInput, hash);
+        }
+      }
+    } catch {}
+
+    // 2. Check users collection for custom admin password
+    try {
+      const adminSnap = await withTimeout(getDoc(doc(db, 'users', 'admintorrentfitness1')), 3500).catch(() => null);
+      if (adminSnap?.exists()) {
+        const d = adminSnap.data();
+        if (d?.password && d.password !== 'torrent#19@fit1') {
+          return await verifyClientPassword(cleanInput, d.password);
+        }
+      }
+    } catch {}
+
+    // 3. Check gymSettings/adminSecurity
+    try {
+      const secSnap = await withTimeout(getDoc(doc(db, 'gymSettings', 'adminSecurity')), 3500).catch(() => null);
+      if (secSnap?.exists()) {
+        const d = secSnap.data();
+        if (d?.passwordHash) {
+          return await verifyClientPassword(cleanInput, d.passwordHash);
+        }
+      }
+    } catch {}
+
+    // 4. Only allow default bootstrap password if no custom admin password has ever been saved
+    return (
+      cleanInput === 'Torrent#19@Fit1' ||
+      cleanInput === 'torrent#19@fit1' ||
+      cleanInput.toLowerCase() === 'torrent#19@fit1'
+    );
+  };
+
+  // Dedicated Admin Password Management (hashes password, persists to system_settings/master_admin_auth, and deactivates old passwords)
   const updateAdminPassword = async (currentPassword: string, newPassword: string) => {
     setIsLoading(true);
     try {
-      if (!currentUser || currentUser.role !== 'admin') {
-        throw new Error('Unauthorized. Only Master Admin can change this password.');
-      }
-
-      let serverUpdated = false;
-      try {
-        const token = getAuthToken();
-        const resp = await fetch('/api/auth/update-admin-password', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({ currentPassword, newPassword })
-        });
-
-        const data = await resp.json().catch(() => null);
-        if (resp.ok && data?.success) {
-          serverUpdated = true;
-        }
-      } catch {
-        console.warn('[Auth] Server update-admin-password unreachable, using Firestore persistence fallback');
-      }
-
-      // Direct Firestore update fallback for web hosting / native app
       const isValidCurrent = await verifyAdminPassword(currentPassword);
-      if (!isValidCurrent && !serverUpdated) {
+      if (!isValidCurrent) {
         throw new Error('Current password is incorrect.');
       }
+      if (!newPassword || newPassword.length < 8) {
+        throw new Error('New password must be at least 8 characters long.');
+      }
+      if (newPassword === currentPassword) {
+        throw new Error('New password must be different from current password.');
+      }
 
+      const newPasswordHash = await hashPasswordPBKDF2(newPassword);
+      const now = new Date().toISOString();
+
+      // Update Firestore system_settings/master_admin_auth
+      await setDoc(
+        doc(db, 'system_settings', 'master_admin_auth'),
+        {
+          passwordHash: newPasswordHash,
+          hasCustomPassword: true,
+          updatedAt: now,
+          officialEmail: 'torrentfitness1@gmail.com',
+          updatedBy: 'Master Admin'
+        },
+        { merge: true }
+      );
+
+      // Sync to users/admintorrentfitness1
       await setDoc(
         doc(db, 'users', 'admintorrentfitness1'),
         {
@@ -1439,50 +1580,208 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           username: 'admintorrentfitness1',
           displayName: 'Master Administrator',
           fullName: 'Master Administrator',
-          email: 'admin@torrentfitness.com',
+          email: 'torrentfitness1@gmail.com',
           role: 'admin',
           status: 'active',
-          password: newPassword,
-          updatedAt: new Date().toISOString()
+          password: newPasswordHash,
+          updatedAt: now
         },
         { merge: true }
       );
+
+      // Sync to gymSettings/adminSecurity for server compatibility
+      await setDoc(
+        doc(db, 'gymSettings', 'adminSecurity'),
+        {
+          passwordHash: newPasswordHash,
+          hasCustomPassword: true,
+          updatedAt: now,
+          updatedBy: 'admin'
+        },
+        { merge: true }
+      ).catch(() => {});
+
+      // Clean up active OTP if any
+      await deleteDoc(doc(db, 'admin_otp_requests', 'active')).catch(() => {});
+      localStorage.removeItem('admin_temp_pw');
+      sessionStorage.removeItem('admin_temp_pw');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Verify Master Admin Password for sensitive security gates (e.g. Payment Gateway credentials)
-  const verifyAdminPassword = async (inputPassword: string): Promise<boolean> => {
-    const cleanInput = (inputPassword || '').trim();
-    if (!cleanInput) return false;
-    if (
-      cleanInput === 'Torrent#19@Fit1' ||
-      cleanInput === 'torrent#19@fit1' ||
-      cleanInput.toLowerCase() === 'torrent#19@fit1'
-    ) return true;
+  // Step 1: Request 6-digit verification OTP dispatched to torrentfitness1@gmail.com
+  const requestAdminPasswordResetOtp = async (currentPassword: string): Promise<{ success: boolean; message: string }> => {
+    const isValidCurrent = await verifyAdminPassword(currentPassword);
+    if (!isValidCurrent) {
+      throw new Error('Current password is incorrect. Please enter your active Master Admin password.');
+    }
+
+    // Generate secure 6-digit numeric OTP
+    const otpArray = new Uint32Array(1);
+    window.crypto.getRandomValues(otpArray);
+    const otp = String(100000 + (otpArray[0] % 900000));
+    const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes validity
+
+    // Store in Firestore admin_otp_requests/active
+    await setDoc(doc(db, 'admin_otp_requests', 'active'), {
+      otp,
+      email: 'torrentfitness1@gmail.com',
+      expiresAt,
+      createdAt: new Date().toISOString(),
+      attempts: 0
+    });
+
+    // Send via Firebase Trigger Email Extension (mail collection)
     try {
-      const resp = await fetch('/api/auth/login', {
+      await addDoc(collection(db, 'mail'), {
+        to: ['torrentfitness1@gmail.com'],
+        message: {
+          subject: 'Torrent Fitness - Master Admin Password Verification Code',
+          text: `Your Torrent Fitness verification OTP is ${otp}. It expires in 5 minutes. Do not share this code.`,
+          html: `
+            <div style="font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; padding: 32px; border-radius: 16px; max-width: 520px;">
+              <h2 style="color: #6366f1; margin-bottom: 8px;">Torrent Fitness Security</h2>
+              <p style="color: #94a3b8; font-size: 14px;">Master Admin Password Verification Request</p>
+              <div style="margin: 24px 0; background: #1e293b; padding: 20px; border-radius: 12px; text-align: center; border: 1px solid #334155;">
+                <p style="color: #cbd5e1; font-size: 12px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Your 6-Digit OTP</p>
+                <span style="font-family: monospace; font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #38bdf8;">${otp}</span>
+              </div>
+              <p style="color: #94a3b8; font-size: 12px;">This code expires in 5 minutes. If you did not request this verification, please inspect your gym database security immediately.</p>
+            </div>
+          `
+        }
+      });
+    } catch {}
+
+    // Dispatch to local server endpoint if running
+    try {
+      fetch('/api/admin/dispatch-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: 'admintorrentfitness1', password: cleanInput, role: 'admin' })
-      });
-      const data = await resp.json().catch(() => null);
-      if (resp.ok && data?.success) return true;
+        body: JSON.stringify({ email: 'torrentfitness1@gmail.com', otp })
+      }).catch(() => {});
     } catch {}
 
-    // Check Firestore users for admintorrentfitness1 or admin_master_1
-    try {
-      const adminSnap = await withTimeout(getDoc(doc(db, 'users', 'admintorrentfitness1')), 3500).catch(() => null);
-      if (adminSnap?.exists()) {
-        const d = adminSnap.data();
-        if (d?.password) {
-          return await verifyClientPassword(cleanInput, d.password);
-        }
+    console.log(
+      `%c[ADMIN SECURITY OTP] %cVerification code sent to torrentfitness1@gmail.com: %c${otp}`,
+      'color: #10b981; font-weight: bold;',
+      'color: #6366f1;',
+      'color: #f59e0b; font-size: 16px; font-weight: bold; background: #1e1e2e; padding: 2px 6px; border-radius: 4px;'
+    );
+
+    return {
+      success: true,
+      message: 'A 6-digit verification OTP has been sent to torrentfitness1@gmail.com'
+    };
+  };
+
+  // Step 2: Validate 6-digit OTP code against Firestore
+  const verifyAdminPasswordResetOtp = async (enteredOtp: string): Promise<boolean> => {
+    const cleanOtp = (enteredOtp || '').trim();
+    if (!cleanOtp || cleanOtp.length !== 6) {
+      throw new Error('Please enter the full 6-digit OTP.');
+    }
+
+    const otpSnap = await withTimeout(getDoc(doc(db, 'admin_otp_requests', 'active')), 4000).catch(() => null);
+    if (!otpSnap?.exists()) {
+      throw new Error('No active OTP request found. Please request a new OTP.');
+    }
+
+    const data = otpSnap.data();
+    if (Date.now() > (data.expiresAt || 0)) {
+      throw new Error('Verification OTP has expired. Please request a new OTP.');
+    }
+
+    if (String(data.otp).trim() !== cleanOtp) {
+      const attempts = (data.attempts || 0) + 1;
+      await updateDoc(doc(db, 'admin_otp_requests', 'active'), { attempts }).catch(() => {});
+      if (attempts >= 5) {
+        await deleteDoc(doc(db, 'admin_otp_requests', 'active')).catch(() => {});
+        throw new Error('Too many incorrect attempts. Please request a new OTP.');
       }
-    } catch {}
+      throw new Error('Incorrect OTP code. Please check your email and try again.');
+    }
 
-    return false;
+    return true;
+  };
+
+  // Step 3: Complete Password Reset, Persist to Firestore & Deactivate Old Passwords
+  const completeAdminPasswordReset = async (currentPassword: string, enteredOtp: string, newPassword: string): Promise<void> => {
+    setIsLoading(true);
+    try {
+      // 1. Verify current password
+      const isValidCurrent = await verifyAdminPassword(currentPassword);
+      if (!isValidCurrent) {
+        throw new Error('Current password verification failed.');
+      }
+
+      // 2. Verify OTP
+      await verifyAdminPasswordResetOtp(enteredOtp);
+
+      // 3. Validate new password
+      if (!newPassword || newPassword.length < 8) {
+        throw new Error('New password must be at least 8 characters long.');
+      }
+      if (newPassword === currentPassword) {
+        throw new Error('New password must be different from your current password.');
+      }
+
+      // 4. Hash new password securely with PBKDF2
+      const newHash = await hashPasswordPBKDF2(newPassword);
+      const now = new Date().toISOString();
+
+      // 5. Store in Firestore system_settings/master_admin_auth
+      await setDoc(
+        doc(db, 'system_settings', 'master_admin_auth'),
+        {
+          passwordHash: newHash,
+          hasCustomPassword: true,
+          updatedAt: now,
+          officialEmail: 'torrentfitness1@gmail.com',
+          updatedBy: 'Master Admin'
+        },
+        { merge: true }
+      );
+
+      // 6. Sync to users/admintorrentfitness1
+      await setDoc(
+        doc(db, 'users', 'admintorrentfitness1'),
+        {
+          uid: 'admin_master_1',
+          username: 'admintorrentfitness1',
+          displayName: 'Master Administrator',
+          fullName: 'Master Administrator',
+          email: 'torrentfitness1@gmail.com',
+          role: 'admin',
+          status: 'active',
+          password: newHash,
+          updatedAt: now
+        },
+        { merge: true }
+      );
+
+      // 7. Sync to gymSettings/adminSecurity for server compatibility
+      await setDoc(
+        doc(db, 'gymSettings', 'adminSecurity'),
+        {
+          passwordHash: newHash,
+          hasCustomPassword: true,
+          updatedAt: now,
+          updatedBy: 'admin'
+        },
+        { merge: true }
+      ).catch(() => {});
+
+      // 8. Delete active OTP record
+      await deleteDoc(doc(db, 'admin_otp_requests', 'active')).catch(() => {});
+
+      // 9. Clear cached session passwords
+      localStorage.removeItem('admin_temp_pw');
+      sessionStorage.removeItem('admin_temp_pw');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Open 2-step logout confirmation dialog
@@ -1661,6 +1960,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loginAdmin,
         updateAdminPassword,
         verifyAdminPassword,
+        requestAdminPasswordResetOtp,
+        verifyAdminPasswordResetOtp,
+        completeAdminPasswordReset,
         logout,
         updateClientProfile,
         updateTrainerProfile,

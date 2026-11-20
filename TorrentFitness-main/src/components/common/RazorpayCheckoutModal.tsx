@@ -206,7 +206,7 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
           image: 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=150',
           prefill: {
             name: clientName || 'Torrent Member',
-            email: clientEmail || (clientId ? `${clientId}@torrentfitness.in` : 'member@torrentfitness.in'),
+            email: clientEmail || (clientId ? `${clientId}@torrentfitness.com` : 'torrentfitness1@gmail.com'),
             contact: (clientPhone || '').replace(/[^\d+]/g, '')
           },
           notes: {
@@ -302,7 +302,7 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
         image: 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=150',
         prefill: {
           name: clientName || 'Torrent Member',
-          email: clientEmail || (clientId ? `${clientId}@torrentfitness.in` : 'member@torrentfitness.in'),
+          email: clientEmail || (clientId ? `${clientId}@torrentfitness.com` : 'torrentfitness1@gmail.com'),
           contact: (clientPhone || '').replace(/[^\d+]/g, '')
         },
         notes: {
@@ -533,7 +533,7 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
     try {
       const payuTxnId = `TXN_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
       const cleanFirstName = (clientName || 'Member').trim().split(' ')[0].replace(/[^a-zA-Z]/g, '') || 'Member';
-      const cleanEmail = (clientEmail && clientEmail.includes('@')) ? clientEmail.trim() : 'member@torrentfitness.in';
+      const cleanEmail = (clientEmail && clientEmail.includes('@')) ? clientEmail.trim() : 'torrentfitness1@gmail.com';
       const rawDigits = (clientPhone || '9876543210').replace(/\D/g, '');
       const cleanPhone = rawDigits.length >= 10 ? rawDigits.slice(-10) : '9876543210';
       const cleanProductInfo = (itemTitle || planName || 'Fitness Membership').replace(/[^a-zA-Z0-9 ]/g, '').trim().slice(0, 50) || 'Fitness Membership';

@@ -504,6 +504,8 @@ export interface GymQrConfig {
 export interface GymSettings {
   gymName: string;
   contactPhone: string;
+  contactEmail?: string;
+  officialEmail?: string;
   address: string;
   openingHours: string;
   ptMonthlyRate: number;

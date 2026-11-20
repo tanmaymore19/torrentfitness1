@@ -121,7 +121,11 @@ import {
   Layers,
   Calculator,
   Music,
-  TrendingUp
+  TrendingUp,
+  Mail,
+  RefreshCw,
+  Lock,
+  ArrowRight
 } from 'lucide-react';
 import { formatHeight, parseHeight } from '../../utils/heightUtils';
 
@@ -164,7 +168,14 @@ export interface CoreDomainConfig {
 }
 
 export const AdminApp: React.FC = () => {
-  const { logout, updateAdminPassword } = useAuth();
+  const {
+    logout,
+    updateAdminPassword,
+    verifyAdminPassword,
+    requestAdminPasswordResetOtp,
+    verifyAdminPasswordResetOtp,
+    completeAdminPasswordReset
+  } = useAuth();
   const { requestPdfDownload } = usePdfDownload();
 
   // Hierarchical Router State:
@@ -235,9 +246,11 @@ export const AdminApp: React.FC = () => {
   const [newPasswordInput, setNewPasswordInput] = useState('');
   const [passwordChangeLoading, setPasswordChangeLoading] = useState(false);
 
-  // Master Admin Password Security Modal states
+  // Master Admin 3-Step Password Reset Security Modal states
   const [showAdminPasswordModal, setShowAdminPasswordModal] = useState(false);
+  const [adminPasswordStep, setAdminPasswordStep] = useState<1 | 2 | 3>(1);
   const [currentAdminPasswordInput, setCurrentAdminPasswordInput] = useState('');
+  const [adminOtpInput, setAdminOtpInput] = useState('');
   const [newAdminPasswordInput, setNewAdminPasswordInput] = useState('');
   const [confirmAdminPasswordInput, setConfirmAdminPasswordInput] = useState('');
   const [adminPasswordLoading, setAdminPasswordLoading] = useState(false);
@@ -245,36 +258,121 @@ export const AdminApp: React.FC = () => {
   const [showCurrentPass, setShowCurrentPass] = useState(false);
   const [showNewPass, setShowNewPass] = useState(false);
   const [showConfirmPass, setShowConfirmPass] = useState(false);
+  const [otpResendCooldown, setOtpResendCooldown] = useState(0);
 
-  const handleUpdateAdminPasswordSubmit = async (e: React.FormEvent) => {
+  // Countdown timer for OTP resend
+  useEffect(() => {
+    if (otpResendCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setOtpResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [otpResendCooldown]);
+
+  const handleCloseAdminPasswordModal = () => {
+    setShowAdminPasswordModal(false);
+    setAdminPasswordStep(1);
+    setCurrentAdminPasswordInput('');
+    setAdminOtpInput('');
+    setNewAdminPasswordInput('');
+    setConfirmAdminPasswordInput('');
+    setAdminPasswordError('');
+    setShowCurrentPass(false);
+    setShowNewPass(false);
+    setShowConfirmPass(false);
+  };
+
+  // Step 1 Handler: Verify Current Password & Dispatch 6-digit OTP to torrentfitness1@gmail.com
+  const handleStep1VerifyAndSendOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdminPasswordError('');
+    const cleanPw = currentAdminPasswordInput.trim();
+    if (!cleanPw) {
+      setAdminPasswordError('Current active password is required.');
+      return;
+    }
+
+    setAdminPasswordLoading(true);
+    try {
+      const res = await requestAdminPasswordResetOtp(cleanPw);
+      setAdminPasswordStep(2);
+      setOtpResendCooldown(30);
+      showAdminNotice(res.message || 'Verification OTP sent to torrentfitness1@gmail.com', 'success');
+    } catch (err: any) {
+      setAdminPasswordError(err.message || 'Current password verification failed.');
+    } finally {
+      setAdminPasswordLoading(false);
+    }
+  };
+
+  // Step 2 Handler: Resend 6-Digit OTP
+  const handleResendAdminOtp = async () => {
+    if (otpResendCooldown > 0 || adminPasswordLoading) return;
+    setAdminPasswordLoading(true);
+    setAdminPasswordError('');
+    try {
+      const res = await requestAdminPasswordResetOtp(currentAdminPasswordInput.trim());
+      setOtpResendCooldown(30);
+      showAdminNotice(res.message || 'New verification OTP sent to torrentfitness1@gmail.com', 'success');
+    } catch (err: any) {
+      setAdminPasswordError(err.message || 'Failed to resend OTP.');
+    } finally {
+      setAdminPasswordLoading(false);
+    }
+  };
+
+  // Step 2 Handler: Verify Email OTP
+  const handleStep2VerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdminPasswordError('');
+    const cleanOtp = adminOtpInput.trim();
+    if (!cleanOtp || cleanOtp.length !== 6) {
+      setAdminPasswordError('Please enter the full 6-digit verification code.');
+      return;
+    }
+
+    setAdminPasswordLoading(true);
+    try {
+      await verifyAdminPasswordResetOtp(cleanOtp);
+      setAdminPasswordStep(3);
+      showAdminNotice('OTP verified successfully! You can now set your new password.', 'success');
+    } catch (err: any) {
+      setAdminPasswordError(err.message || 'Invalid or expired OTP.');
+    } finally {
+      setAdminPasswordLoading(false);
+    }
+  };
+
+  // Step 3 Handler: Set & Confirm New Password
+  const handleStep3SetNewPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setAdminPasswordError('');
 
-    if (!currentAdminPasswordInput.trim()) {
-      setAdminPasswordError('Current password is required.');
+    const cleanNew = newAdminPasswordInput.trim();
+    const cleanConfirm = confirmAdminPasswordInput.trim();
+
+    if (!cleanNew || cleanNew.length < 8) {
+      setAdminPasswordError('New password must be at least 8 characters long.');
       return;
     }
-    if (!newAdminPasswordInput.trim() || newAdminPasswordInput.length < 6) {
-      setAdminPasswordError('New password must be at least 6 characters long.');
-      return;
-    }
-    if (newAdminPasswordInput !== confirmAdminPasswordInput) {
+    if (cleanNew !== cleanConfirm) {
       setAdminPasswordError('New Password and Confirm New Password do not match.');
       return;
     }
-    if (newAdminPasswordInput === currentAdminPasswordInput) {
+    if (cleanNew === currentAdminPasswordInput.trim()) {
       setAdminPasswordError('New password must be different from current password.');
       return;
     }
 
     setAdminPasswordLoading(true);
     try {
-      await updateAdminPassword(currentAdminPasswordInput, newAdminPasswordInput);
-      showAdminNotice('Master Admin password updated successfully in database!', 'success');
-      setShowAdminPasswordModal(false);
-      setCurrentAdminPasswordInput('');
-      setNewAdminPasswordInput('');
-      setConfirmAdminPasswordInput('');
+      await completeAdminPasswordReset(
+        currentAdminPasswordInput.trim(),
+        adminOtpInput.trim(),
+        cleanNew
+      );
+      showAdminNotice('Master Admin password updated securely. Old password deactivated.', 'success');
+      handleCloseAdminPasswordModal();
     } catch (err: any) {
       setAdminPasswordError(err.message || 'Failed to update admin password.');
     } finally {
@@ -6141,10 +6239,11 @@ export const AdminApp: React.FC = () => {
         </div>
       )}
 
-      {/* Set Admin Password Security Modal */}
+      {/* Set Admin Password 3-Step Security Modal */}
       {showAdminPasswordModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-md animate-fade-in">
           <div className="w-full max-w-md vision-surface border border-white/90 rounded-3xl p-6 shadow-2xl text-slate-800 space-y-4">
+            {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-slate-200/80 pb-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-sky-400 text-white flex items-center justify-center shadow-md">
@@ -6157,123 +6256,271 @@ export const AdminApp: React.FC = () => {
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setShowAdminPasswordModal(false);
-                  setAdminPasswordError('');
-                }}
+                onClick={handleCloseAdminPasswordModal}
                 className="text-slate-400 hover:text-slate-700 p-1 rounded-lg"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleUpdateAdminPasswordSubmit} className="space-y-3.5 text-xs">
-              <div className="p-3 bg-indigo-50/80 rounded-2xl border border-indigo-200/70 text-[11px] text-indigo-900 flex items-center gap-2">
-                <Shield className="w-4 h-4 text-indigo-600 shrink-0" />
-                <span>Active Account: <strong className="font-mono">admintorrentfitness1</strong></span>
+            {/* 3-Step Soft Glassmorphic Progress Indicator */}
+            <div className="grid grid-cols-3 gap-2 pt-1 pb-1">
+              <div className={`p-2 rounded-xl text-center text-[10px] font-bold transition-all flex items-center justify-center gap-1 ${
+                adminPasswordStep === 1
+                  ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-400/30'
+                  : adminPasswordStep > 1
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                  : 'bg-slate-100 text-slate-400'
+              }`}>
+                {adminPasswordStep > 1 ? <CheckCircle className="w-3 h-3 text-emerald-600" /> : <Lock className="w-3 h-3" />}
+                <span>1. Verify Current</span>
               </div>
 
-              {/* Current Password Field */}
-              <div>
-                <label className="block text-slate-700 mb-1 font-bold">
-                  Current Password *
-                </label>
-                <div className="relative">
-                  <input
-                    type={showCurrentPass ? 'text' : 'password'}
-                    required
-                    placeholder="Enter active admin password"
-                    value={currentAdminPasswordInput}
-                    onChange={(e) => setCurrentAdminPasswordInput(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-white border border-slate-200/90 rounded-xl text-slate-800 font-mono text-xs pr-10 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-                  />
+              <div className={`p-2 rounded-xl text-center text-[10px] font-bold transition-all flex items-center justify-center gap-1 ${
+                adminPasswordStep === 2
+                  ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-400/30'
+                  : adminPasswordStep > 2
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                  : 'bg-slate-100 text-slate-400'
+              }`}>
+                {adminPasswordStep > 2 ? <CheckCircle className="w-3 h-3 text-emerald-600" /> : <Mail className="w-3 h-3" />}
+                <span>2. Email OTP</span>
+              </div>
+
+              <div className={`p-2 rounded-xl text-center text-[10px] font-bold transition-all flex items-center justify-center gap-1 ${
+                adminPasswordStep === 3
+                  ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-400/30'
+                  : 'bg-slate-100 text-slate-400'
+              }`}>
+                <Key className="w-3 h-3" />
+                <span>3. New Password</span>
+              </div>
+            </div>
+
+            {/* STEP 1: Verify Current Password */}
+            {adminPasswordStep === 1 && (
+              <form onSubmit={handleStep1VerifyAndSendOtp} className="space-y-3.5 text-xs">
+                <div className="p-3 bg-indigo-50/80 rounded-2xl border border-indigo-200/70 text-[11px] text-indigo-900 flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <span>Active Account: <strong className="font-mono">admintorrentfitness1</strong></span>
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 mb-1 font-bold">
+                    Current Master Admin Password *
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showCurrentPass ? 'text' : 'password'}
+                      required
+                      placeholder="Enter active admin password"
+                      value={currentAdminPasswordInput}
+                      onChange={(e) => setCurrentAdminPasswordInput(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-200/90 rounded-xl text-slate-800 font-mono text-xs pr-10 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowCurrentPass(!showCurrentPass)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                    >
+                      {showCurrentPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Entering your current password will generate a secure 6-digit OTP sent to <strong className="font-semibold text-slate-700">torrentfitness1@gmail.com</strong>.
+                  </p>
+                </div>
+
+                {adminPasswordError && (
+                  <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 flex items-center gap-2 font-medium text-xs">
+                    <XCircle className="w-4 h-4 shrink-0 text-rose-500" />
+                    <span>{adminPasswordError}</span>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2 pt-2 border-t border-slate-200/80">
                   <button
                     type="button"
-                    onClick={() => setShowCurrentPass(!showCurrentPass)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                    onClick={handleCloseAdminPasswordModal}
+                    className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-all border border-slate-200"
                   >
-                    {showCurrentPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={adminPasswordLoading || !currentAdminPasswordInput.trim()}
+                    className="flex-1 py-2.5 vision-btn-aurora text-white font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  >
+                    {adminPasswordLoading ? (
+                      <span>Verifying & Sending OTP...</span>
+                    ) : (
+                      <>
+                        <span>Verify & Send OTP</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
                   </button>
                 </div>
-                <p className="text-[10px] text-slate-500 mt-0.5">Mandatory verification against active database credentials.</p>
-              </div>
+              </form>
+            )}
 
-              {/* New Password Field */}
-              <div>
-                <label className="block text-slate-700 mb-1 font-bold">
-                  New Password *
-                </label>
-                <div className="relative">
+            {/* STEP 2: Verify Email OTP */}
+            {adminPasswordStep === 2 && (
+              <form onSubmit={handleStep2VerifyOtp} className="space-y-3.5 text-xs">
+                <div className="p-3.5 bg-sky-50 rounded-2xl border border-sky-200 text-sky-900 flex items-start gap-3">
+                  <Mail className="w-5 h-5 text-sky-600 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <p className="text-[11px] font-bold text-sky-950">A 6-digit verification OTP has been sent to:</p>
+                    <p className="font-mono text-xs font-black text-indigo-700">torrentfitness1@gmail.com</p>
+                    <p className="text-[10px] text-sky-700 pt-0.5">Please check your inbox (and spam folder). Code is valid for 5 minutes.</p>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 mb-1 font-bold">
+                    Enter 6-Digit Verification Code *
+                  </label>
                   <input
-                    type={showNewPass ? 'text' : 'password'}
+                    type="text"
                     required
-                    placeholder="Min 6 characters"
-                    value={newAdminPasswordInput}
-                    onChange={(e) => setNewAdminPasswordInput(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-white border border-slate-200/90 rounded-xl text-slate-800 font-mono text-xs pr-10 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                    maxLength={6}
+                    autoFocus
+                    placeholder="••••••"
+                    value={adminOtpInput}
+                    onChange={(e) => setAdminOtpInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    className="w-full px-3.5 py-3 bg-white border border-slate-200/90 rounded-xl text-slate-900 font-mono text-lg text-center tracking-[0.5em] font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
                   />
+                  <div className="flex items-center justify-between text-[11px] text-slate-500 mt-1.5 px-0.5">
+                    <span>Didn't receive the code?</span>
+                    {otpResendCooldown > 0 ? (
+                      <span className="text-slate-400 font-mono">Resend in {otpResendCooldown}s</span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleResendAdminOtp}
+                        disabled={adminPasswordLoading}
+                        className="text-indigo-600 hover:text-indigo-800 font-bold flex items-center gap-1 cursor-pointer"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>Resend OTP</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {adminPasswordError && (
+                  <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 flex items-center gap-2 font-medium text-xs">
+                    <XCircle className="w-4 h-4 shrink-0 text-rose-500" />
+                    <span>{adminPasswordError}</span>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2 pt-2 border-t border-slate-200/80">
                   <button
                     type="button"
-                    onClick={() => setShowNewPass(!showNewPass)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                    onClick={() => {
+                      setAdminPasswordStep(1);
+                      setAdminPasswordError('');
+                    }}
+                    className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-all border border-slate-200"
                   >
-                    {showNewPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    Back
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={adminPasswordLoading || adminOtpInput.trim().length !== 6}
+                    className="flex-1 py-2.5 vision-btn-aurora text-white font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  >
+                    <CheckCircle className="w-4 h-4" />
+                    <span>{adminPasswordLoading ? 'Validating OTP...' : 'Verify OTP Code'}</span>
                   </button>
                 </div>
-              </div>
+              </form>
+            )}
 
-              {/* Confirm New Password Field */}
-              <div>
-                <label className="block text-slate-700 mb-1 font-bold">
-                  Confirm New Password *
-                </label>
-                <div className="relative">
-                  <input
-                    type={showConfirmPass ? 'text' : 'password'}
-                    required
-                    placeholder="Re-enter new password"
-                    value={confirmAdminPasswordInput}
-                    onChange={(e) => setConfirmAdminPasswordInput(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-white border border-slate-200/90 rounded-xl text-slate-800 font-mono text-xs pr-10 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-                  />
+            {/* STEP 3: Set & Confirm New Password */}
+            {adminPasswordStep === 3 && (
+              <form onSubmit={handleStep3SetNewPassword} className="space-y-3.5 text-xs">
+                <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-200 text-[11px] text-emerald-900 flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Identity & Email OTP verified. Set your new strong password.</span>
+                </div>
+
+                {/* New Password Field */}
+                <div>
+                  <label className="block text-slate-700 mb-1 font-bold">
+                    New Password (Min 8 Characters) *
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showNewPass ? 'text' : 'password'}
+                      required
+                      placeholder="Min 8 characters"
+                      value={newAdminPasswordInput}
+                      onChange={(e) => setNewAdminPasswordInput(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-200/90 rounded-xl text-slate-800 font-mono text-xs pr-10 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPass(!showNewPass)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                    >
+                      {showNewPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Confirm New Password Field */}
+                <div>
+                  <label className="block text-slate-700 mb-1 font-bold">
+                    Confirm New Password *
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showConfirmPass ? 'text' : 'password'}
+                      required
+                      placeholder="Re-enter new password"
+                      value={confirmAdminPasswordInput}
+                      onChange={(e) => setConfirmAdminPasswordInput(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-200/90 rounded-xl text-slate-800 font-mono text-xs pr-10 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPass(!showConfirmPass)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                    >
+                      {showConfirmPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">Must be at least 8 characters and differ from previous password.</p>
+                </div>
+
+                {adminPasswordError && (
+                  <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 flex items-center gap-2 font-medium text-xs">
+                    <XCircle className="w-4 h-4 shrink-0 text-rose-500" />
+                    <span>{adminPasswordError}</span>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2 pt-2 border-t border-slate-200/80">
                   <button
                     type="button"
-                    onClick={() => setShowConfirmPass(!showConfirmPass)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                    onClick={handleCloseAdminPasswordModal}
+                    className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-all border border-slate-200"
                   >
-                    {showConfirmPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={adminPasswordLoading || !newAdminPasswordInput || !confirmAdminPasswordInput}
+                    className="flex-1 py-2.5 vision-btn-aurora text-white font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  >
+                    <CheckCircle className="w-4 h-4" />
+                    <span>{adminPasswordLoading ? 'Saving & Updating...' : 'Save & Deactivate Old'}</span>
                   </button>
                 </div>
-              </div>
-
-              {adminPasswordError && (
-                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 flex items-center gap-2 font-medium text-xs">
-                  <XCircle className="w-4 h-4 shrink-0 text-rose-500" />
-                  <span>{adminPasswordError}</span>
-                </div>
-              )}
-
-              <div className="flex items-center gap-2 pt-2 border-t border-slate-200/80">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAdminPasswordModal(false);
-                    setAdminPasswordError('');
-                  }}
-                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-all border border-slate-200"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={adminPasswordLoading || !currentAdminPasswordInput || !newAdminPasswordInput || !confirmAdminPasswordInput}
-                  className="flex-1 py-2.5 vision-btn-aurora text-white font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50"
-                >
-                  <CheckCircle className="w-4 h-4" />
-                  <span>{adminPasswordLoading ? 'Verifying & Updating...' : 'Save New Password'}</span>
-                </button>
-              </div>
-            </form>
+              </form>
+            )}
           </div>
         </div>
       )}

@@ -589,7 +589,7 @@ export const INITIAL_POPUP: HomePopup = {
 
 export const INITIAL_GYM_CONFIG: GymQrConfig = {
   activeToken: 'TORRENT_GYM_STATIC_GATEWAY_TOKEN',
-  gymCode: 'TORRENT-FITNESS-PUNJAB-01',
+  gymCode: 'TORRENT-FITNESS-DHULE-01',
   generatedAt: '2026-01-01T00:00:00.000Z',
   active: true,
   previousTokens: []
@@ -598,6 +598,8 @@ export const INITIAL_GYM_CONFIG: GymQrConfig = {
 export const INITIAL_SETTINGS: GymSettings = {
   gymName: 'Torrent Fitness',
   contactPhone: '8208002585',
+  contactEmail: 'torrentfitness1@gmail.com',
+  officialEmail: 'torrentfitness1@gmail.com',
   address: 'Torrent Fitness, Sakri Rd, near ramesh bakery, opposite Sinchan Bhavan, Mahindale, Kumar Nagar, Dhule, Maharashtra 424001',
   openingHours: '5:30 AM - 10:30 PM (Mon - Sun)',
   ptMonthlyRate: 3500,
@@ -999,7 +1001,7 @@ export async function initializeDatabaseSeed(force: boolean = false): Promise<vo
               uid: 'torrent_admin_master',
               username: 'admin',
               displayName: 'Torrent Admin (Master)',
-              email: 'tanmaymore0220@gmail.com',
+              email: 'torrentfitness1@gmail.com',
               photoUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
               role: 'admin',
               status: 'active',

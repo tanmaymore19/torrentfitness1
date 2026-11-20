@@ -105,8 +105,8 @@ export const PrivacyPolicyModal: React.FC<PrivacyPolicyModalProps> = ({ isOpen, 
             </h4>
             <p className="text-slate-600">
               Torrent Fitness Club<br />
-              Punjab, India • Reception Desk Support<br />
-              For queries or data requests, contact our reception team or email us at <strong>support@torrentfitness.in</strong>
+              Sakri Rd, opposite Sinchan Bhavan, Dhule, Maharashtra 424001 • Reception Desk Support<br />
+              For queries or data requests, contact our reception team or email us at <strong>torrentfitness1@gmail.com</strong>
             </p>
           </section>
         </div>

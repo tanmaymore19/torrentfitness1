@@ -897,10 +897,10 @@ export const exportSinglePaymentInvoicePdf = async (
 
     const gymAddress =
       item.gymAddress || 'Torrent Fitness, Sakri Rd, near ramesh bakery, opposite Sinchan Bhavan, Mahindale, Kumar Nagar, Dhule, Maharashtra 424001';
-    const gymEmail = 'billing@torrentfitness.club';
+    const gymEmail = 'torrentfitness1@gmail.com';
     const gymPhone = '+91 8208002585';
     const clientEmail =
-      item.clientEmail || `${item.clientId.toLowerCase().replace(/[^a-z0-9]/g, '')}@torrentfitness.club`;
+      item.clientEmail || (item.clientPhone ? `${item.clientPhone}@torrentfitness.com` : 'torrentfitness1@gmail.com');
 
     // 1. TOP EXECUTIVE HEADER BANNER (Deep Slate Luxury Bar)
     doc.setFillColor(15, 23, 42); // #0F172A
