@@ -520,6 +520,7 @@ async function startServer() {
       const newUser = {
         uid: cleanUser,
         username: cleanUser,
+        usernameLower: cleanUser,
         displayName: displayName.trim(),
         email: email.trim().toLowerCase(),
         phone: formattedPhone,
@@ -552,6 +553,13 @@ async function startServer() {
 
       await setDoc(userRef, newUser);
       await setDoc(doc(db, 'clientProfiles', cleanUser), newClientProfile);
+      await setDoc(doc(db, 'usernames', cleanUser), {
+        uid: cleanUser,
+        username: cleanUser,
+        usernameLower: cleanUser,
+        role: 'client',
+        claimedAt: timestamp
+      }, { merge: true });
 
       const safeUser = { ...newUser };
       delete (safeUser as any).passwordHash;
@@ -620,6 +628,7 @@ async function startServer() {
       const newUser = {
         uid: cleanUser,
         username: cleanUser,
+        usernameLower: cleanUser,
         displayName: displayName.trim(),
         email: email.trim(),
         phone: formattedPhone,
@@ -638,6 +647,7 @@ async function startServer() {
       const newTrainerProfile = {
         trainerId: cleanUser,
         username: cleanUser,
+        usernameLower: cleanUser,
         displayName: displayName.trim(),
         fullName: displayName.trim(),
         email: email.trim(),
@@ -662,6 +672,13 @@ async function startServer() {
 
       await setDoc(userRef, newUser);
       await setDoc(doc(db, 'trainerProfiles', cleanUser), newTrainerProfile);
+      await setDoc(doc(db, 'usernames', cleanUser), {
+        uid: cleanUser,
+        username: cleanUser,
+        usernameLower: cleanUser,
+        role: 'trainer',
+        claimedAt: timestamp
+      }, { merge: true });
 
       const safeUser = { ...newUser };
       delete (safeUser as any).passwordHash;

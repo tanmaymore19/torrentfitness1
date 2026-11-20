@@ -6,7 +6,15 @@ import {
   UserRole
 } from '../types';
 import { db, auth, testFirestoreConnection } from '../firebase';
-import { signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, signInAnonymously } from 'firebase/auth';
+import {
+  signOut,
+  onAuthStateChanged,
+  setPersistence,
+  browserLocalPersistence,
+  signInAnonymously,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword
+} from 'firebase/auth';
 import { LogoutConfirmationModal } from '../components/common/LogoutConfirmationModal';
 import {
   doc,
@@ -579,6 +587,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return false;
       };
 
+      // Step C: Multi-Identifier Login Sync - Resolve mapped synthetic email & attempt Firebase Auth sign-in
+      let resolvedAuthEmail = `${cleanIdNoSpaces}@torrentfitness.app`;
+      try {
+        const unSnap = await withTimeout(getDoc(doc(db, 'usernames', cleanIdNoSpaces)), 2500).catch(() => null);
+        if (unSnap?.exists()) {
+          const unData = unSnap.data() as any;
+          if (unData?.authEmail) resolvedAuthEmail = unData.authEmail;
+        }
+      } catch {}
+
+      if (auth) {
+        try {
+          await signInWithEmailAndPassword(auth, resolvedAuthEmail, password);
+        } catch (authErr) {
+          console.warn('[Auth] signInWithEmailAndPassword notice, verifying against Firestore credentials:', authErr);
+        }
+      }
+
       // A. Direct doc lookup by cleanIdNoSpaces
       if (cleanIdNoSpaces && !cleanIdNoSpaces.includes('/')) {
         const directSnap = await withTimeout(getDoc(doc(db, 'users', cleanIdNoSpaces)), 3500).catch(() => null);
@@ -592,6 +618,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!userData) {
         const queries = [
           query(collection(db, 'users'), where('username', '==', cleanIdNoSpaces), limit(1)),
+          query(collection(db, 'users'), where('usernameLower', '==', cleanIdNoSpaces), limit(1)),
           query(collection(db, 'users'), where('email', '==', rawIdentifier.toLowerCase()), limit(1))
         ];
 
@@ -773,7 +800,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.warn('Server signup API notice, using direct persistence fallback:', apiErr);
       }
 
-      // 2. Direct Firestore fallback with deleted account reclamation
+      // 2. Direct Firestore fallback with deleted account reclamation & zero-collision auth
       const userRef = doc(db, 'users', cleanUser);
       const exists = await getDoc(userRef).catch(() => null);
       if (exists?.exists()) {
@@ -788,9 +815,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
-      // Check if any other active document in users has this username
+      // True Active Check: Check ONLY if an active user profile exists in users
       try {
-        const qUsers = query(collection(db, 'users'), where('username', '==', cleanUser));
+        const qUsers = query(collection(db, 'users'), where('usernameLower', '==', cleanUser));
         const qSnap = await getDocs(qUsers);
         const activeDoc = qSnap.docs.find((d) => {
           const dData = d.data() as any;
@@ -799,13 +826,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (activeDoc && activeDoc.id !== cleanUser) {
           throw new Error(`Username "${username}" is already taken. Please choose another.`);
         }
-      } catch {}
+      } catch (err: any) {
+        if (err?.message?.includes('already taken')) throw err;
+      }
+
+      // Zero-Collision Firebase Auth Creation
+      let authEmail = `${cleanUser}@torrentfitness.app`;
+      if (auth) {
+        try {
+          await createUserWithEmailAndPassword(auth, authEmail, password);
+        } catch (authErr: any) {
+          if (
+            authErr?.code === 'auth/email-already-in-use' ||
+            String(authErr?.message).includes('email-already-in-use')
+          ) {
+            authEmail = `${cleanUser}_${Date.now()}@torrentfitness.app`;
+            try {
+              await createUserWithEmailAndPassword(auth, authEmail, password);
+            } catch (retryErr: any) {
+              console.warn('Salted auth creation retry note:', retryErr);
+              if (!auth.currentUser) await signInAnonymously(auth).catch(() => {});
+            }
+          } else {
+            console.warn('Auth creation note:', authErr);
+            if (!auth.currentUser) await signInAnonymously(auth).catch(() => {});
+          }
+        }
+      }
 
       // Reclaim usernames doc and delete any old tombstone
       try {
         await setDoc(doc(db, 'usernames', cleanUser), {
           uid: cleanUser,
           username: cleanUser,
+          usernameLower: cleanUser,
+          authEmail,
           role: 'client',
           claimedAt: new Date().toISOString()
         }, { merge: true });
@@ -820,6 +875,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const newUser: UserAccount = {
         uid: cleanUser,
         username: cleanUser,
+        usernameLower: cleanUser,
+        authEmail,
+        password,
         displayName: displayName.trim(),
         email: email.trim().toLowerCase(),
         phone: formattedPhone,
@@ -930,7 +988,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.warn('Server trainer signup API notice, using direct persistence fallback:', apiErr);
       }
 
-      // 2. Direct Firestore Fallback with deleted trainer reclamation
+      // 2. Direct Firestore Fallback with deleted trainer reclamation & zero-collision auth
       const userRef = doc(db, 'users', cleanUser);
       const exists = await getDoc(userRef).catch(() => null);
       if (exists?.exists()) {
@@ -945,7 +1003,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       try {
-        const qUsers = query(collection(db, 'users'), where('username', '==', cleanUser));
+        const qUsers = query(collection(db, 'users'), where('usernameLower', '==', cleanUser));
         const qSnap = await getDocs(qUsers);
         const activeDoc = qSnap.docs.find((d) => {
           const dData = d.data() as any;
@@ -954,12 +1012,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (activeDoc && activeDoc.id !== cleanUser && (activeDoc.data() as any)?.status === 'active') {
           throw new Error(`Trainer Username "${cleanUser}" is already registered. Please choose another ID or switch to Log In.`);
         }
-      } catch {}
+      } catch (err: any) {
+        if (err?.message?.includes('already registered')) throw err;
+      }
+
+      // Zero-Collision Firebase Auth Creation
+      let authEmail = `${cleanUser}@torrentfitness.app`;
+      if (auth) {
+        try {
+          await createUserWithEmailAndPassword(auth, authEmail, password);
+        } catch (authErr: any) {
+          if (
+            authErr?.code === 'auth/email-already-in-use' ||
+            String(authErr?.message).includes('email-already-in-use')
+          ) {
+            authEmail = `${cleanUser}_${Date.now()}@torrentfitness.app`;
+            try {
+              await createUserWithEmailAndPassword(auth, authEmail, password);
+            } catch (retryErr: any) {
+              console.warn('Salted auth creation retry note:', retryErr);
+              if (!auth.currentUser) await signInAnonymously(auth).catch(() => {});
+            }
+          } else {
+            console.warn('Auth creation note:', authErr);
+            if (!auth.currentUser) await signInAnonymously(auth).catch(() => {});
+          }
+        }
+      }
 
       try {
         await setDoc(doc(db, 'usernames', cleanUser), {
           uid: cleanUser,
           username: cleanUser,
+          usernameLower: cleanUser,
+          authEmail,
           role: 'trainer',
           claimedAt: new Date().toISOString()
         }, { merge: true });
@@ -993,6 +1079,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const newUser: UserAccount = {
         uid: cleanUser,
         username: cleanUser,
+        usernameLower: cleanUser,
+        authEmail,
+        password,
         displayName: displayName.trim(),
         fullName: displayName.trim(),
         email: email.trim(),
@@ -1011,6 +1100,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const newTrainerProfile: TrainerProfile = {
         trainerId: cleanUser,
         username: cleanUser,
+        usernameLower: cleanUser,
+        authEmail,
         displayName: displayName.trim(),
         fullName: displayName.trim(),
         email: email.trim(),

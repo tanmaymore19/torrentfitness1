@@ -1408,24 +1408,13 @@ export const AdminApp: React.FC = () => {
 
       // (D) Update trainers/{trId} & trainerProfiles/{trId}
       if (trId) {
-        batch.set(
-          doc(db, 'trainers', trId),
-          {
-            assignedClients: arrayUnion(clientId),
-            assignedClientIds: arrayUnion(clientId),
-            updatedAt: nowIso
-          },
-          { merge: true }
-        );
-        batch.set(
-          doc(db, 'trainerProfiles', trId),
-          {
-            assignedClients: arrayUnion(clientId),
-            assignedClientIds: arrayUnion(clientId),
-            updatedAt: nowIso
-          },
-          { merge: true }
-        );
+        const trUpdates: Record<string, any> = { updatedAt: nowIso };
+        if (clientId) {
+          trUpdates.assignedClients = arrayUnion(clientId);
+          trUpdates.assignedClientIds = arrayUnion(clientId);
+        }
+        batch.set(doc(db, 'trainers', trId), trUpdates, { merge: true });
+        batch.set(doc(db, 'trainerProfiles', trId), trUpdates, { merge: true });
       }
 
       await batch.commit();

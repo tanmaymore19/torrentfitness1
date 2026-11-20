@@ -113,69 +113,117 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
         }
       };
 
-      // Base user document across all potential keys
+      const targetUsername = target.username || registeredUsername || uid;
+
+      // 1. users: Delete direct docs and query matches
       addDocToDelete(doc(db, 'users', uid));
       if (cleanUsername) addDocToDelete(doc(db, 'users', cleanUsername));
-      if (registeredUsername) addDocToDelete(doc(db, 'users', registeredUsername));
+      if (targetUsername && targetUsername !== cleanUsername) addDocToDelete(doc(db, 'users', targetUsername));
+      if (registeredUsername && registeredUsername !== cleanUsername) addDocToDelete(doc(db, 'users', registeredUsername));
 
-      // Always remove from ALL collections (users, members, clientProfiles, trainers, trainerProfiles)
-      addDocToDelete(doc(db, 'clientProfiles', uid));
-      if (cleanUsername) addDocToDelete(doc(db, 'clientProfiles', cleanUsername));
-      if (registeredUsername) addDocToDelete(doc(db, 'clientProfiles', registeredUsername));
-
-      addDocToDelete(doc(db, 'members', uid));
-      if (cleanUsername) addDocToDelete(doc(db, 'members', cleanUsername));
-      if (registeredUsername) addDocToDelete(doc(db, 'members', registeredUsername));
-
-      addDocToDelete(doc(db, 'trainers', uid));
-      if (cleanUsername) addDocToDelete(doc(db, 'trainers', cleanUsername));
-      if (registeredUsername) addDocToDelete(doc(db, 'trainers', registeredUsername));
-
-      addDocToDelete(doc(db, 'trainerProfiles', uid));
-      if (cleanUsername) addDocToDelete(doc(db, 'trainerProfiles', cleanUsername));
-      if (registeredUsername) addDocToDelete(doc(db, 'trainerProfiles', registeredUsername));
-
-      // Query any other matching docs in users
       try {
-        const uQuery = await getDocs(query(collection(db, 'users'), where('uid', '==', uid)));
-        uQuery.forEach(d => addDocToDelete(d.ref));
-        if (cleanUsername) {
-          const uQueryName = await getDocs(query(collection(db, 'users'), where('username', '==', cleanUsername)));
-          uQueryName.forEach(d => addDocToDelete(d.ref));
+        const uQueries = [
+          query(collection(db, 'users'), where('uid', '==', uid)),
+          query(collection(db, 'users'), where('username', '==', cleanUsername)),
+          query(collection(db, 'users'), where('usernameLower', '==', cleanUsername))
+        ];
+        if (targetUsername && targetUsername !== cleanUsername) {
+          uQueries.push(query(collection(db, 'users'), where('username', '==', targetUsername)));
         }
-        if (registeredUsername && registeredUsername !== cleanUsername) {
-          const uQueryReg = await getDocs(query(collection(db, 'users'), where('username', '==', registeredUsername)));
-          uQueryReg.forEach(d => addDocToDelete(d.ref));
+        for (const q of uQueries) {
+          const s = await getDocs(q);
+          s.forEach(d => addDocToDelete(d.ref));
         }
       } catch (err) {
         console.warn('Query users note:', err);
       }
 
-      // Username lookup index references
-      if (cleanUsername) {
-        addDocToDelete(doc(db, 'usernames', cleanUsername));
+      // 2. members: Delete direct docs and query matches
+      addDocToDelete(doc(db, 'members', uid));
+      if (cleanUsername) addDocToDelete(doc(db, 'members', cleanUsername));
+      if (targetUsername && targetUsername !== cleanUsername) addDocToDelete(doc(db, 'members', targetUsername));
+
+      try {
+        const mQueries = [
+          query(collection(db, 'members'), where('userId', '==', uid)),
+          query(collection(db, 'members'), where('clientId', '==', uid)),
+          query(collection(db, 'members'), where('username', '==', cleanUsername)),
+          query(collection(db, 'members'), where('usernameLower', '==', cleanUsername))
+        ];
+        if (targetUsername && targetUsername !== cleanUsername) {
+          mQueries.push(query(collection(db, 'members'), where('username', '==', targetUsername)));
+        }
+        for (const q of mQueries) {
+          const s = await getDocs(q);
+          s.forEach(d => addDocToDelete(d.ref));
+        }
+      } catch (err) {
+        console.warn('Query members note:', err);
       }
-      if (rawUsername) {
-        addDocToDelete(doc(db, 'usernames', rawUsername));
+
+      // 3. clientProfiles: Delete direct docs and query matches
+      addDocToDelete(doc(db, 'clientProfiles', uid));
+      if (cleanUsername) addDocToDelete(doc(db, 'clientProfiles', cleanUsername));
+      if (targetUsername && targetUsername !== cleanUsername) addDocToDelete(doc(db, 'clientProfiles', targetUsername));
+
+      try {
+        const cpQueries = [
+          query(collection(db, 'clientProfiles'), where('userId', '==', uid)),
+          query(collection(db, 'clientProfiles'), where('clientId', '==', uid)),
+          query(collection(db, 'clientProfiles'), where('username', '==', cleanUsername)),
+          query(collection(db, 'clientProfiles'), where('usernameLower', '==', cleanUsername))
+        ];
+        if (targetUsername && targetUsername !== cleanUsername) {
+          cpQueries.push(query(collection(db, 'clientProfiles'), where('username', '==', targetUsername)));
+        }
+        for (const q of cpQueries) {
+          const s = await getDocs(q);
+          s.forEach(d => addDocToDelete(d.ref));
+        }
+      } catch (err) {
+        console.warn('Query clientProfiles note:', err);
       }
-      if (registeredUsername) {
-        addDocToDelete(doc(db, 'usernames', registeredUsername));
-        addDocToDelete(doc(db, 'usernames', registeredUsername.toLowerCase().trim()));
+
+      // 4. trainers & trainerProfiles: Delete direct docs and query matches
+      addDocToDelete(doc(db, 'trainers', uid));
+      if (cleanUsername) addDocToDelete(doc(db, 'trainers', cleanUsername));
+      if (targetUsername && targetUsername !== cleanUsername) addDocToDelete(doc(db, 'trainers', targetUsername));
+      addDocToDelete(doc(db, 'trainerProfiles', uid));
+      if (cleanUsername) addDocToDelete(doc(db, 'trainerProfiles', cleanUsername));
+
+      try {
+        const trQueries = [
+          query(collection(db, 'trainers'), where('trainerId', '==', uid)),
+          query(collection(db, 'trainers'), where('username', '==', cleanUsername)),
+          query(collection(db, 'trainers'), where('usernameLower', '==', cleanUsername)),
+          query(collection(db, 'trainerProfiles'), where('trainerId', '==', uid)),
+          query(collection(db, 'trainerProfiles'), where('username', '==', cleanUsername)),
+          query(collection(db, 'trainerProfiles'), where('usernameLower', '==', cleanUsername))
+        ];
+        for (const q of trQueries) {
+          const s = await getDocs(q);
+          s.forEach(d => addDocToDelete(d.ref));
+        }
+      } catch (err) {
+        console.warn('Query trainers note:', err);
       }
+
+      // 5. usernames: Delete direct docs and query matches
+      if (cleanUsername) addDocToDelete(doc(db, 'usernames', cleanUsername));
+      if (targetUsername) addDocToDelete(doc(db, 'usernames', targetUsername));
+      if (rawUsername) addDocToDelete(doc(db, 'usernames', rawUsername));
+      if (registeredUsername) addDocToDelete(doc(db, 'usernames', registeredUsername));
       addDocToDelete(doc(db, 'usernames', uid));
       addDocToDelete(doc(db, 'usernames', uid.toLowerCase().trim()));
 
-      // Query usernames collection to find any matching docs
       try {
         const unQueries = [
           query(collection(db, 'usernames'), where('uid', '==', uid)),
-          query(collection(db, 'usernames'), where('username', '==', cleanUsername))
+          query(collection(db, 'usernames'), where('username', '==', cleanUsername)),
+          query(collection(db, 'usernames'), where('usernameLower', '==', cleanUsername))
         ];
-        if (registeredUsername && registeredUsername !== cleanUsername) {
-          unQueries.push(query(collection(db, 'usernames'), where('username', '==', registeredUsername)));
-        }
-        if (rawUsername && rawUsername !== cleanUsername) {
-          unQueries.push(query(collection(db, 'usernames'), where('username', '==', rawUsername)));
+        if (targetUsername && targetUsername !== cleanUsername) {
+          unQueries.push(query(collection(db, 'usernames'), where('username', '==', targetUsername)));
         }
         for (const q of unQueries) {
           const s = await getDocs(q);
@@ -188,6 +236,7 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
       // Remove any tombstone records so the username can be reused immediately
       addDocToDelete(doc(db, 'deleted_users', uid));
       if (cleanUsername) addDocToDelete(doc(db, 'deleted_users', cleanUsername));
+      if (targetUsername) addDocToDelete(doc(db, 'deleted_users', targetUsername));
       if (registeredUsername) addDocToDelete(doc(db, 'deleted_users', registeredUsername));
 
       // Initialize atomic batch
@@ -209,27 +258,79 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
           console.warn('Query members/clientProfiles note:', err);
         }
 
-        // Clean up any pending PT bookings/requests linked to this client
+        // 6. Clean up memberships across all identifier variants
         try {
-          const ptSnap = await getDocs(
-            query(collection(db, 'ptRequests'), where('clientId', '==', uid))
-          );
-          ptSnap.forEach((ptDoc) => {
-            addDocToDelete(ptDoc.ref);
-          });
+          const memQueries = [
+            query(collection(db, 'memberships'), where('clientId', '==', uid)),
+            query(collection(db, 'memberships'), where('clientId', '==', cleanUsername)),
+            query(collection(db, 'memberships'), where('clientUsername', '==', cleanUsername))
+          ];
+          if (targetUsername && targetUsername !== cleanUsername) {
+            memQueries.push(query(collection(db, 'memberships'), where('clientUsername', '==', targetUsername)));
+          }
+          for (const q of memQueries) {
+            const s = await getDocs(q);
+            s.forEach(d => addDocToDelete(d.ref));
+          }
         } catch (err) {
-          console.warn('PT request cleanup note:', err);
+          console.warn('Memberships cleanup note:', err);
         }
 
+        // 7. Clean up any pending or historical PT bookings/requests across ptRequests and pt_requests
         try {
-          const ptSnap2 = await getDocs(
-            query(collection(db, 'pt_requests'), where('clientId', '==', uid))
-          );
-          ptSnap2.forEach((ptDoc) => {
-            addDocToDelete(ptDoc.ref);
-          });
+          const ptQueries = [
+            query(collection(db, 'ptRequests'), where('clientId', '==', uid)),
+            query(collection(db, 'ptRequests'), where('clientId', '==', cleanUsername)),
+            query(collection(db, 'ptRequests'), where('clientUsername', '==', cleanUsername)),
+            query(collection(db, 'pt_requests'), where('clientId', '==', uid)),
+            query(collection(db, 'pt_requests'), where('clientId', '==', cleanUsername)),
+            query(collection(db, 'pt_requests'), where('clientUsername', '==', cleanUsername)),
+            query(collection(db, 'pt_requests'), where('username', '==', cleanUsername))
+          ];
+          if (targetUsername && targetUsername !== cleanUsername) {
+            ptQueries.push(
+              query(collection(db, 'ptRequests'), where('clientUsername', '==', targetUsername)),
+              query(collection(db, 'pt_requests'), where('clientUsername', '==', targetUsername))
+            );
+          }
+          for (const q of ptQueries) {
+            const s = await getDocs(q);
+            s.forEach(d => addDocToDelete(d.ref));
+          }
         } catch (err) {
-          console.warn('pt_requests cleanup note:', err);
+          console.warn('PT requests cleanup note:', err);
+        }
+
+        // 8. Clean up transactions and paymentTransactions
+        try {
+          const txQueries = [
+            query(collection(db, 'transactions'), where('clientId', '==', uid)),
+            query(collection(db, 'transactions'), where('clientId', '==', cleanUsername)),
+            query(collection(db, 'paymentTransactions'), where('clientId', '==', uid)),
+            query(collection(db, 'paymentTransactions'), where('clientId', '==', cleanUsername))
+          ];
+          for (const q of txQueries) {
+            const s = await getDocs(q);
+            s.forEach(d => addDocToDelete(d.ref));
+          }
+        } catch (err) {
+          console.warn('Transactions cleanup note:', err);
+        }
+
+        // 9. Clean up invoices and bills
+        try {
+          const invQueries = [
+            query(collection(db, 'invoices'), where('clientId', '==', uid)),
+            query(collection(db, 'invoices'), where('clientId', '==', cleanUsername)),
+            query(collection(db, 'bills'), where('clientId', '==', uid)),
+            query(collection(db, 'bills'), where('clientId', '==', cleanUsername))
+          ];
+          for (const q of invQueries) {
+            const s = await getDocs(q);
+            s.forEach(d => addDocToDelete(d.ref));
+          }
+        } catch (err) {
+          console.warn('Invoices/bills cleanup note:', err);
         }
 
         // Remove client UID from assigned trainers' client arrays (both assignedClientIds and assignedClients)
@@ -340,6 +441,12 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
         }
         const cachedUsers = getCachedData<any[]>('admin_users', []);
         setCachedData('admin_users', cachedUsers.filter((u: any) => u.uid !== uid));
+        const cachedMems = getCachedData<any[]>('admin_memberships', []);
+        setCachedData('admin_memberships', cachedMems.filter((m: any) => m.clientId !== uid && m.clientId !== cleanUsername));
+        const cachedPts = getCachedData<any[]>('admin_pt_requests', []);
+        setCachedData('admin_pt_requests', cachedPts.filter((p: any) => p.clientId !== uid && p.clientId !== cleanUsername));
+        const cachedTxs = getCachedData<any[]>('admin_payment_tx', []);
+        setCachedData('admin_payment_tx', cachedTxs.filter((t: any) => t.clientId !== uid && t.clientId !== cleanUsername));
       } catch (cacheErr) {
         console.warn('Cache purge note:', cacheErr);
       }
