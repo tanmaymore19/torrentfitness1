@@ -200,8 +200,8 @@ export const PromoBannerManager: React.FC = () => {
     setTitle(b.title || '');
     setSubtitle(b.subtitle || '');
     setTag(b.tag || 'CHALLENGE');
-    setMediaType(b.mediaType || 'image');
-    setMediaUrl(b.mediaUrl || '');
+    setMediaType((b.mediaType || (b as any).type || 'image') as 'image' | 'video');
+    setMediaUrl(b.mediaUrl || (b as any).imageUrl || (b as any).videoUrl || (b as any).url || (b as any).src || '');
     setLinkType(b.linkType || 'plans');
     setLinkTarget(b.linkTarget || '');
     setButtonText(b.buttonText || 'Explore Now');
@@ -334,13 +334,18 @@ export const PromoBannerManager: React.FC = () => {
         safeMediaUrl = await uploadBannerImage(safeMediaUrl, `${bannerId}.jpg`);
       }
 
-      const payload: PromoBanner = {
+      const payload: any = {
         id: bannerId,
         title: title.trim(),
         subtitle: subtitle.trim(),
         tag: tag.trim().toUpperCase(),
         mediaType,
+        type: mediaType,
         mediaUrl: safeMediaUrl,
+        imageUrl: safeMediaUrl,
+        videoUrl: safeMediaUrl,
+        url: safeMediaUrl,
+        src: safeMediaUrl,
         linkType,
         linkTarget: linkTarget.trim(),
         buttonText: buttonText.trim() || 'Explore Now',

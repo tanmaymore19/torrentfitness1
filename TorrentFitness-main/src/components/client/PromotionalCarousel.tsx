@@ -130,11 +130,26 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
     return () => unsub();
   }, []);
 
-  // Use local fallback if banners not yet retrieved or all inactive
-  const activeBanners: PromoBanner[] =
+  // Helper: Extract valid media URL across all schema aliases
+  const getBannerUrl = (b: any): string => {
+    return b?.mediaUrl || b?.imageUrl || b?.videoUrl || b?.url || b?.src || '';
+  };
+
+  // Helper: Detect if media is a video
+  const getIsVideo = (b: any, url: string): boolean => {
+    const type = (b?.mediaType || b?.type || '').toLowerCase();
+    return type === 'video' || /\.(mp4|webm|ogg|mov)(\?|$)/i.test(url) || url.startsWith('data:video');
+  };
+
+  // Use local fallback if banners not yet retrieved or all inactive; filter out empty/broken media
+  const activeBanners: PromoBanner[] = (
     banners.length > 0
       ? banners
-      : DEFAULT_PROMO_BANNERS.map((b, i) => ({ id: `default_${i}`, ...b }));
+      : DEFAULT_PROMO_BANNERS.map((b, i) => ({ id: `default_${i}`, ...b }))
+  ).filter((b: any) => {
+    const url = getBannerUrl(b);
+    return Boolean(url && !failedImages[b.id]);
+  });
 
   // Keep index bounded
   useEffect(() => {
@@ -232,34 +247,35 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
         style={{ transform: `translateX(-${currentIndex * 100}%)` }}
       >
         {activeBanners.map((banner, index) => {
+          const resolvedUrl = getBannerUrl(banner);
           const isFailed = failedImages[banner.id];
-          const isVideo = banner.mediaType === 'video';
+          const isVideo = getIsVideo(banner, resolvedUrl);
 
           return (
             <div
               key={banner.id || index}
               onClick={() => handleSlideClick(banner)}
-              className="relative aspect-[16/7] w-full shrink-0 rounded-2xl overflow-hidden cursor-pointer bg-slate-950"
+              className="h-44 sm:h-52 w-full shrink-0 rounded-2xl relative overflow-hidden cursor-pointer bg-slate-950"
             >
               {/* Media Render: Video vs Image vs Gradient Fallback */}
               {isVideo && !isFailed ? (
                 <video
-                  src={banner.mediaUrl}
+                  src={resolvedUrl}
                   autoPlay
                   loop
                   muted
                   playsInline
-                  preload="auto"
+                  preload="metadata"
                   onError={() => handleImageError(banner.id)}
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-cover block"
                 />
-              ) : !isFailed && banner.mediaUrl ? (
+              ) : !isFailed && resolvedUrl ? (
                 <img
-                  src={banner.mediaUrl}
-                  alt={banner.title}
+                  src={resolvedUrl}
+                  alt={banner.title || 'Torrent Fitness'}
                   decoding="async"
                   onError={() => handleImageError(banner.id)}
-                  className="w-full h-full object-cover object-center"
+                  className="w-full h-full object-cover object-center block"
                   loading={index === 0 ? 'eager' : 'lazy'}
                 />
               ) : (
