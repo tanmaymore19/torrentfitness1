@@ -43,10 +43,10 @@ rules_version = '2';
 //   - uid: string - linked user ID
 //   - username: string - unique registered handle
 //
-// Collection: deleted_users
+// Collection: deleted_users / deleted_accounts
 // Document ID: {docId}
 // Fields:
-//   - Audit trail and tombstone records for permanently deleted users
+//   - Audit trail and tombstone records for permanently deleted users and accounts
 //
 // Collection: gym_settings / gymSettings / settings
 // Document ID: {settingsId}
@@ -143,6 +143,10 @@ service cloud.firestore {
     }
 
     match /deleted_users/{docId} {
+      allow read, write: if true;
+    }
+
+    match /deleted_accounts/{docId} {
       allow read, write: if true;
     }
 
@@ -332,6 +336,10 @@ service cloud.firestore {
     }
 
     match /dietPlans/{dietPlanId} {
+      allow read, write: if true;
+    }
+
+    match /diet_plans/{docId} {
       allow read, write: if true;
     }
 

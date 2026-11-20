@@ -1795,7 +1795,33 @@ export const AdminApp: React.FC = () => {
       const tdeeVal = Math.round(bmrVal * calcActivity);
       const targetCalories =
         calcGoal === 'loss' ? tdeeVal - 450 : calcGoal === 'gain' ? tdeeVal + 350 : tdeeVal;
+      const proteinGrams = Math.round(calcWeight * 2.0);
+      const fatGrams = Math.round((targetCalories * 0.25) / 9);
+      const carbGrams = Math.max(50, Math.round((targetCalories - proteinGrams * 4 - fatGrams * 9) / 4));
 
+      const targetClient = clients.find(c => c.userId === calcClientId);
+      const clientName = targetClient?.displayName || (targetClient as any)?.name || 'Valued Member';
+
+      // Parse individual meal lines if present
+      const lines = (dietMealPlanText || '').split('\n');
+      let breakfastText = '';
+      let lunchText = '';
+      let snacksText = '';
+      let dinnerText = '';
+      lines.forEach(line => {
+        const lower = line.toLowerCase();
+        if (lower.includes('meal 1') || lower.includes('breakfast')) breakfastText += (breakfastText ? '\n' : '') + line;
+        else if (lower.includes('meal 2') || lower.includes('lunch')) lunchText += (lunchText ? '\n' : '') + line;
+        else if (lower.includes('meal 3') || lower.includes('snack') || lower.includes('pre-workout')) snacksText += (snacksText ? '\n' : '') + line;
+        else if (lower.includes('meal 4') || lower.includes('dinner')) dinnerText += (dinnerText ? '\n' : '') + line;
+      });
+      if (!breakfastText && !lunchText) {
+        breakfastText = dietMealPlanText;
+      }
+
+      const nowIso = new Date().toISOString();
+
+      // 1. Write to clientProfiles
       await setDoc(
         doc(db, 'clientProfiles', calcClientId),
         {
@@ -1807,12 +1833,51 @@ export const AdminApp: React.FC = () => {
           bmr: bmrVal,
           targetCalories,
           dietPlan: dietMealPlanText,
+          assignedDietPlan: dietMealPlanText,
           dietNotes: dietNotesText,
-          dietUpdatedAt: new Date().toISOString()
+          dietUpdatedAt: nowIso,
+          assignedAt: serverTimestamp(),
+          assignedBy: 'Master Admin',
+          updatedAt: nowIso
         },
         { merge: true }
       );
-      showAdminNotice('Diet Prescription & BMR/BMI Diagnostics synced to client profile!', 'success');
+
+      // 2. Prepare comprehensive DietPlan record
+      const dietDocData = {
+        id: `diet_${calcClientId}`,
+        clientId: calcClientId,
+        clientName,
+        title: 'Personalized Nutrition & Diet Protocol',
+        dailyCalories: targetCalories,
+        proteinGrams,
+        carbsGrams: carbGrams,
+        fatsGrams: fatGrams,
+        waterIntakeLiters: 3.5,
+        breakfast: breakfastText || dietMealPlanText,
+        lunch: lunchText || 'Nutritious balanced lunch according to macro split',
+        snacks: snacksText || 'High-protein pre-workout snack or shake',
+        dinner: dinnerText || 'Lean protein dinner with greens',
+        guidelines: dietNotesText,
+        supplements: 'Whey Protein, Creatine Monohydrate, Multivitamins as recommended',
+        fullDietPlanText: dietMealPlanText,
+        dietPlan: dietMealPlanText,
+        assignedDietPlan: dietMealPlanText,
+        dietNotes: dietNotesText,
+        assignedBy: 'Master Admin',
+        assignedByAdminName: 'Master Admin',
+        assignedAt: serverTimestamp(),
+        updatedAt: nowIso,
+        createdAt: nowIso
+      };
+
+      // 3. Write to both dietPlans and diet_plans collections
+      await Promise.all([
+        setDoc(doc(db, 'dietPlans', `diet_${calcClientId}`), dietDocData, { merge: true }),
+        setDoc(doc(db, 'diet_plans', `diet_${calcClientId}`), dietDocData, { merge: true })
+      ]);
+
+      showAdminNotice('Diet plan assigned to client successfully!', 'success');
     } catch (err: any) {
       showAdminNotice('Error saving diet prescription: ' + err.message, 'error');
     } finally {
@@ -1833,7 +1898,9 @@ export const AdminApp: React.FC = () => {
         targetRole: newAnnTarget,
         priority: newAnnPriority,
         isUrgent: newAnnPriority === 'urgent',
-        createdAt: new Date().toISOString()
+        isActive: true,
+        createdAt: serverTimestamp(),
+        createdAtIso: new Date().toISOString()
       });
       setNewAnnTitle('');
       setNewAnnContent('');
@@ -1893,7 +1960,9 @@ export const AdminApp: React.FC = () => {
         location: newEventLocation || 'Torrent Arena Studio',
         registrationEnabled: newEventReg,
         registeredCount: 0,
-        createdAt: new Date().toISOString()
+        isActive: true,
+        createdAt: serverTimestamp(),
+        createdAtIso: new Date().toISOString()
       });
       setNewEventTitle('');
       showAdminNotice('Gym event scheduled and published!', 'success');
@@ -1942,7 +2011,9 @@ export const AdminApp: React.FC = () => {
         durationDays: 30,
         participantsCount: 1,
         active: true,
-        createdAt: new Date().toISOString()
+        isActive: true,
+        createdAt: serverTimestamp(),
+        createdAtIso: new Date().toISOString()
       });
       setNewChalTitle('');
       showAdminNotice('Gym challenge launched!', 'success');

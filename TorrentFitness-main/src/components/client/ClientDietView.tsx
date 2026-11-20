@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { db } from '../../firebase';
-import { doc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, where, getDocs, getDoc } from 'firebase/firestore';
 import { DietPlan } from '../../types';
 import {
   Apple,
@@ -33,8 +33,39 @@ export const ClientDietView: React.FC<ClientDietViewProps> = ({ onBack }) => {
 
   const clientId = currentUser?.uid;
 
+  const buildFallbackDietPlan = (): DietPlan | null => {
+    if (!clientId) return null;
+    const planText = (clientProfile as any)?.dietPlan || (clientProfile as any)?.assignedDietPlan;
+    if (!planText && !(clientProfile as any)?.targetCalories) return null;
+    return {
+      id: `profile_diet_${clientId}`,
+      clientId,
+      title: (clientProfile as any)?.assignedDietPlan || `${clientProfile?.displayName || 'Client'}'s Nutrition Protocol`,
+      dailyCalories: (clientProfile as any)?.targetCalories || 2000,
+      proteinGrams: Math.round(((clientProfile as any)?.weight || 70) * 2),
+      carbsGrams: Math.max(50, Math.round((((clientProfile as any)?.targetCalories || 2000) - ((clientProfile as any)?.weight || 70) * 8 - 50 * 9) / 4)),
+      fatsGrams: 50,
+      waterIntakeLiters: 3.5,
+      breakfast: planText || '',
+      lunch: '',
+      snacks: '',
+      dinner: '',
+      guidelines: (clientProfile as any)?.dietNotes || '',
+      assignedBy: (clientProfile as any)?.assignedBy || 'Master Admin',
+      assignedByAdminName: 'Master Admin',
+      updatedAt: (clientProfile as any)?.dietUpdatedAt || new Date().toISOString()
+    } as DietPlan;
+  };
+
   useEffect(() => {
     if (!clientId) return;
+
+    // Check if clientProfile already has a dietPlan so we don't flash an empty state
+    const fallback = buildFallbackDietPlan();
+    if (fallback) {
+      setDietPlan(fallback);
+      setIsLoading(false);
+    }
 
     // Listen to direct diet doc `diet_${clientId}`
     const docRef = doc(db, 'dietPlans', `diet_${clientId}`);
@@ -45,30 +76,54 @@ export const ClientDietView: React.FC<ClientDietViewProps> = ({ onBack }) => {
           setDietPlan({ id: snap.id, ...snap.data() } as DietPlan);
           setIsLoading(false);
         } else {
-          // Fallback query by clientId field if named differently
           try {
+            // Check diet_plans doc as well
+            const dpSnap = await getDoc(doc(db, 'diet_plans', `diet_${clientId}`));
+            if (dpSnap.exists()) {
+              setDietPlan({ id: dpSnap.id, ...dpSnap.data() } as DietPlan);
+              setIsLoading(false);
+              return;
+            }
+
+            // Fallback query by clientId field in dietPlans
             const q = query(collection(db, 'dietPlans'), where('clientId', '==', clientId));
             const querySnap = await getDocs(q);
             if (!querySnap.empty) {
               setDietPlan({ id: querySnap.docs[0].id, ...querySnap.docs[0].data() } as DietPlan);
-            } else {
-              setDietPlan(null);
+              setIsLoading(false);
+              return;
             }
+
+            // Fallback query in diet_plans
+            const q2 = query(collection(db, 'diet_plans'), where('clientId', '==', clientId));
+            const querySnap2 = await getDocs(q2);
+            if (!querySnap2.empty) {
+              setDietPlan({ id: querySnap2.docs[0].id, ...querySnap2.docs[0].data() } as DietPlan);
+              setIsLoading(false);
+              return;
+            }
+
+            // Fallback to clientProfile
+            const fb = buildFallbackDietPlan();
+            setDietPlan(fb);
           } catch (err) {
             console.warn('Diet plan query note:', err);
-            setDietPlan(null);
+            const fb = buildFallbackDietPlan();
+            setDietPlan(fb);
           }
           setIsLoading(false);
         }
       },
       (err) => {
         console.warn('Diet listener error:', err);
+        const fb = buildFallbackDietPlan();
+        if (fb) setDietPlan(fb);
         setIsLoading(false);
       }
     );
 
     return () => unsub();
-  }, [clientId]);
+  }, [clientId, clientProfile]);
 
   if (isLoading) {
     return (
@@ -84,7 +139,20 @@ export const ClientDietView: React.FC<ClientDietViewProps> = ({ onBack }) => {
   }
 
   // Clean empty state when no diet plan is assigned yet
-  if (!dietPlan || (!dietPlan.title && !dietPlan.dailyCalories && !dietPlan.breakfast)) {
+  const hasValidDiet = Boolean(
+    dietPlan && (
+      dietPlan.title ||
+      dietPlan.dailyCalories ||
+      dietPlan.breakfast ||
+      dietPlan.lunch ||
+      dietPlan.dinner ||
+      (dietPlan as any).dietPlan ||
+      (dietPlan as any).assignedDietPlan ||
+      (dietPlan as any).fullDietPlanText
+    )
+  );
+
+  if (!hasValidDiet) {
     return (
       <div className="space-y-5 animate-fade-in pb-12">
         {onBack && (
@@ -255,6 +323,18 @@ export const ClientDietView: React.FC<ClientDietViewProps> = ({ onBack }) => {
         </div>
 
         <div className="space-y-3.5">
+          {(dietPlan as any).fullDietPlanText && (
+            <div className="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200/80 shadow-2xs space-y-2">
+              <div className="flex items-center gap-2 text-emerald-800 font-bold text-xs">
+                <Sparkles className="w-4 h-4 text-emerald-600" />
+                <span>Prescribed Nutrition Schedule</span>
+              </div>
+              <p className="text-xs text-slate-800 font-medium leading-relaxed whitespace-pre-line pl-6">
+                {(dietPlan as any).fullDietPlanText}
+              </p>
+            </div>
+          )}
+
           {/* Meal 1: Breakfast */}
           <div className="p-4 rounded-2xl bg-white/80 border border-slate-200/80 shadow-2xs space-y-1.5">
             <div className="flex items-center justify-between">

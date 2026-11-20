@@ -41,8 +41,7 @@ import {
   UserCheck,
   Trash2,
   X,
-  RotateCcw,
-  AlertOctagon
+  RotateCcw
 } from 'lucide-react';
 
 export type Domain02SubView =
@@ -146,11 +145,6 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
   const [txToDelete, setTxToDelete] = useState<
     (PaymentLedgerExportItem & { rawTx?: PaymentTransaction }) | null
   >(null);
-
-  // Purge All Transactions State
-  const [showPurgeConfirm, setShowPurgeConfirm] = useState(false);
-  const [purgeStep, setPurgeStep] = useState<1 | 2>(1);
-  const [isPurging, setIsPurging] = useState(false);
 
   useEffect(() => {
     const mergeTx = (newDocs: PaymentTransaction[]) => {
@@ -816,87 +810,6 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
     }
   };
 
-  // ── PURGE ALL TRANSACTIONS ─────────────────────────────────────────────────
-  const handlePurgeAllTransactions = async () => {
-    setIsPurging(true);
-    try {
-      // Delete all docs from paymentTransactions
-      const snap1 = await getDocs(collection(db, 'paymentTransactions'));
-      const batch1 = writeBatch(db);
-      snap1.docs.forEach((d) => batch1.delete(d.ref));
-      if (!snap1.empty) await batch1.commit();
-
-      // Delete all docs from transactions
-      const snap2 = await getDocs(collection(db, 'transactions'));
-      const batch2 = writeBatch(db);
-      snap2.docs.forEach((d) => batch2.delete(d.ref));
-      if (!snap2.empty) await batch2.commit();
-
-      // Delete all docs from payments, invoices, billing_history
-      for (const col of ['payments', 'invoices', 'billing_history']) {
-        try {
-          const s = await getDocs(collection(db, col));
-          if (!s.empty) {
-            const b = writeBatch(db);
-            s.docs.forEach((d) => b.delete(d.ref));
-            await b.commit();
-          }
-        } catch {}
-      }
-
-      // Clear client transaction subcollections and invoice arrays
-      for (const client of clients) {
-        const cId = client.userId || (client as any).id;
-        if (!cId) continue;
-        try {
-          const subSnap = await getDocs(collection(db, 'clientProfiles', cId, 'transactions'));
-          if (!subSnap.empty) {
-            const b = writeBatch(db);
-            subSnap.docs.forEach((d) => b.delete(d.ref));
-            await b.commit();
-          }
-          await setDoc(doc(db, 'clientProfiles', cId), {
-            paymentHistory: [],
-            invoices: []
-          }, { merge: true });
-        } catch {}
-      }
-
-      // Mark memberships with transactionDeleted: true WITHOUT removing user memberships
-      try {
-        const memSnap = await getDocs(collection(db, 'memberships'));
-        if (!memSnap.empty) {
-          const b = writeBatch(db);
-          memSnap.docs.forEach((d) => {
-            b.update(d.ref, {
-              transactionDeleted: true,
-              transactionId: null,
-              receiptNumber: null
-            });
-          });
-          await b.commit();
-        }
-      } catch {}
-
-      // Clear local state and cache
-      setTransactions([]);
-      setCachedData('admin_payment_transactions', []);
-      setCachedData('admin_payment_tx', []);
-
-      setShowPurgeConfirm(false);
-      setPurgeStep(1);
-      setFeedbackBanner({
-        type: 'success',
-        text: `All historical transactions purged. Admin Total Revenue reset to ₹0. User accounts, profiles, and attendance records are 100% intact.`
-      });
-    } catch (err: any) {
-      setFeedbackBanner({ type: 'error', text: `Purge failed: ${err.message}` });
-    } finally {
-      setIsPurging(false);
-    }
-  };
-
-
   // Shared Date / Month / Category / Mode Filter Controls
   const renderDateFilterControls = () => (
     <div className="p-4 bg-white/95 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3.5">
@@ -1060,15 +973,6 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
                 Analytics &amp; KPIs
               </span>
             </div>
-            {/* Purge All Transactions Button */}
-            <button
-              type="button"
-              onClick={() => { setShowPurgeConfirm(true); setPurgeStep(1); }}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-black transition-all"
-            >
-              <AlertOctagon className="w-3.5 h-3.5" />
-              Purge All Transactions & Reset Revenue
-            </button>
           </div>
 
           {renderDateFilterControls()}
@@ -1677,78 +1581,6 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
         onClose={() => setTxToDelete(null)}
         onConfirm={confirmDeleteTransaction}
       />
-
-      {/* PURGE ALL TRANSACTIONS — 2-Step Confirmation Modal */}
-      {showPurgeConfirm && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in">
-          <div className="w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-rose-200 p-6 space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
-                <AlertOctagon className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-sm font-black text-slate-900">Purge All Transactions & Reset Revenue</h3>
-                <p className="text-[11px] text-slate-500 mt-0.5">Step {purgeStep} of 2</p>
-              </div>
-            </div>
-
-            {purgeStep === 1 ? (
-              <>
-                <p className="text-xs text-slate-700 leading-relaxed">
-                  This will <strong>permanently delete ALL payment transaction records</strong> from the database and reset Admin Total Revenue to <strong>₹0</strong>. All user accounts, profiles, trainers, and memberships remain <strong>completely untouched</strong>.
-                </p>
-                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 font-semibold">
-                  ⚠️ This is irreversible. You cannot undo this action.
-                </div>
-                <div className="flex gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => { setShowPurgeConfirm(false); setPurgeStep(1); }}
-                    className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPurgeStep(2)}
-                    className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black transition-colors"
-                  >
-                    Continue →
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="text-xs text-slate-700 leading-relaxed">
-                  <strong>Final confirmation:</strong> Click "Yes, Purge Everything" to permanently delete all transactions. This action cannot be reversed.
-                </p>
-                <div className="flex gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setPurgeStep(1)}
-                    disabled={isPurging}
-                    className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50 transition-colors disabled:opacity-50"
-                  >
-                    ← Back
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handlePurgeAllTransactions}
-                    disabled={isPurging}
-                    className="flex-1 py-2.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-black transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
-                  >
-                    {isPurging ? (
-                      <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Purging...</>
-                    ) : (
-                      'Yes, Purge Everything'
-                    )}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 };

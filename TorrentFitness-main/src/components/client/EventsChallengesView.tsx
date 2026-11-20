@@ -25,11 +25,9 @@ export const EventsChallengesView: React.FC = () => {
     const unsubEvents = onSnapshot(
       query(collection(db, 'events'), limit(25)),
       (snap) => {
-        if (!snap.empty) {
-          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as GymEvent));
-          setEvents(list);
-          setCachedData('gym_events', list);
-        }
+        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as GymEvent));
+        setEvents(list);
+        setCachedData('gym_events', list);
       },
       (err) => console.warn('Events listener note:', err)
     );
@@ -38,11 +36,9 @@ export const EventsChallengesView: React.FC = () => {
     const unsubChallenges = onSnapshot(
       query(collection(db, 'challenges'), limit(25)),
       (snap) => {
-        if (!snap.empty) {
-          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as GymChallenge));
-          setChallenges(list);
-          setCachedData('gym_challenges', list);
-        }
+        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as GymChallenge));
+        setChallenges(list);
+        setCachedData('gym_challenges', list);
       },
       (err) => console.warn('Challenges listener note:', err)
     );

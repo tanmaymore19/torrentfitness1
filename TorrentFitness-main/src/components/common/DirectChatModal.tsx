@@ -150,6 +150,10 @@ export const DirectChatModal: React.FC<DirectChatModalProps> = ({
         recipientName: partnerName,
         text
       });
+      if (currentUserRole === 'client' && typeof window !== 'undefined') {
+        localStorage.setItem(`tf_client_sent_msg_${currentUserId}`, 'true');
+        localStorage.setItem(`tf_client_sent_msg_${currentUserId}_${partnerId}`, 'true');
+      }
       setInputText('');
       setShowEmojiPicker(false);
     } catch (err: any) {

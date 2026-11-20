@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { doc, updateDoc, collection, query, where, getDocs, getDoc, setDoc } from 'firebase/firestore';
+import { doc, updateDoc, collection, query, where, getDocs, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { ClientProfile, UserAccount, AttendanceRecord, MembershipRecord, FitnessAnalysisResult, DietPlan } from '../../types';
 import { DeleteAccountTarget } from './DeleteAccountModal';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -251,8 +251,11 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
     setIsSavingDiet(true);
     setDietFeedback('');
     try {
-      const dietData: DietPlan = {
+      const nowIso = new Date().toISOString();
+      const dietData = {
+        id: `diet_${client.userId}`,
         clientId: client.userId,
+        clientName: client.displayName,
         title: dietTitle.trim() || `${client.displayName}'s Nutrition Protocol`,
         dailyCalories: Number(dietCalories) || 2000,
         proteinGrams: Number(dietProtein) || 120,
@@ -266,12 +269,28 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
         guidelines: dietGuidelines.trim(),
         supplements: dietSupplements.trim(),
         assignedBy: 'Master Admin',
-        assignedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        assignedByAdminName: 'Master Admin',
+        assignedAt: serverTimestamp(),
+        updatedAt: nowIso,
+        createdAt: nowIso
       };
 
-      await setDoc(doc(db, 'dietPlans', `diet_${client.userId}`), dietData, { merge: true });
-      setDietFeedback('Diet & Nutrition protocol saved & assigned successfully!');
+      await Promise.all([
+        setDoc(doc(db, 'dietPlans', `diet_${client.userId}`), dietData, { merge: true }),
+        setDoc(doc(db, 'diet_plans', `diet_${client.userId}`), dietData, { merge: true }),
+        setDoc(doc(db, 'clientProfiles', client.userId), {
+          dietPlan: `${dietBreakfast.trim()}\n${dietLunch.trim()}\n${dietSnacks.trim()}\n${dietDinner.trim()}`.trim(),
+          assignedDietPlan: dietTitle.trim() || `${client.displayName}'s Nutrition Protocol`,
+          dietNotes: `${dietGuidelines.trim()}\n${dietSupplements.trim()}`.trim(),
+          targetCalories: Number(dietCalories) || 2000,
+          assignedBy: 'Master Admin',
+          assignedAt: serverTimestamp(),
+          dietUpdatedAt: nowIso,
+          updatedAt: nowIso
+        }, { merge: true })
+      ]);
+
+      setDietFeedback('Diet plan assigned to client successfully!');
       setTimeout(() => setDietFeedback(''), 4000);
     } catch (err: any) {
       console.error('Error saving diet plan:', err);

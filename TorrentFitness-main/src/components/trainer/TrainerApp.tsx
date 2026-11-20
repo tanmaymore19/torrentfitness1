@@ -306,6 +306,30 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
     trainerProfile || (currentUser ? ({ ...currentUser, uid: currentUser.uid } as any) : null)
   );
 
+  const isGymOwner = Boolean(
+    isPrivilegedStaff ||
+    (trainerProfile?.badge && trainerProfile.badge.toLowerCase().includes('owner')) ||
+    (trainerProfile?.role && String(trainerProfile.role).toUpperCase() === 'OWNER') ||
+    (currentUser?.role && String(currentUser.role).toUpperCase() === 'OWNER') ||
+    currentUser?.uid.toLowerCase().includes('hitesh') ||
+    currentUser?.displayName?.toLowerCase().includes('hitesh') ||
+    trainerProfile?.displayName?.toLowerCase().includes('hitesh')
+  );
+
+  const chatClientList = React.useMemo(() => {
+    const base = isGymOwner ? (allGymClients.length > 0 ? allGymClients : ptClients) : ptClients;
+    return [...base].sort((a, b) => {
+      const unreadA = unreadByClient[a.userId] || 0;
+      const unreadB = unreadByClient[b.userId] || 0;
+      if (unreadA !== unreadB) return unreadB - unreadA;
+      const chatA = chatSummaries.find((c) => c.clientId === a.userId);
+      const chatB = chatSummaries.find((c) => c.clientId === b.userId);
+      const timeA = chatA ? new Date(chatA.lastMessageTime?.toDate?.() || chatA.lastMessageTime || 0).getTime() : 0;
+      const timeB = chatB ? new Date(chatB.lastMessageTime?.toDate?.() || chatB.lastMessageTime || 0).getTime() : 0;
+      return timeB - timeA;
+    });
+  }, [isGymOwner, allGymClients, ptClients, unreadByClient, chatSummaries]);
+
   useEffect(() => {
     if (trainerProfile) {
       setProfileName(trainerProfile.displayName || currentUser?.displayName || '');
@@ -499,11 +523,9 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
     const unsubAnn = onSnapshot(
       query(collection(db, 'announcements'), limit(15)),
       (snap) => {
-        if (!snap.empty) {
-          const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Announcement));
-          setAnnouncements(list);
-          setCachedData('announcements_client', list);
-        }
+        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Announcement));
+        setAnnouncements(list);
+        setCachedData('announcements_client', list);
       },
       (err) => console.warn('Trainer announcements listener note:', err)
     );
@@ -1131,7 +1153,7 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
                 <MessageSquare className="w-4 h-4 text-indigo-600 font-bold" />
-                <span>Client Messages &amp; 1-on-1 Chat ({ptClients.length} Clients)</span>
+                <span>Client Messages &amp; 1-on-1 Chat ({chatClientList.length} Clients{isGymOwner ? ' • Full Access' : ''})</span>
               </h3>
               {totalChatUnread > 0 && (
                 <span className="px-2 py-0.5 rounded-full bg-rose-500 text-white text-[10px] font-black animate-pulse">
@@ -1140,13 +1162,13 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
               )}
             </div>
 
-            {ptClients.length === 0 ? (
+            {chatClientList.length === 0 ? (
               <div className="p-8 text-center clay-surface rounded-3xl border border-white/80 text-slate-600 text-xs">
-                No clients currently assigned to your PT roster. Once Admin allocates clients to you, 2-way real-time messaging will activate here automatically.
+                No clients currently available for messaging. Once clients are registered or allocated to you, 2-way real-time messaging will activate here automatically.
               </div>
             ) : (
               <div className="space-y-2.5">
-                {ptClients.map((client) => {
+                {chatClientList.map((client) => {
                   const unreadCount = unreadByClient[client.userId] || 0;
                   const chatSummary = chatSummaries.find((c) => c.clientId === client.userId);
 
@@ -1606,6 +1628,23 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
                       Weight: <strong className="text-slate-800">{client.weight || '--'}kg</strong>
                     </div>
                   </div>
+
+                  {/* Direct Chat Access for Gym Owner & Privileged Staff */}
+                  {isGymOwner && (
+                    <div className="flex justify-end pt-2 border-t border-white/80">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setChatPartnerClient(client);
+                          setIsChatOpen(true);
+                        }}
+                        className="px-3 py-1.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" />
+                        <span>Direct Chat</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

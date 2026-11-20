@@ -190,20 +190,59 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState<boolean>(false);
   const [isLoggingOut, setIsLoggingOut] = useState<boolean>(false);
 
+  // Helper to purge entire session and show deleted alert
+  const purgeSessionAndAlertDeleted = async () => {
+    if (auth && auth.currentUser) {
+      try {
+        await signOut(auth);
+      } catch {}
+    }
+    try {
+      localStorage.removeItem(LOCAL_STORAGE_SESSION_KEY);
+      sessionStorage.removeItem(LOCAL_STORAGE_SESSION_KEY);
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+      sessionStorage.removeItem(AUTH_TOKEN_KEY);
+      localStorage.clear();
+      sessionStorage.clear();
+    } catch {}
+    setCurrentUser(null);
+    setClientProfile(null);
+    setTrainerProfile(null);
+    alert('This account has been permanently deleted by the Gym Administrator.');
+  };
+
   // Synchronize Firebase Auth State across page reloads
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (fbUser) => {
       if (fbUser) {
+        // If account has been permanently deleted, immediately purge and sign out
+        try {
+          const delSnap = await getDoc(doc(db, 'deleted_accounts', fbUser.uid));
+          if (delSnap.exists()) {
+            await purgeSessionAndAlertDeleted();
+            return;
+          }
+        } catch (e) {
+          console.warn('deleted_accounts check warning:', e);
+        }
+
         const saved = getInitialSavedSession();
         if (!saved && fbUser.uid) {
           try {
             const uSnap = await getDoc(doc(db, 'users', fbUser.uid));
             if (uSnap.exists()) {
               const uData = uSnap.data() as UserAccount;
+              if (uData.status === 'deleted') {
+                await purgeSessionAndAlertDeleted();
+                return;
+              }
               localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(uData));
               sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(uData));
               setCurrentUser(uData);
               loadUserProfile(uData).catch(() => {});
+            } else if (!fbUser.isAnonymous) {
+              await purgeSessionAndAlertDeleted();
+              return;
             }
           } catch (e) {
             console.warn('Firebase onAuthStateChanged sync notice:', e);
@@ -235,6 +274,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         const savedUser = getInitialSavedSession();
         if (savedUser) {
+          if (savedUser.role !== 'admin') {
+            try {
+              const [delSnap, userDocSnap] = await Promise.all([
+                getDoc(doc(db, 'deleted_accounts', savedUser.uid)).catch(() => null),
+                getDoc(doc(db, 'users', savedUser.uid)).catch(() => null)
+              ]);
+              const isAccountDeleted = Boolean(
+                (delSnap && delSnap.exists()) ||
+                (userDocSnap && userDocSnap.exists() && userDocSnap.data()?.status === 'deleted') ||
+                (userDocSnap && !userDocSnap.exists())
+              );
+              if (isAccountDeleted) {
+                if (isMounted) setIsBooting(false);
+                await purgeSessionAndAlertDeleted();
+                return;
+              }
+            } catch (delErr) {
+              console.warn('Boot deleted_accounts check error:', delErr);
+            }
+          }
+
           // If we already have a cached profile, unlock UI immediately and sync in background
           const hasCachedClient =
             savedUser.role === 'client' &&
@@ -519,6 +579,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
+      // Pre-check if identifier is in deleted_accounts
+      if (!isAdminIdentifier) {
+        try {
+          const preDelSnap = await getDoc(doc(db, 'deleted_accounts', cleanIdNoSpaces)).catch(() => null);
+          if (preDelSnap && preDelSnap.exists()) {
+            await purgeSessionAndAlertDeleted();
+            throw new Error('This account has been permanently deleted by the Gym Administrator.');
+          }
+        } catch (e: any) {
+          if (e?.message?.includes('permanently deleted')) throw e;
+        }
+      }
+
       // 1. Primary Secure Path: Server-Authoritative Authentication (when running against live backend)
       try {
         const resp = await withTimeout(
@@ -716,6 +789,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (!userData) {
         throw new Error('Invalid mobile/email/ID or password');
+      }
+
+      // Final verification against deleted_accounts
+      if (userData.role !== 'admin') {
+        const uidToCheck = userData.uid || cleanIdNoSpaces;
+        const usernameToCheck = userData.username || cleanIdNoSpaces;
+        const [delUidSnap, delUserSnap, userDocSnap] = await Promise.all([
+          getDoc(doc(db, 'deleted_accounts', uidToCheck)).catch(() => null),
+          getDoc(doc(db, 'deleted_accounts', usernameToCheck)).catch(() => null),
+          getDoc(doc(db, 'users', uidToCheck)).catch(() => null)
+        ]);
+
+        if (
+          (delUidSnap && delUidSnap.exists()) ||
+          (delUserSnap && delUserSnap.exists()) ||
+          (userDocSnap && userDocSnap.exists() && userDocSnap.data()?.status === 'deleted') ||
+          (userDocSnap && !userDocSnap.exists())
+        ) {
+          await purgeSessionAndAlertDeleted();
+          throw new Error('This account has been permanently deleted by the Gym Administrator.');
+        }
       }
 
       const sessionToken = (userData.role === 'admin' ? 'master_admin_session_token_' : 'auth_token_') + Date.now();

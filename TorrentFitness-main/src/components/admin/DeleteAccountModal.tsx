@@ -11,6 +11,8 @@ import {
   getDoc,
   arrayRemove,
   deleteDoc,
+  setDoc,
+  serverTimestamp,
   DocumentReference
 } from 'firebase/firestore';
 import { AlertTriangle, Trash2, X, Loader2, ArrowRight, ShieldAlert, CheckCircle2 } from 'lucide-react';
@@ -333,6 +335,63 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
           console.warn('Invoices/bills cleanup note:', err);
         }
 
+        // 10. Clean up diet plans across dietPlans and diet_plans
+        try {
+          addDocToDelete(doc(db, 'dietPlans', `diet_${uid}`));
+          addDocToDelete(doc(db, 'dietPlans', uid));
+          addDocToDelete(doc(db, 'diet_plans', `diet_${uid}`));
+          addDocToDelete(doc(db, 'diet_plans', uid));
+          const dietQueries = [
+            query(collection(db, 'dietPlans'), where('clientId', '==', uid)),
+            query(collection(db, 'dietPlans'), where('clientId', '==', cleanUsername)),
+            query(collection(db, 'diet_plans'), where('clientId', '==', uid)),
+            query(collection(db, 'diet_plans'), where('clientId', '==', cleanUsername))
+          ];
+          for (const q of dietQueries) {
+            const s = await getDocs(q);
+            s.forEach(d => addDocToDelete(d.ref));
+          }
+        } catch (err) {
+          console.warn('Diet plans cleanup note:', err);
+        }
+
+        // 11. Clean up attendance records across attendance_logs and attendance
+        try {
+          const attQueries = [
+            query(collection(db, 'attendance_logs'), where('userId', '==', uid)),
+            query(collection(db, 'attendance_logs'), where('userId', '==', cleanUsername)),
+            query(collection(db, 'attendance_logs'), where('clientId', '==', uid)),
+            query(collection(db, 'attendance'), where('userId', '==', uid)),
+            query(collection(db, 'attendance'), where('userId', '==', cleanUsername)),
+            query(collection(db, 'attendance'), where('clientId', '==', uid))
+          ];
+          for (const q of attQueries) {
+            const s = await getDocs(q);
+            s.forEach(d => addDocToDelete(d.ref));
+          }
+        } catch (err) {
+          console.warn('Attendance cleanup note:', err);
+        }
+
+        // 12. Clean up PT chats and direct messages
+        try {
+          addDocToDelete(doc(db, 'pt_chats', uid));
+          addDocToDelete(doc(db, 'pt_chats', `chat_${uid}`));
+          const chatQueries = [
+            query(collection(db, 'pt_chats'), where('clientId', '==', uid)),
+            query(collection(db, 'pt_chats'), where('clientId', '==', cleanUsername)),
+            query(collection(db, 'pt_chats'), where('trainerId', '==', uid)),
+            query(collection(db, 'directMessages'), where('senderId', '==', uid)),
+            query(collection(db, 'directMessages'), where('receiverId', '==', uid))
+          ];
+          for (const q of chatQueries) {
+            const s = await getDocs(q);
+            s.forEach(d => addDocToDelete(d.ref));
+          }
+        } catch (err) {
+          console.warn('Chat cleanup note:', err);
+        }
+
         // Remove client UID from assigned trainers' client arrays (both assignedClientIds and assignedClients)
         try {
           const trainerQuery = query(
@@ -413,6 +472,24 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
             console.warn('deleteDoc fallback note for', ref.path, delErr);
           }
         }
+      }
+
+      // 3.5 Write permanent tombstone to deleted_accounts to permanently block login and session restoration
+      try {
+        const tombstone = {
+          deletedAt: serverTimestamp(),
+          reason: 'ADMIN_PERMANENT_DELETE',
+          uid,
+          username: cleanUsername || uid,
+          deletedAtIso: new Date().toISOString()
+        };
+        await Promise.all([
+          setDoc(doc(db, 'deleted_accounts', uid), tombstone, { merge: true }),
+          cleanUsername ? setDoc(doc(db, 'deleted_accounts', cleanUsername), tombstone, { merge: true }) : Promise.resolve(),
+          targetUsername && targetUsername !== cleanUsername ? setDoc(doc(db, 'deleted_accounts', targetUsername), tombstone, { merge: true }) : Promise.resolve()
+        ]);
+      } catch (tombErr) {
+        console.warn('deleted_accounts tombstone note:', tombErr);
       }
 
       // 4. Clear any local storage tombstones so immediate reuse of the username is permitted

@@ -332,10 +332,44 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
     markAllAnnouncementsRead();
   };
 
-  // Smart Membership Expiration Calculation
+  // Check if client has queued/upcoming memberships in Firestore
+  const [hasQueuedMembershipDoc, setHasQueuedMembershipDoc] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const qMem = query(
+      collection(db, 'memberships'),
+      where('clientId', '==', currentUser.uid)
+    );
+    const unsub = onSnapshot(
+      qMem,
+      (snap) => {
+        const hasQueued = snap.docs.some((d) => {
+          const mData = d.data();
+          const st = String(mData.status || '').toUpperCase();
+          return st === 'QUEUED' || st === 'UPCOMING';
+        });
+        setHasQueuedMembershipDoc(hasQueued);
+      },
+      (err) => console.warn('Client memberships check note:', err)
+    );
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  // Smart Membership Expiration Calculation (With Queued Renewal Suppression)
   const membershipAlertState = React.useMemo(() => {
     const endDateStr = clientProfile?.membershipEndDate || clientProfile?.membershipExpiryDate;
     const status = String(clientProfile?.membershipStatus || 'inactive').toLowerCase();
+
+    // Check if client has a queued renewal or upcoming membership
+    const hasUpcomingRenewal = Boolean(
+      clientProfile?.queuedPlanId ||
+      clientProfile?.queuedPlanName ||
+      clientProfile?.queuedStartDate ||
+      (clientProfile as any)?.nextMembershipStartDate ||
+      (clientProfile as any)?.queuedMembership ||
+      hasQueuedMembershipDoc
+    );
 
     if (!endDateStr || status !== 'active') {
       return {
@@ -363,6 +397,14 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
       };
     }
 
+    // If client already has a renewal or queued plan secured, suppress the 5-day warning completely!
+    if (hasUpcomingRenewal) {
+      return {
+        type: 'active_clean' as const,
+        daysRemaining: diffDays
+      };
+    }
+
     if (diffDays >= 1 && diffDays <= 5) {
       return {
         type: 'expiring_soon' as const,
@@ -375,7 +417,16 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
       type: 'active_clean' as const,
       daysRemaining: diffDays
     };
-  }, [clientProfile?.membershipEndDate, clientProfile?.membershipExpiryDate, clientProfile?.membershipStatus]);
+  }, [
+    clientProfile?.membershipEndDate,
+    clientProfile?.membershipExpiryDate,
+    clientProfile?.membershipStatus,
+    clientProfile?.queuedPlanId,
+    clientProfile?.queuedPlanName,
+    clientProfile?.queuedStartDate,
+    (clientProfile as any)?.nextMembershipStartDate,
+    hasQueuedMembershipDoc
+  ]);
 
   useEffect(() => {
     // 1. Load recent Announcements (bounded by limit(15))
@@ -383,13 +434,11 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
     const unsubAnn = onSnapshot(
       annQuery,
       (snap) => {
-        if (!snap.empty) {
-          const list = snap.docs
-            .map((d) => ({ id: d.id, ...d.data() } as Announcement))
-            .filter((a) => a.targetRole === 'all' || a.targetRole === 'clients');
-          setAnnouncements(list);
-          setCachedData('announcements_client', list);
-        }
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as Announcement))
+          .filter((a) => a.targetRole === 'all' || a.targetRole === 'clients');
+        setAnnouncements(list);
+        setCachedData('announcements_client', list);
       },
       (err) => console.warn('Announcements listener note:', err)
     );

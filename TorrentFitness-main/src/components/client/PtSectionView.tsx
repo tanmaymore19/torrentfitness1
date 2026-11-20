@@ -102,6 +102,7 @@ export const PtSectionView: React.FC = () => {
   const [chatPartnerTrainer, setChatPartnerTrainer] = useState<TrainerProfile | null>(null);
 
   // Live Chat & Unread States for Client
+  const [clientChatSummaries, setClientChatSummaries] = useState<PtChatSummary[]>([]);
   const [unreadByTrainer, setUnreadByTrainer] = useState<Record<string, number>>({});
   const [totalChatUnread, setTotalChatUnread] = useState<number>(0);
   const [incomingChatToast, setIncomingChatToast] = useState<{ trainerName: string; text: string } | null>(null);
@@ -117,6 +118,19 @@ export const PtSectionView: React.FC = () => {
     trainers.find((t) => t.trainerId === selectedTrainerId) || trainers[0];
 
   const hasActivePt = clientProfile?.ptStatus === 'active';
+
+  const activeChats = React.useMemo(() => {
+    return clientChatSummaries.filter((c) => {
+      const hasSent = Boolean(
+        (c as any).hasClientSentMessage ||
+        ((c as any).totalClientMessages && (c as any).totalClientMessages > 0) ||
+        (c as any).lastSenderRole === 'CLIENT' ||
+        (c.lastMessageText && typeof window !== 'undefined' && localStorage.getItem(`tf_client_sent_msg_${currentUser?.uid}_${c.trainerId}`) === 'true') ||
+        (c.lastMessageText && typeof window !== 'undefined' && localStorage.getItem(`tf_client_sent_msg_${currentUser?.uid}`) === 'true')
+      );
+      return hasSent;
+    });
+  }, [clientChatSummaries, currentUser?.uid]);
 
   useEffect(() => {
     async function loadData() {
@@ -256,6 +270,7 @@ export const PtSectionView: React.FC = () => {
     if (!currentUser?.uid) return;
 
     const unsub = subscribeToClientChats(currentUser.uid, (chats, totalUnread, unreadMap) => {
+      setClientChatSummaries(chats);
       setUnreadByTrainer(unreadMap);
       setTotalChatUnread(totalUnread);
 
@@ -815,6 +830,90 @@ export const PtSectionView: React.FC = () => {
           ) : (
             /* Trainer-First Discovery Flow */
             <div className="space-y-4">
+              {/* Active Trainer Chats - Visible once >= 1 message sent */}
+              {activeChats.length > 0 && (
+                <div className="space-y-3 p-4 bg-white/95 rounded-3xl border border-indigo-100 shadow-sm animate-fade-in">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
+                        <MessageSquare className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-black text-slate-900">Active Trainer Chats</h4>
+                        <span className="text-[10px] text-slate-500 font-semibold">Your direct line to coaching staff</span>
+                      </div>
+                    </div>
+                    {totalChatUnread > 0 && (
+                      <span className="px-2 py-0.5 rounded-full bg-rose-500 text-white text-[10px] font-black animate-pulse">
+                        {totalChatUnread} New
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {activeChats.map((chat) => {
+                      const matchedTrainer = trainers.find((t) => t.trainerId === chat.trainerId);
+                      const trainerName = chat.trainerName || matchedTrainer?.displayName || 'Coach';
+                      const trainerPhoto =
+                        matchedTrainer?.photoUrl ||
+                        'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80';
+                      const unread = Number(chat.unreadForClient) || 0;
+
+                      return (
+                        <div
+                          key={chat.chatId}
+                          onClick={() => {
+                            const trObj: TrainerProfile = matchedTrainer || {
+                              trainerId: chat.trainerId,
+                              displayName: trainerName,
+                              phone: '8208002585',
+                              bio: 'Certified Trainer',
+                              specializations: 'Personal Training',
+                              photoUrl: trainerPhoto,
+                              ptAvailable: true,
+                              dob: '',
+                              gender: 'Male',
+                              badge: 'Coach'
+                            };
+                            setChatPartnerTrainer(trObj);
+                            setIsChatOpen(true);
+                          }}
+                          className="p-3 bg-indigo-50/50 hover:bg-indigo-50/90 rounded-2xl border border-indigo-200/70 transition-all cursor-pointer flex items-center justify-between gap-3 shadow-2xs hover:shadow-xs"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <img
+                              src={trainerPhoto}
+                              alt={trainerName}
+                              className="w-10 h-10 rounded-xl object-cover border border-indigo-200 shrink-0"
+                            />
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <h5 className="text-xs font-bold text-slate-900 truncate">{trainerName}</h5>
+                                {unread > 0 && (
+                                  <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[9px] font-black animate-pulse">
+                                    {unread} new
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-slate-500 truncate mt-0.5">
+                                {chat.lastMessageText || 'Tap to chat...'}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-[10px] font-bold shadow-xs shrink-0 flex items-center gap-1"
+                          >
+                            <MessageSquare className="w-3 h-3" />
+                            <span>Open</span>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div>
                 <h3 className="text-sm font-black text-slate-800 tracking-tight">Certified Personal Trainers</h3>
                 <p className="text-xs text-slate-600 mt-0.5">

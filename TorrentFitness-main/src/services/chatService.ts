@@ -230,6 +230,8 @@ export const sendPtChatMessage = async ({
     parentUpdate.clientName = senderName;
     if (recipientName) parentUpdate.trainerName = recipientName;
     parentUpdate.unreadForTrainer = increment(1);
+    parentUpdate.hasClientSentMessage = true;
+    parentUpdate.totalClientMessages = increment(1);
   }
 
   await setDoc(chatDocRef, parentUpdate, { merge: true });
