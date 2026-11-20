@@ -70,15 +70,40 @@ rules_version = '2';
 // Fields:
 //   - Direct chat threads between clients and personal trainers
 //
+// Collection: system_meta
+// Document ID: {docId}
+// Fields:
+//   - System metadata, setup flags, and migration state records
+//
+// Collection: invoices
+// Document ID: {docId}
+// Fields:
+//   - Official billing tax invoices and client purchase records
+//
+// Collection: bills
+// Document ID: {docId}
+// Fields:
+//   - Member bills and transaction statements
+//
+// Collection: billing_history
+// Document ID: {docId}
+// Fields:
+//   - Archived member billing history and payment snapshots
+//
+// Collection: payments
+// Document ID: {docId}
+// Fields:
+//   - Processed and verified payment ledger records
+//
+// Collection: memberships
+// Document ID: {docId}
+// Fields:
+//   - Active and historical gym membership records
+//
 // ===============================================================
 
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // Check if user is authenticated via Firebase Auth
-    function isAuthenticated() {
-      return request.auth != null;
-    }
 
     // Identifies protected Master Admin / Owner accounts to prevent accidental or malicious deletion
     // Strictly safeguards 'admin', 'admintorrentfitness1', and 'admin_master_1' as well as any account with role == 'admin'
@@ -155,6 +180,10 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    match /system_meta/{docId} {
+      allow read, write, delete: if true;
+    }
+
     // ==========================================
     // GYM OPERATIONS & MANAGEMENT COLLECTIONS
     // ==========================================
@@ -170,8 +199,8 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    match /memberships/{membershipId} {
-      allow read, write: if true;
+    match /memberships/{docId} {
+      allow read, write, delete: if true;
     }
 
     match /workouts/{workoutId} {
@@ -250,16 +279,20 @@ service cloud.firestore {
       allow read, write, delete: if true;
     }
 
-    match /payments/{paymentId} {
-      allow read, write: if true;
+    match /payments/{docId} {
+      allow read, write, delete: if true;
     }
 
-    match /invoices/{invoiceId} {
-      allow read, write: if true;
+    match /invoices/{docId} {
+      allow read, write, delete: if true;
     }
 
-    match /billing_history/{historyId} {
-      allow read, write: if true;
+    match /bills/{docId} {
+      allow read, write, delete: if true;
+    }
+
+    match /billing_history/{docId} {
+      allow read, write, delete: if true;
     }
 
     match /attendance/{attendanceId} {

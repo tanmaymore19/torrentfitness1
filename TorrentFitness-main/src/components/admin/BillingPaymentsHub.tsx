@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { collection, query, limit, onSnapshot, doc, deleteDoc, getDocs, updateDoc, writeBatch, setDoc } from 'firebase/firestore';
+import { collection, query, limit, onSnapshot, doc, deleteDoc, getDocs, updateDoc, writeBatch, setDoc, arrayRemove, where } from 'firebase/firestore';
 import {
   ClientProfile,
   MembershipPlan,
@@ -242,17 +242,21 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
         ? `${tx.gatewayName}`
         : 'Razorpay Online';
 
-      const sDate = tx.startDate || matchingMem?.startDate || tx.createdAt.split('T')[0];
+      const rawCreatedAt = tx.createdAt || (tx as any).timestamp || (tx as any).paidAt || new Date().toISOString();
+      const sDate = tx.startDate || matchingMem?.startDate || (typeof rawCreatedAt === 'string' ? rawCreatedAt.split('T')[0] : new Date().toISOString().split('T')[0]);
       const eDate = tx.endDate || matchingMem?.endDate || 'Active Term';
       const validity = eDate !== 'Active Term' ? `${sDate} to ${eDate}` : sDate;
 
-      const formattedTime = new Date(tx.createdAt).toLocaleString('en-IN', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
+      const dateObj = new Date(rawCreatedAt);
+      const formattedTime = isNaN(dateObj.getTime())
+        ? new Date().toLocaleString('en-IN')
+        : dateObj.toLocaleString('en-IN', {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
 
       const finalPaid = tx.finalAmount ?? tx.amount ?? 0;
       const origPrice = tx.originalPrice ?? matchingMem?.originalPrice ?? finalPaid;
@@ -321,38 +325,42 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
   // Advanced Date-Filtered Entries
   const dateFilteredEntries = useMemo(() => {
     return masterLedgerEntries.filter((entry) => {
+      if (datePresetFilter === 'all_time') return true;
+      if (!entry.rawDate) return true;
       const d = new Date(entry.rawDate);
-      const dateStr = entry.rawDate.split('T')[0];
+      if (isNaN(d.getTime())) return true;
+      const dateStr = typeof entry.rawDate === 'string' ? entry.rawDate.split('T')[0] : '';
+      const nowDate = new Date();
 
       if (datePresetFilter === 'today') {
-        return d.toDateString() === now.toDateString();
+        return d.toDateString() === nowDate.toDateString();
       }
 
       if (datePresetFilter === 'week') {
-        const startOfWeek = new Date(now);
-        startOfWeek.setDate(now.getDate() - now.getDay());
+        const startOfWeek = new Date(nowDate);
+        startOfWeek.setDate(nowDate.getDate() - nowDate.getDay());
         startOfWeek.setHours(0, 0, 0, 0);
         return d >= startOfWeek;
       }
 
       if (datePresetFilter === 'month') {
-        return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        return d.getMonth() === nowDate.getMonth() && d.getFullYear() === nowDate.getFullYear();
       }
 
       if (datePresetFilter === 'last_month') {
-        const lastMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
-        const targetYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+        const lastMonth = nowDate.getMonth() === 0 ? 11 : nowDate.getMonth() - 1;
+        const targetYear = nowDate.getMonth() === 0 ? nowDate.getFullYear() - 1 : nowDate.getFullYear();
         return d.getMonth() === lastMonth && d.getFullYear() === targetYear;
       }
 
       if (datePresetFilter === 'quarter') {
-        const currQ = Math.floor(now.getMonth() / 3);
+        const currQ = Math.floor(nowDate.getMonth() / 3);
         const entryQ = Math.floor(d.getMonth() / 3);
-        return entryQ === currQ && d.getFullYear() === now.getFullYear();
+        return entryQ === currQ && d.getFullYear() === nowDate.getFullYear();
       }
 
       if (datePresetFilter === 'year') {
-        return d.getFullYear() === now.getFullYear();
+        return d.getFullYear() === nowDate.getFullYear();
       }
 
       if (datePresetFilter === 'custom') {
@@ -363,6 +371,18 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
       return true;
     });
   }, [masterLedgerEntries, datePresetFilter, customStartDate, customEndDate]);
+
+  const handleResetFilters = () => {
+    setDatePresetFilter('all_time');
+    setCustomStartDate('');
+    setCustomEndDate('');
+    setCategoryFilter('all');
+    setModeFilter('all');
+    setPaymentMethodFilter('all');
+    setStatusFilter('all');
+    setSearchQuery('');
+    setSelectedLedgerIds([]);
+  };
 
   // Full Filtered Ledger Entries (Date + Category + Mode + Gateway + Status + Search)
   const filteredLedgerEntries = useMemo(() => {
@@ -662,25 +682,36 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
   const confirmDeleteTransaction = async () => {
     if (!txToDelete) return;
     try {
-      // 1. Delete from paymentTransactions collection
-      try {
-        await deleteDoc(doc(db, 'paymentTransactions', txToDelete.id));
-      } catch {}
-
-      // 2. Delete from transactions collection
-      try {
-        await deleteDoc(doc(db, 'transactions', txToDelete.id));
-      } catch {}
-
-      // 3. Delete from clientProfiles/{clientId}/transactions/{txId} if stored as subcollection
+      const txId = txToDelete.id;
       const clientId = txToDelete.rawTx?.userId || txToDelete.rawTx?.clientId || txToDelete.clientId;
+
+      // 1. Permanently delete from all financial and billing collections
+      const finCollections = ['paymentTransactions', 'transactions', 'payments', 'invoices', 'bills', 'billing_history'];
+      await Promise.allSettled(
+        finCollections.map((coll) => deleteDoc(doc(db, coll, txId)).catch(() => null))
+      );
+
+      // 2. Delete from linked memberships collection
+      if (txToDelete.rawTx?.membershipId) {
+        await deleteDoc(doc(db, 'memberships', txToDelete.rawTx.membershipId)).catch(() => null);
+      }
+      try {
+        const memMatchSnap = await getDocs(query(collection(db, 'memberships'), where('transactionId', '==', txId)));
+        if (!memMatchSnap.empty) {
+          await Promise.allSettled(memMatchSnap.docs.map((d) => deleteDoc(d.ref)));
+        }
+      } catch {}
+
+      // 3. Delete from client subcollections and clean client bill arrays
       if (clientId) {
-        try {
-          await deleteDoc(doc(db, 'clientProfiles', clientId, 'transactions', txToDelete.id));
-        } catch {}
+        await Promise.allSettled([
+          deleteDoc(doc(db, 'clientProfiles', clientId, 'transactions', txId)),
+          deleteDoc(doc(db, 'clientProfiles', clientId, 'invoices', txId)),
+          deleteDoc(doc(db, 'clientProfiles', clientId, 'bills', txId))
+        ]);
       }
 
-      // 4. Plan/Service Revocation based on what the transaction was for
+      // 4. Plan / PT Revocation based on what the transaction was for
       const planNameLower = (txToDelete.planName || txToDelete.rawTx?.planName || txToDelete.rawTx?.itemTitle || '').toLowerCase();
       const purpose = (txToDelete.rawTx?.purpose || '').toLowerCase();
       const isPtTransaction =
@@ -693,53 +724,67 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
 
       if (clientId) {
         if (isPtTransaction) {
-          // PT Package: revoke PT status
-          try {
-            await setDoc(doc(db, 'clientProfiles', clientId), {
+          // PT Package: revoke PT status and unassign coach
+          const trId = txToDelete.rawTx?.ptTrainerId || (txToDelete.rawTx as any)?.trainerId;
+          await Promise.allSettled([
+            setDoc(doc(db, 'clientProfiles', clientId), {
               ptStatus: 'NONE',
               assignedTrainerId: null,
+              assignedTrainerName: null,
               ptApprovedByAdmin: false,
-              ptPlanActive: false
-            }, { merge: true });
-          } catch {}
-          try {
-            await setDoc(doc(db, 'members', clientId), {
+              ptPlanActive: false,
+              pendingPtRequestId: null
+            }, { merge: true }),
+            setDoc(doc(db, 'members', clientId), {
               ptStatus: 'NONE',
               assignedTrainerId: null,
+              assignedTrainerName: null,
               ptApprovedByAdmin: false
-            }, { merge: true });
-          } catch {}
+            }, { merge: true })
+          ]);
+
+          if (trId) {
+            await Promise.allSettled([
+              updateDoc(doc(db, 'trainers', trId), {
+                assignedClients: arrayRemove(clientId),
+                assignedClientIds: arrayRemove(clientId)
+              }),
+              updateDoc(doc(db, 'trainerProfiles', trId), {
+                assignedClients: arrayRemove(clientId),
+                assignedClientIds: arrayRemove(clientId)
+              })
+            ]);
+          }
         } else {
-          // Gym Membership Plan: deactivate membership
-          try {
-            await setDoc(doc(db, 'clientProfiles', clientId), {
+          // Gym Membership Plan: deactivate membership completely
+          await Promise.allSettled([
+            setDoc(doc(db, 'clientProfiles', clientId), {
               membershipStatus: 'INACTIVE',
               currentPlan: null,
+              membershipPlan: null,
+              membershipPlanName: null,
+              membershipPlanId: null,
+              membershipStartDate: null,
+              membershipEndDate: null,
+              membershipExpiryDate: null,
               planExpiryDate: null
-            }, { merge: true });
-          } catch {}
-          try {
-            await setDoc(doc(db, 'members', clientId), {
+            }, { merge: true }),
+            setDoc(doc(db, 'members', clientId), {
               membershipStatus: 'INACTIVE',
               currentPlan: null,
+              membershipPlan: null,
+              membershipPlanName: null,
+              membershipPlanId: null,
+              membershipStartDate: null,
+              membershipEndDate: null,
+              membershipExpiryDate: null,
               planExpiryDate: null
-            }, { merge: true });
-          } catch {}
+            }, { merge: true })
+          ]);
         }
       }
 
-      // 5. If linked to a membership record, mark transactionDeleted: true WITHOUT deleting membership record or client profile!
-      if (txToDelete.rawTx?.membershipId) {
-        try {
-          await updateDoc(doc(db, 'memberships', txToDelete.rawTx.membershipId), {
-            transactionDeleted: true,
-            transactionId: null,
-            receiptNumber: null
-          });
-        } catch {}
-      }
-
-      // 6. Immediately update local transactions state so all KPIs dynamically recalculate instantly
+      // 5. Update local state and purge localStorage caches
       setTransactions((prev) => {
         const updated = prev.filter((t) => t.id !== txToDelete.id);
         setCachedData('admin_payment_transactions', updated);
@@ -748,11 +793,20 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
       });
       setSelectedLedgerIds((prev) => prev.filter((id) => id !== txToDelete.id));
 
+      if (typeof window !== 'undefined') {
+        try {
+          if (clientId) {
+            localStorage.removeItem(`pay_tx_${clientId}`);
+          }
+        } catch {}
+      }
+
       setFeedbackBanner({
         type: 'success',
-        text: `Transaction ${txToDelete.receiptNumber} (${txToDelete.clientName}) permanently deleted. ${isPtTransaction ? 'PT package deactivated.' : 'Membership deactivated.'} Revenue metrics updated.`
+        text: `Transaction ${txToDelete.receiptNumber} (${txToDelete.clientName}) permanently deleted. ${isPtTransaction ? 'Personal training revoked.' : 'Membership deactivated.'} Revenue updated.`
       });
     } catch (err: any) {
+      alert('Error deleting transaction: ' + err.message);
       setFeedbackBanner({
         type: 'error',
         text: `Error deleting transaction: ${err.message}`
@@ -1278,6 +1332,16 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
                   <option value="rejected">Rejected</option>
                 </select>
 
+                <button
+                  type="button"
+                  onClick={handleResetFilters}
+                  className="px-2.5 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer pointer-events-auto shrink-0 shadow-xs"
+                  title="Reset all filters to default"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Reset Filters</span>
+                </button>
+
                 {selectedLedgerIds.length > 0 && (
                   <button
                     type="button"
@@ -1311,8 +1375,18 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
                   No payment records match the selected filters.
                 </p>
                 <p className="text-[11px] text-slate-500">
-                  Try switching the Billing Period Filter to &quot;All Time&quot; or clearing your search query.
+                  Try switching the Billing Period Filter to &quot;All Time&quot; or resetting your active filters.
                 </p>
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={handleResetFilters}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition-all cursor-pointer shadow-xs"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reset All Filters</span>
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="overflow-x-auto">

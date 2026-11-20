@@ -122,6 +122,10 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
   const [cancellingMembership, setCancellingMembership] = useState<MembershipRecord | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
 
+  // 2-Step Membership Revocation State for Deduplicated Members Control
+  const [memberToRevoke, setMemberToRevoke] = useState<any | null>(null);
+  const [isRevokingMember, setIsRevokingMember] = useState(false);
+
   // Coupon Management State
   const [newCouponCode, setNewCouponCode] = useState('');
   const [newCouponTitle, setNewCouponTitle] = useState('');
@@ -234,21 +238,91 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
     }
   };
 
-  const handleRejectOfflineRequest = async (tx: PaymentTransaction) => {
-    setProcessingApprovalId(tx.id);
+  const handleQuickApproveOffline = async (req: PaymentTransaction) => {
+    setProcessingApprovalId(req.id);
     try {
-      await rejectOfflinePaymentRequest(tx.id, 'Declined by Admin at Offline Approval Queue');
+      const startDateStr = new Date().toISOString().split('T')[0];
+      const { expiryDate } = calculateExpiryFromPaymentDate(
+        startDateStr,
+        req.durationMonths || 1
+      );
+      await approveOfflinePaymentRequest(req.id, {
+        amountReceived: req.finalAmount ?? req.amount ?? 0,
+        paymentReceivedDate: startDateStr,
+        approvedByAdminId: currentUser?.uid || 'admin_master',
+        approvedByAdminName: currentUser?.displayName || 'Master Admin'
+      });
       setFeedbackBanner({
         type: 'success',
-        text: `Rejected offline cash request from ${tx.clientName} and notified the member.`
+        text: `✓ Cash verified & membership activated for ${req.clientName}! (${req.planName || req.itemTitle}) • Expiry: ${expiryDate}`
       });
     } catch (err: any) {
+      alert('Failed to approve offline request: ' + err.message);
       setFeedbackBanner({
         type: 'error',
-        text: 'Failed to reject request: ' + (err.message || 'Unknown error')
+        text: 'Failed to approve request: ' + (err.message || 'Unknown error')
       });
     } finally {
       setProcessingApprovalId(null);
+    }
+  };
+
+  const confirmRevokeMember = async () => {
+    if (!memberToRevoke) return;
+    setIsRevokingMember(true);
+    try {
+      const clientId = memberToRevoke.clientId;
+      const nowIso = new Date().toISOString();
+
+      await Promise.allSettled([
+        updateDoc(doc(db, 'clientProfiles', clientId), {
+          membershipStatus: 'INACTIVE',
+          currentPlan: null,
+          membershipPlan: null,
+          membershipPlanName: null,
+          membershipPlanId: null,
+          membershipStartDate: null,
+          membershipEndDate: null,
+          membershipExpiryDate: null,
+          planExpiryDate: null,
+          updatedAt: nowIso
+        }),
+        updateDoc(doc(db, 'members', clientId), {
+          membershipStatus: 'INACTIVE',
+          currentPlan: null,
+          membershipPlan: null,
+          membershipPlanName: null,
+          membershipPlanId: null,
+          membershipStartDate: null,
+          membershipEndDate: null,
+          membershipExpiryDate: null,
+          planExpiryDate: null,
+          updatedAt: nowIso
+        }),
+        updateDoc(doc(db, 'users', clientId), {
+          membershipStatus: 'INACTIVE',
+          updatedAt: nowIso
+        })
+      ]);
+
+      if (memberToRevoke.rawRecord?.id) {
+        await updateDoc(doc(db, 'memberships', memberToRevoke.rawRecord.id), {
+          status: 'cancelled',
+          cancelledAt: nowIso,
+          cancellationReason: 'Admin manual revocation'
+        }).catch(() => null);
+      }
+
+      setFeedbackBanner({
+        type: 'success',
+        text: `✓ Membership for ${memberToRevoke.clientName} has been revoked.`
+      });
+      setMemberToRevoke(null);
+    } catch (err: any) {
+      alert('Error revoking membership: ' + err.message);
+      setFeedbackBanner({ type: 'error', text: 'Failed to revoke membership: ' + err.message });
+    } finally {
+      setIsRevokingMember(false);
     }
   };
 
@@ -742,23 +816,65 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
   const handleCancelMembership = async (record: MembershipRecord) => {
     setIsCancelling(true);
     try {
-      await updateDoc(doc(db, 'memberships', record.id), {
-        status: 'cancelled',
-        cancelledAt: new Date().toISOString(),
-        cancellationReason: 'Admin manual revocation'
-      });
+      const nowIso = new Date().toISOString();
+      if (record.id) {
+        await updateDoc(doc(db, 'memberships', record.id), {
+          status: 'cancelled',
+          cancelledAt: nowIso,
+          cancellationReason: 'Admin manual revocation'
+        }).catch(() => null);
+      }
 
-      await updateDoc(doc(db, 'clientProfiles', record.clientId), {
-        membershipStatus: 'inactive',
-        updatedAt: new Date().toISOString()
-      });
+      await Promise.allSettled([
+        setDoc(
+          doc(db, 'clientProfiles', record.clientId),
+          {
+            membershipStatus: 'INACTIVE',
+            currentPlan: null,
+            membershipPlan: null,
+            membershipPlanName: null,
+            membershipPlanId: null,
+            membershipStartDate: null,
+            membershipEndDate: null,
+            membershipExpiryDate: null,
+            planExpiryDate: null,
+            updatedAt: nowIso
+          },
+          { merge: true }
+        ),
+        setDoc(
+          doc(db, 'members', record.clientId),
+          {
+            membershipStatus: 'INACTIVE',
+            currentPlan: null,
+            membershipPlan: null,
+            membershipPlanName: null,
+            membershipPlanId: null,
+            membershipStartDate: null,
+            membershipEndDate: null,
+            membershipExpiryDate: null,
+            planExpiryDate: null,
+            updatedAt: nowIso
+          },
+          { merge: true }
+        ),
+        setDoc(
+          doc(db, 'users', record.clientId),
+          {
+            membershipStatus: 'INACTIVE',
+            updatedAt: nowIso
+          },
+          { merge: true }
+        )
+      ]);
 
       setFeedbackBanner({
         type: 'success',
-        text: `Membership for ${record.clientName} has been revoked.`
+        text: `✓ Membership for ${record.clientName} has been revoked.`
       });
       setCancellingMembership(null);
     } catch (err: any) {
+      alert('Error revoking membership: ' + err.message);
       setFeedbackBanner({ type: 'error', text: 'Failed to cancel membership: ' + err.message });
     } finally {
       setIsCancelling(false);
@@ -946,14 +1062,88 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
     };
   };
 
-  const filteredMemberships = memberships.filter(m => {
+  // Deduplicated Member List so each client appears exactly once with active/inactive status
+  const deduplicatedMembers = useMemo(() => {
+    const map = new Map<string, any>();
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    // Seed from all registered clients
+    clients.forEach((c) => {
+      const isClientActive = String(c.membershipStatus || '').toLowerCase() === 'active';
+      const sDate = c.membershipStartDate || '-';
+      const eDate = c.membershipEndDate || c.membershipExpiryDate || c.planExpiryDate || '-';
+      const isStillValid = eDate !== '-' && eDate >= todayStr;
+      const liveStatus: 'ACTIVE' | 'INACTIVE' = isClientActive && isStillValid ? 'ACTIVE' : 'INACTIVE';
+
+      map.set(c.userId, {
+        id: `client_${c.userId}`,
+        clientId: c.userId,
+        clientName: c.displayName || c.fullName || 'Member',
+        clientPhone: c.phone || '',
+        clientUsername: c.username || c.userId,
+        planName: c.membershipPlan || c.membershipPlanName || (liveStatus === 'ACTIVE' ? 'Active Membership' : 'No Active Plan'),
+        durationMonths: liveStatus === 'ACTIVE' ? 1 : 0,
+        startDate: sDate,
+        endDate: eDate,
+        status: liveStatus,
+        targetClient: c
+      });
+    });
+
+    // Overlay with membership records if any active or newer
+    memberships.forEach((m) => {
+      if ((m as any).transactionDeleted) return;
+      const isMemActive = (m.status === 'active' || m.status === 'ACTIVE') && (!m.endDate || m.endDate >= todayStr);
+      const existing = map.get(m.clientId);
+
+      if (!existing) {
+        map.set(m.clientId, {
+          id: `mem_${m.id}`,
+          clientId: m.clientId,
+          clientName: m.clientName || 'Member',
+          clientPhone: '',
+          clientUsername: m.clientId,
+          planName: m.planName,
+          durationMonths: m.durationMonths || 1,
+          startDate: m.startDate || '-',
+          endDate: m.endDate || '-',
+          status: isMemActive ? 'ACTIVE' : 'INACTIVE',
+          rawRecord: m
+        });
+      } else if (isMemActive) {
+        existing.status = 'ACTIVE';
+        existing.planName = m.planName;
+        existing.durationMonths = m.durationMonths || existing.durationMonths;
+        existing.startDate = m.startDate || existing.startDate;
+        existing.endDate = m.endDate || existing.endDate;
+        existing.rawRecord = m;
+      }
+    });
+
+    const list = Array.from(map.values());
+    list.sort((a, b) => {
+      if (a.status === 'ACTIVE' && b.status !== 'ACTIVE') return -1;
+      if (a.status !== 'ACTIVE' && b.status === 'ACTIVE') return 1;
+      return a.clientName.localeCompare(b.clientName);
+    });
+
+    return list;
+  }, [clients, memberships]);
+
+  const filteredDeduplicatedMembers = useMemo(() => {
+    if (!membershipSearch.trim()) return deduplicatedMembers;
     const q = membershipSearch.toLowerCase();
-    return (
-      m.clientName.toLowerCase().includes(q) ||
-      m.clientId.toLowerCase().includes(q) ||
-      m.planName.toLowerCase().includes(q)
+    return deduplicatedMembers.filter(
+      (m) =>
+        m.clientName.toLowerCase().includes(q) ||
+        m.clientId.toLowerCase().includes(q) ||
+        (m.clientUsername && m.clientUsername.toLowerCase().includes(q)) ||
+        (m.clientPhone && m.clientPhone.includes(q)) ||
+        m.planName.toLowerCase().includes(q)
     );
-  });
+  }, [deduplicatedMembers, membershipSearch]);
+
+  const filteredMemberships = filteredDeduplicatedMembers;
 
   // Financial KPI Totals from Master Ledger
   const settledLedger = masterLedgerEntries.filter(e => e.status === 'Success');
@@ -1129,12 +1319,12 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
                       <button
                         type="button"
                         disabled={processingApprovalId === req.id}
-                        onClick={() => openApproveOfflineModal(req)}
-                        className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl text-xs font-black shadow-sm flex items-center gap-1.5 transition-all disabled:opacity-50"
+                        onClick={() => handleQuickApproveOffline(req)}
+                        className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-[0.98] text-white rounded-xl text-xs font-black shadow-sm flex items-center gap-1.5 transition-all cursor-pointer pointer-events-auto disabled:opacity-50"
                       >
                         <CheckCircle2 className="w-4 h-4" />
                         <span>
-                          {processingApprovalId === req.id ? 'Activating...' : 'Approve & Verify Cash'}
+                          {processingApprovalId === req.id ? 'Activating...' : 'Approve Cash & Activate'}
                         </span>
                       </button>
 
@@ -1142,10 +1332,10 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
                         type="button"
                         disabled={processingApprovalId === req.id}
                         onClick={() => handleRejectOfflineRequest(req)}
-                        className="px-3.5 py-2.5 bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 rounded-xl text-xs font-bold flex items-center gap-1 transition-all disabled:opacity-50"
+                        className="px-3.5 py-2 bg-white hover:bg-rose-50 active:scale-[0.98] text-rose-700 border border-rose-300 rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer pointer-events-auto disabled:opacity-50"
                       >
                         <XCircle className="w-4 h-4" />
-                        <span>Reject</span>
+                        <span>Reject Request</span>
                       </button>
                     </div>
                   </div>
@@ -1160,7 +1350,7 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
               <div>
                 <h3 className="text-sm font-bold text-slate-800">
                   Active Memberships &amp; Revocation Control (
-                  {memberships.filter(m => m.status === 'active').length} Active)
+                  {deduplicatedMembers.filter(m => m.status === 'ACTIVE').length} Active)
                 </h3>
                 <p className="text-[11px] text-slate-600">
                   Inspect active member subscriptions, adjust validity dates, or revoke memberships
@@ -1180,7 +1370,7 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
             </div>
 
             <div className="vision-surface rounded-2xl border border-white/90 overflow-hidden shadow-xs">
-              {filteredMemberships.length === 0 ? (
+              {filteredDeduplicatedMembers.length === 0 ? (
                 <div className="p-8 text-center text-slate-500 text-xs">
                   No membership records found matching your search.
                 </div>
@@ -1197,40 +1387,44 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200/80 bg-white/70">
-                      {filteredMemberships.map((m) => {
-                        const targetClient = clients.find(c => c.userId === m.clientId);
+                      {filteredDeduplicatedMembers.map((m) => {
+                        const targetClient = m.targetClient || clients.find(c => c.userId === m.clientId);
                         return (
                           <tr key={m.id} className="hover:bg-slate-50/80 transition-colors">
                             <td className="py-2.5 px-3">
                               <span className="font-bold text-slate-900 block">{m.clientName}</span>
                               <span className="text-[10px] text-indigo-700 font-mono font-bold">
-                                @{m.clientId}
+                                @{m.clientUsername || m.clientId}
                               </span>
                             </td>
                             <td className="py-2.5 px-3">
                               <span className="font-semibold text-slate-800">{m.planName}</span>
-                              <span className="text-[10px] text-slate-500 block">
-                                {m.durationMonths} Months
-                              </span>
+                              {m.status === 'ACTIVE' && m.durationMonths > 0 && (
+                                <span className="text-[10px] text-slate-500 block">
+                                  {m.durationMonths} Months
+                                </span>
+                              )}
                             </td>
                             <td className="py-2.5 px-3 text-slate-700 text-[11px]">
-                              <span>{m.startDate}</span>
-                              <span className="text-slate-400 mx-1">→</span>
-                              <strong className="text-slate-900 font-mono font-bold">{m.endDate}</strong>
+                              {m.status === 'ACTIVE' ? (
+                                <>
+                                  <span>{m.startDate}</span>
+                                  <span className="text-slate-400 mx-1">→</span>
+                                  <strong className="text-slate-900 font-mono font-bold">{m.endDate}</strong>
+                                </>
+                              ) : (
+                                <span className="text-slate-400 italic">No Active Term</span>
+                              )}
                             </td>
                             <td className="py-2.5 px-3">
                               <span
                                 className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
-                                  m.status === 'active'
+                                  m.status === 'ACTIVE'
                                     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                    : m.status === 'pending'
-                                    ? 'bg-amber-50 text-amber-800 border-amber-200'
-                                    : m.status === 'cancelled' || m.status === 'rejected'
-                                    ? 'bg-rose-50 text-rose-700 border-rose-200'
                                     : 'bg-slate-100 text-slate-600 border-slate-200'
                                 }`}
                               >
-                                {m.status.toUpperCase()}
+                                {m.status}
                               </span>
                             </td>
                             <td className="py-2.5 px-3 text-right">
@@ -1239,20 +1433,37 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
                                   <button
                                     type="button"
                                     onClick={() => onSelectClientForDetail(targetClient)}
-                                    className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition-all shadow-2xs"
+                                    className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer pointer-events-auto"
                                   >
-                                    Adjust Validity
+                                    Extend / Adjust Dates
                                   </button>
                                 )}
 
-                                {m.status === 'active' && (
+                                {m.status === 'ACTIVE' && (
                                   <button
                                     type="button"
-                                    onClick={() => setCancellingMembership(m)}
-                                    className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1 shadow-2xs"
+                                    onClick={() =>
+                                      setCancellingMembership(
+                                        m.rawRecord || {
+                                          id: m.rawRecord?.id || '',
+                                          clientId: m.clientId,
+                                          clientName: m.clientName,
+                                          planId: 'plan',
+                                          planName: m.planName,
+                                          durationMonths: m.durationMonths || 1,
+                                          amountPaid: 0,
+                                          paymentMode: 'cash',
+                                          status: 'active',
+                                          startDate: m.startDate,
+                                          endDate: m.endDate,
+                                          createdAt: new Date().toISOString()
+                                        }
+                                      )
+                                    }
+                                    className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1 shadow-2xs cursor-pointer pointer-events-auto"
                                   >
                                     <XCircle className="w-3.5 h-3.5 text-rose-600" />
-                                    <span>Revoke / Cancel</span>
+                                    <span>Revoke Membership</span>
                                   </button>
                                 )}
                               </div>

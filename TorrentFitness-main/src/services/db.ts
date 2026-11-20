@@ -1083,81 +1083,18 @@ export async function initializeDatabaseSeed(force: boolean = false): Promise<vo
             height: 175,
             weight: 74,
             fitnessGoal: 'Muscle Gain & Strength',
-            membershipStatus: 'active',
-            membershipPlan: '3 Months Muscle Builder',
-            membershipPlanId: 'plan_3m',
-            membershipPlanName: '3 Months Muscle Builder',
-            membershipStartDate: '2026-10-01',
-            membershipEndDate: '2027-01-01',
-            membershipExpiryDate: '2027-01-01',
-            assignedTrainerId: 'trainer_hitesh_rajput',
-            assignedTrainerName: 'Hitesh Rajput',
-            ptStatus: 'none',
+            membershipStatus: 'INACTIVE',
+            membershipPlan: '',
+            membershipPlanId: '',
+            membershipPlanName: '',
+            membershipStartDate: '',
+            membershipEndDate: '',
+            membershipExpiryDate: '',
+            planExpiryDate: null,
+            assignedTrainerId: null,
+            assignedTrainerName: null,
+            ptStatus: 'NONE',
             createdAt: '2026-10-01T00:00:00.000Z'
-          };
-
-          const historicalTxn = {
-            id: 'txn_historical_tanmay_01',
-            receiptNumber: 'TF-REC-2026-100220',
-            paymentId: 'pay_live_tanmay_0220_3m',
-            referenceId: 'pay_live_tanmay_0220_3m',
-            orderId: 'order_live_tanmay_0220',
-            clientId: 'tanmay1_19',
-            clientName: 'Tanmay More',
-            clientEmail: 'tanmaymore0220@gmail.com',
-            clientPhone: '+91 8208002585',
-            purpose: 'membership',
-            itemTitle: '3 Months Muscle Builder',
-            planId: 'plan_3m',
-            planName: '3 Months Muscle Builder',
-            durationMonths: 3,
-            startDate: '2026-10-01',
-            endDate: '2027-01-01',
-            originalPrice: 4800,
-            discountAmount: 800,
-            discountPercent: 16.67,
-            amount: 4000,
-            finalAmount: 4000,
-            currency: 'INR',
-            status: 'success',
-            verificationStatus: 'ACTIVE',
-            paymentMode: 'online',
-            gatewayId: 'gw_razorpay_main',
-            gatewayProvider: 'razorpay',
-            gatewayName: 'Razorpay PG (UPI / Cards / NetBanking)',
-            paymentMethod: 'UPI / Cards / NetBanking',
-            razorpayPaymentId: 'pay_live_tanmay_0220_3m',
-            razorpayOrderId: 'order_live_tanmay_0220',
-            timestamp: '2026-10-01T10:15:00.000Z',
-            createdAt: '2026-10-01T10:15:00.000Z',
-            approvedAt: '2026-10-01T10:15:00.000Z',
-            completedAt: '2026-10-01T10:15:00.000Z',
-            membershipId: 'mem_tanmay_3m_01'
-          };
-
-          const historicalMembership = {
-            id: 'mem_tanmay_3m_01',
-            clientId: 'tanmay1_19',
-            clientName: 'Tanmay More',
-            planId: 'plan_3m',
-            planName: '3 Months Muscle Builder',
-            durationMonths: 3,
-            amountPaid: 4000,
-            originalPrice: 4800,
-            discountAmount: 800,
-            discountPercent: 16.67,
-            paymentMode: 'online',
-            gatewayId: 'gw_razorpay_main',
-            gatewayProvider: 'razorpay',
-            gatewayName: 'Razorpay PG (UPI / Cards / NetBanking)',
-            referenceId: 'pay_live_tanmay_0220_3m',
-            receiptNumber: 'TF-REC-2026-100220',
-            transactionId: 'txn_historical_tanmay_01',
-            status: 'active',
-            startDate: '2026-10-01',
-            endDate: '2027-01-01',
-            approvedAt: '2026-10-01T10:15:00.000Z',
-            createdAt: '2026-10-01T10:15:00.000Z'
           };
 
           const historicalAttendanceLogs = [
@@ -1331,13 +1268,6 @@ export async function initializeDatabaseSeed(force: boolean = false): Promise<vo
                 username: 'tanmay1_19',
                 email: 'tanmaymore0220@gmail.com'
               }, { merge: true }),
-              setDoc(doc(db, 'memberships', historicalMembership.id), historicalMembership, { merge: true }),
-              // Sync financial transaction across all 5 financial collections
-              setDoc(doc(db, 'paymentTransactions', historicalTxn.id), historicalTxn, { merge: true }),
-              setDoc(doc(db, 'transactions', historicalTxn.id), historicalTxn, { merge: true }),
-              setDoc(doc(db, 'payments', historicalTxn.id), historicalTxn, { merge: true }),
-              setDoc(doc(db, 'invoices', historicalTxn.id), historicalTxn, { merge: true }),
-              setDoc(doc(db, 'billing_history', historicalTxn.id), historicalTxn, { merge: true }),
               // Sync historical attendance logs across both attendance and attendance_logs
               ...historicalAttendanceLogs.flatMap((log) => [
                 setDoc(doc(db, 'attendance', log.id), log, { merge: true }),
@@ -1353,11 +1283,145 @@ export async function initializeDatabaseSeed(force: boolean = false): Promise<vo
       })()
     ]);
 
+    // Execute one-time historical purge and reset of all memberships to INACTIVE
+    await executeOneTimeHistoricalReset();
+
     if (typeof window !== 'undefined') {
       localStorage.setItem(SEED_CACHE_FLAG_KEY, 'done');
     }
   } catch (err) {
     console.warn('Background seed note:', err);
+  }
+}
+
+/**
+ * One-Time Historical Reset:
+ * Updates all existing client documents (clientProfiles and members) to set:
+ * membershipStatus: 'INACTIVE', currentPlan: null, planExpiryDate: null, ptStatus: 'NONE', assignedTrainerId: null
+ * Purges all historical records from transactions, invoices, bills, paymentTransactions, payments, billing_history, memberships.
+ * Guarded by system_meta/initial_purge_v1 to run strictly ONCE.
+ */
+export async function executeOneTimeHistoricalReset(): Promise<void> {
+  try {
+    const purgeFlagRef = doc(db, 'system_meta', 'initial_purge_v1');
+    const purgeSnap = await getDoc(purgeFlagRef).catch(() => null);
+    if (purgeSnap?.exists() && purgeSnap.data()?.completed === true) {
+      return;
+    }
+
+    console.log('[System Reset] Executing one-time historical reset & purge...');
+
+    // 1. Update ALL clientProfiles to INACTIVE & clear paymentHistory
+    const clientProfilesSnap = await getDocs(collection(db, 'clientProfiles')).catch(() => null);
+    if (clientProfilesSnap && !clientProfilesSnap.empty) {
+      const batch = writeBatch(db);
+      clientProfilesSnap.docs.forEach((d) => {
+        batch.set(
+          d.ref,
+          {
+            membershipStatus: 'INACTIVE',
+            currentPlan: null,
+            membershipPlan: null,
+            membershipPlanName: null,
+            membershipPlanId: null,
+            membershipStartDate: null,
+            membershipEndDate: null,
+            membershipExpiryDate: null,
+            planExpiryDate: null,
+            ptStatus: 'NONE',
+            assignedTrainerId: null,
+            assignedTrainerName: null,
+            ptApprovedByAdmin: false,
+            pendingPtRequestId: null,
+            paymentHistory: [],
+            billingHistory: []
+          },
+          { merge: true }
+        );
+      });
+      await batch.commit().catch((e) => console.warn('Reset clientProfiles batch note:', e));
+    }
+
+    // 2. Update ALL members to INACTIVE
+    const membersSnap = await getDocs(collection(db, 'members')).catch(() => null);
+    if (membersSnap && !membersSnap.empty) {
+      const batch = writeBatch(db);
+      membersSnap.docs.forEach((d) => {
+        batch.set(
+          d.ref,
+          {
+            membershipStatus: 'INACTIVE',
+            currentPlan: null,
+            membershipPlan: null,
+            membershipPlanName: null,
+            membershipPlanId: null,
+            membershipStartDate: null,
+            membershipEndDate: null,
+            membershipExpiryDate: null,
+            planExpiryDate: null,
+            ptStatus: 'NONE',
+            assignedTrainerId: null,
+            assignedTrainerName: null,
+            ptApprovedByAdmin: false,
+            pendingPtRequestId: null,
+            paymentHistory: [],
+            billingHistory: []
+          },
+          { merge: true }
+        );
+      });
+      await batch.commit().catch((e) => console.warn('Reset members batch note:', e));
+    }
+
+    // 3. Purge all documents from financial and billing collections
+    const collectionsToPurge = [
+      'transactions',
+      'invoices',
+      'bills',
+      'paymentTransactions',
+      'payments',
+      'billing_history',
+      'memberships'
+    ];
+
+    for (const collName of collectionsToPurge) {
+      try {
+        const snap = await getDocs(collection(db, collName)).catch(() => null);
+        if (snap && !snap.empty) {
+          const b = writeBatch(db);
+          snap.docs.forEach((d) => b.delete(d.ref));
+          await b.commit();
+        }
+      } catch (err) {
+        console.warn(`Purging ${collName} note:`, err);
+      }
+    }
+
+    // 4. Mark one-time purge completed
+    await setDoc(
+      purgeFlagRef,
+      {
+        completed: true,
+        executedAt: new Date().toISOString(),
+        target: 'v1_initial_reset'
+      },
+      { merge: true }
+    );
+
+    // Clear local storage cache
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem('admin_payment_transactions');
+        localStorage.removeItem('admin_payment_tx');
+        localStorage.removeItem('admin_pt_requests');
+        localStorage.removeItem('admin_memberships');
+        localStorage.removeItem('tf_cached_admin_revenue');
+      } catch {}
+    }
+
+    console.log('[System Reset] One-time historical reset completed successfully.');
+  } catch (err) {
+    console.warn('[System Reset] Error in executeOneTimeHistoricalReset:', err);
   }
 }
 
