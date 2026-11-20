@@ -475,10 +475,12 @@ export interface PromoBanner {
   buttonText?: string;
   badgeColor?: string;
   active: boolean;
+  isActive?: boolean;
   order: number;
   imageFocalAlign?: 'object-top' | 'object-center' | 'object-bottom';
   imageFitMode?: 'object-cover' | 'object-contain';
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface GymFeedback {

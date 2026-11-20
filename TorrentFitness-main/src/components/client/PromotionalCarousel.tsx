@@ -96,7 +96,7 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
             if (!snapBanners.empty) {
               const list = snapBanners.docs
                 .map((d) => ({ id: d.id, ...d.data() } as PromoBanner))
-                .filter((b) => b.active !== false)
+                .filter((b: any) => b.active !== false && b.isActive !== false)
                 .sort((a, b) => (a.order || 0) - (b.order || 0));
               setBanners(list);
               setCachedData('promo_banners', list);
@@ -109,7 +109,7 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
             await Promise.all(
               DEFAULT_PROMO_BANNERS.map((b, i) => {
                 const id = `banner_seed_${i + 1}`;
-                return setDoc(doc(db, 'promoBanners', id), { id, ...b });
+                return setDoc(doc(db, 'promoBanners', id), { id, ...b, active: true, isActive: true }, { merge: true });
               })
             );
           } catch (e) {
@@ -118,7 +118,7 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
         } else {
           const list = snap.docs
             .map((d) => ({ id: d.id, ...d.data() } as PromoBanner))
-            .filter((b) => b.active !== false)
+            .filter((b: any) => b.active !== false && b.isActive !== false)
             .sort((a, b) => (a.order || 0) - (b.order || 0));
           setBanners(list);
           setCachedData('promo_banners', list);
@@ -219,7 +219,7 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
 
   return (
     <div
-      className="relative w-full rounded-3xl overflow-hidden shadow-[0_16px_36px_-10px_rgba(15,23,42,0.14)] border border-white/80 group select-none transition-all duration-300 bg-slate-950"
+      className="relative w-full rounded-2xl overflow-hidden shadow-[0_16px_36px_-10px_rgba(15,23,42,0.14)] border border-white/80 group select-none transition-all duration-300 bg-slate-950"
       onMouseEnter={() => setIsPaused(true)}
       onMouseLeave={() => setIsPaused(false)}
       onTouchStart={handleTouchStart}
@@ -239,7 +239,7 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
             <div
               key={banner.id || index}
               onClick={() => handleSlideClick(banner)}
-              className="relative w-full shrink-0 aspect-[16/7] cursor-pointer overflow-hidden bg-slate-950"
+              className="relative aspect-[16/7] w-full shrink-0 rounded-2xl overflow-hidden cursor-pointer bg-slate-950"
             >
               {/* Media Render: Video vs Image vs Gradient Fallback */}
               {isVideo && !isFailed ? (
@@ -249,17 +249,17 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
                   loop
                   muted
                   playsInline
-                  preload="metadata"
+                  preload="auto"
                   onError={() => handleImageError(banner.id)}
-                  className="w-full h-full object-cover object-center transform scale-105 transition-transform duration-700"
+                  className="w-full h-full object-cover"
                 />
               ) : !isFailed && banner.mediaUrl ? (
                 <img
-                  src={optimizeImageUrl(banner.mediaUrl, 900, 75)}
+                  src={banner.mediaUrl}
                   alt={banner.title}
                   decoding="async"
                   onError={() => handleImageError(banner.id)}
-                  className={`w-full h-full ${banner.imageFitMode || 'object-cover'} ${banner.imageFocalAlign || 'object-center'} transform transition-transform duration-700 group-hover:scale-105`}
+                  className="w-full h-full object-cover object-center"
                   loading={index === 0 ? 'eager' : 'lazy'}
                 />
               ) : (

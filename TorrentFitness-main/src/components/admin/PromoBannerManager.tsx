@@ -31,7 +31,7 @@ import {
   Smartphone,
   Camera
 } from 'lucide-react';
-import { uploadMediaOrDataUrl } from '../../services/mediaUploadService';
+import { uploadMediaOrDataUrl, uploadBannerImage, uploadBannerVideo } from '../../services/mediaUploadService';
 import { compressImageToDataUrl } from '../../utils/imageCompressor';
 import { GymPhoto, DEFAULT_GYM_PHOTOS } from '../client/GymPhotoGallery';
 
@@ -105,6 +105,9 @@ export const PromoBannerManager: React.FC = () => {
   const [active, setActive] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
+  const [isUploadingMedia, setIsUploadingMedia] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatusText, setUploadStatusText] = useState('');
   // Image focal alignment & fit mode
   const [imageFocalAlign, setImageFocalAlign] = useState<'object-top' | 'object-center' | 'object-bottom'>('object-center');
   const [imageFitMode, setImageFitMode] = useState<'object-cover' | 'object-contain'>('object-cover');
@@ -229,21 +232,48 @@ export const PromoBannerManager: React.FC = () => {
     if (!file) return;
 
     if (file.type.startsWith('image/')) {
-      setIsCompressing(true);
+      setIsUploadingMedia(true);
+      setUploadProgress(20);
+      setUploadStatusText('Compressing and preparing banner image...');
       showNotice('Compressing banner image for high-speed mobile delivery...');
       try {
-        const compressedDataUrl = await compressImageToDataUrl(file, 1200, 0.80);
         setMediaType('image');
-        setMediaUrl(compressedDataUrl);
-        showNotice('✓ Image compressed cleanly (max 1200px, <1MB safe) and attached!');
+        setUploadProgress(45);
+        setUploadStatusText('Uploading banner image to Storage...');
+        const uploadedUrl = await uploadBannerImage(file, file.name);
+        setMediaUrl(uploadedUrl);
+        setUploadProgress(100);
+        showNotice('✓ Banner image compressed and attached cleanly!');
       } catch (err: any) {
-        console.error('Image compression fallback:', err);
-        setSelectedMediaFile(file);
+        console.error('Image upload error:', err);
+        showNotice('Failed to upload image: ' + (err.message || 'Please check file format'));
       } finally {
-        setIsCompressing(false);
+        setIsUploadingMedia(false);
+        setUploadProgress(0);
+      }
+    } else if (file.type.startsWith('video/') || file.name.match(/\.(mp4|webm|mov|m4v)$/i)) {
+      setIsUploadingMedia(true);
+      setUploadProgress(0);
+      setMediaType('video');
+      setUploadStatusText('Uploading video clip to Firebase Storage (0%)...');
+      showNotice('Uploading promotional video to Firebase Storage...');
+      try {
+        const uploadedVideoUrl = await uploadBannerVideo(file, (percent) => {
+          setUploadProgress(percent);
+          setUploadStatusText(`Uploading video clip to Firebase Storage (${percent}%)...`);
+        });
+        setMediaUrl(uploadedVideoUrl);
+        setUploadProgress(100);
+        showNotice('✓ Promotional video uploaded to Firebase Storage and attached!');
+      } catch (err: any) {
+        console.error('Video upload error:', err);
+        showNotice(err.message || 'Video upload failed. You can paste a direct video URL.');
+      } finally {
+        setIsUploadingMedia(false);
+        setUploadProgress(0);
       }
     } else {
-      setSelectedMediaFile(file);
+      showNotice('Please select a valid image (.jpg, .png, .webp) or video (.mp4, .webm) file.');
     }
     e.target.value = '';
   };
@@ -300,14 +330,8 @@ export const PromoBannerManager: React.FC = () => {
 
       // Ensure image is clean, compressed, and strictly below Firestore's 1MB limit
       let safeMediaUrl = mediaUrl.trim();
-      if (mediaType === 'image') {
-        if (safeMediaUrl.startsWith('blob:') || (safeMediaUrl.startsWith('data:image') && safeMediaUrl.length > 750000)) {
-          safeMediaUrl = await compressImageToDataUrl(safeMediaUrl, 1200, 0.80);
-        }
-      }
-
-      if (safeMediaUrl.startsWith('data:')) {
-        safeMediaUrl = await uploadMediaOrDataUrl(safeMediaUrl, `${bannerId}.jpg`);
+      if (mediaType === 'image' && safeMediaUrl.startsWith('data:')) {
+        safeMediaUrl = await uploadBannerImage(safeMediaUrl, `${bannerId}.jpg`);
       }
 
       const payload: PromoBanner = {
@@ -322,10 +346,12 @@ export const PromoBannerManager: React.FC = () => {
         buttonText: buttonText.trim() || 'Explore Now',
         badgeColor,
         active,
+        isActive: active,
         order,
         imageFocalAlign: mediaType === 'image' ? imageFocalAlign : undefined,
         imageFitMode: mediaType === 'image' ? imageFitMode : undefined,
-        createdAt: editingBanner?.createdAt || new Date().toISOString()
+        createdAt: editingBanner?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       };
 
       // Save to primary promoBanners collection and mirror to banners
@@ -334,7 +360,7 @@ export const PromoBannerManager: React.FC = () => {
 
       setIsModalOpen(false);
       resetForm();
-      showNotice(editingBanner ? '✓ Banner updated & synced to Client Home!' : '✓ New banner published to Client Home!');
+      showNotice(editingBanner ? '✓ Banner updated & synced to Client Home in real time!' : '✓ New banner published to Client Home in real time!');
     } catch (err: any) {
       console.error('Failed to save banner:', err);
       showNotice(`Failed to save banner: ${err.message || 'Please check attachment size'}`);
@@ -354,7 +380,7 @@ export const PromoBannerManager: React.FC = () => {
 
       let safeUrl = photoUrl.trim();
       if (safeUrl.startsWith('data:')) {
-        safeUrl = await uploadMediaOrDataUrl(safeUrl, `${photoId}.jpg`);
+        safeUrl = await uploadBannerImage(safeUrl, `${photoId}.jpg`);
       }
 
       const payload: GymPhoto = {
@@ -425,10 +451,14 @@ export const PromoBannerManager: React.FC = () => {
 
   const handleToggleActive = async (banner: PromoBanner) => {
     try {
-      const nextState = banner.active === false ? true : false;
-      await updateDoc(doc(db, 'promoBanners', banner.id), {
-        active: nextState
-      });
+      const nextState = banner.active === false || banner.isActive === false ? true : false;
+      const updateData = {
+        active: nextState,
+        isActive: nextState,
+        updatedAt: new Date().toISOString()
+      };
+      await updateDoc(doc(db, 'promoBanners', banner.id), updateData);
+      await updateDoc(doc(db, 'banners', banner.id), updateData).catch(() => {});
       showNotice(nextState ? `"${banner.title}" is now Active on Client Home.` : `"${banner.title}" is now Hidden.`);
     } catch (err: any) {
       console.error('Failed to update status:', err);
@@ -1082,17 +1112,36 @@ export const PromoBannerManager: React.FC = () => {
                   />
 
                   {/* File upload trigger */}
-                  <label className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-xl text-xs font-bold text-white cursor-pointer flex items-center gap-1.5 shrink-0 shadow-sm transition-colors">
+                  <label className={`px-3.5 py-2 rounded-xl text-xs font-bold text-white cursor-pointer flex items-center gap-1.5 shrink-0 shadow-sm transition-all ${
+                    isUploadingMedia ? 'bg-indigo-400 cursor-wait' : 'bg-indigo-600 hover:bg-indigo-700'
+                  }`}>
                     <Upload className="w-3.5 h-3.5" />
-                    <span>Upload File</span>
+                    <span>{isUploadingMedia ? 'Uploading...' : `Upload ${mediaType === 'video' ? 'Video' : 'Image'}`}</span>
                     <input
                       type="file"
-                      accept={mediaType === 'video' ? 'video/mp4,video/webm' : 'image/*'}
+                      accept={mediaType === 'video' ? 'video/mp4,video/webm,video/quicktime,video/x-m4v' : 'image/*'}
                       onChange={handleFileUpload}
+                      disabled={isUploadingMedia}
                       className="hidden"
                     />
                   </label>
                 </div>
+
+                {/* Upload Progress Bar */}
+                {isUploadingMedia && (
+                  <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl space-y-1.5 animate-pulse">
+                    <div className="flex items-center justify-between text-xs font-bold text-indigo-900">
+                      <span>{uploadStatusText || (mediaType === 'video' ? 'Uploading video to Storage...' : 'Uploading image...')}</span>
+                      <span className="font-mono">{uploadProgress}%</span>
+                    </div>
+                    <div className="w-full h-2 bg-indigo-200 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-indigo-500 to-purple-600 transition-all duration-300"
+                        style={{ width: `${Math.max(uploadProgress, 8)}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
 
                 {/* Live Preview Box with Replace & Delete Photo Actions */}
                 {mediaUrl && (
@@ -1122,7 +1171,7 @@ export const PromoBannerManager: React.FC = () => {
                         <span>Replace Attached {mediaType === 'video' ? 'Video' : 'Photo'}</span>
                         <input
                           type="file"
-                          accept={mediaType === 'video' ? 'video/mp4,video/webm' : 'image/*'}
+                          accept={mediaType === 'video' ? 'video/mp4,video/webm,video/quicktime,video/x-m4v' : 'image/*'}
                           onChange={handleFileUpload}
                           className="hidden"
                         />

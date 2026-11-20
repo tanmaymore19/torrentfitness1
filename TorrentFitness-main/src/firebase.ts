@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer, Firestore } from 'firebase/firestore';
+import { getStorage, FirebaseStorage } from 'firebase/storage';
 import fallbackConfig from '../firebase-applet-config.json';
 import { withTimeout } from './services/cacheService';
 
@@ -83,6 +84,26 @@ try {
 }
 
 export const auth = authInstance;
+
+// Defensive Firebase Storage initialization
+let storageInstance: FirebaseStorage | null = null;
+try {
+  if (firebaseConfig.storageBucket) {
+    const bucketClean = firebaseConfig.storageBucket.replace(/^gs:\/\//, '');
+    storageInstance = getStorage(app, `gs://${bucketClean}`);
+  } else {
+    storageInstance = getStorage(app);
+  }
+} catch (err) {
+  try {
+    storageInstance = getStorage(app);
+  } catch (err2) {
+    console.warn('[Firebase] getStorage init note:', err2);
+    storageInstance = null;
+  }
+}
+
+export const storage = storageInstance;
 
 // Explicitly enforce browser local persistence across page reloads & browser restarts
 if (typeof window !== 'undefined' && auth) {
