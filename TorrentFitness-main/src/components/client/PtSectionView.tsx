@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { db } from '../../firebase';
-import { collection, query, where, getDocs, doc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, setDoc, updateDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { TrainerProfile, PtRequest, PtSchedule, DietPlan, PaymentGateway, PaymentTransaction } from '../../types';
 import { TrainerIdentityBadge } from '../common/Badge';
 import { RazorpayCheckoutModal } from '../common/RazorpayCheckoutModal';
@@ -91,6 +91,7 @@ export const PtSectionView: React.FC = () => {
   const [selectedTrainerId, setSelectedTrainerId] = useState<string>('');
   const [isPaying, setIsPaying] = useState(false);
   const [ptNotice, setPtNotice] = useState<string>('');
+  const [offlineToast, setOfflineToast] = useState<string | null>(null);
 
   // Razorpay & Receipt modals
   const [isRzpModalOpen, setIsRzpModalOpen] = useState(false);
@@ -172,9 +173,9 @@ export const PtSectionView: React.FC = () => {
       }
     );
 
-    // 2. Check client's PT requests
+    // 2. Check client's PT requests (checks pt_requests and mirrors to ptRequests)
     const reqQuery = query(
-      collection(db, 'ptRequests'),
+      collection(db, 'pt_requests'),
       where('clientId', '==', currentUser.uid)
     );
     const unsubReq = onSnapshot(
@@ -182,14 +183,25 @@ export const PtSectionView: React.FC = () => {
       (snap) => {
         if (!snap.empty) {
           const sorted = snap.docs.map((d) => ({ id: d.id, ...d.data() } as PtRequest));
-          sorted.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+          sorted.sort((a, b) => new Date((b as any).updatedAt || (b as any).requestedAt || 0).getTime() - new Date((a as any).updatedAt || (a as any).requestedAt || 0).getTime());
           setMyPtRequest(sorted[0]);
         } else {
-          setMyPtRequest(null);
+          // Fallback check on legacy ptRequests
+          getDocs(query(collection(db, 'ptRequests'), where('clientId', '==', currentUser.uid)))
+            .then((legacySnap) => {
+              if (!legacySnap.empty) {
+                const legacySorted = legacySnap.docs.map((d) => ({ id: d.id, ...d.data() } as PtRequest));
+                legacySorted.sort((a, b) => new Date((b as any).updatedAt || (b as any).requestedAt || 0).getTime() - new Date((a as any).updatedAt || (a as any).requestedAt || 0).getTime());
+                setMyPtRequest(legacySorted[0]);
+              } else {
+                setMyPtRequest(null);
+              }
+            })
+            .catch(() => setMyPtRequest(null));
         }
       },
       (error) => {
-        console.warn('ptRequests listener notice:', error);
+        console.warn('pt_requests listener notice:', error);
       }
     );
 
@@ -273,66 +285,111 @@ export const PtSectionView: React.FC = () => {
   // Dual Checkout 2: Pay via Offline Cash Desk
   const handleOfflineCashCheckout = async () => {
     if (!currentUser) return;
+
+    // 1. Validate that no duplicate PENDING PT request already exists for this client
+    if (
+      (myPtRequest &&
+        (myPtRequest.status === 'PENDING' ||
+          myPtRequest.status === 'PENDING_ADMIN_APPROVAL' ||
+          myPtRequest.status === 'PENDING_CASH_CONFIRMATION' ||
+          myPtRequest.status === 'pending' ||
+          myPtRequest.status === 'PAID_PENDING_TRAINER_ASSIGNMENT')) ||
+      clientProfile?.ptStatus === 'PENDING' ||
+      clientProfile?.ptStatus === 'pending'
+    ) {
+      setPtNotice('You already have a pending Personal Training request awaiting desk verification/Admin approval.');
+      setOfflineToast('You already have a pending request awaiting verification.');
+      setTimeout(() => setOfflineToast(null), 4000);
+      return;
+    }
+
     setIsPaying(true);
     setPtNotice('');
 
     try {
       const chosenTrainer = modalTrainer || selectedTrainer || trainers[0];
       const chosenPackage = selectedPackage;
+      const requestId = 'pt_req_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
 
-      const { transaction } = await submitOfflinePaymentRequest({
-        clientId: currentUser.uid,
-        clientName: clientProfile?.displayName || currentUser.displayName,
-        clientPhone: clientProfile?.phone || currentUser.phone,
-        clientEmail: clientProfile?.email || currentUser.email,
-        purpose: 'personal_training',
-        itemTitle: `${chosenPackage.name} with ${chosenTrainer?.displayName || 'Coach'}`,
-        planId: chosenPackage.id,
-        planName: `${chosenPackage.name} (${chosenTrainer?.displayName || 'Personal Trainer'})`,
-        durationMonths: chosenPackage.durationMonths,
-        originalPrice: chosenPackage.price,
-        finalAmount: chosenPackage.price,
-        ptIncluded: true,
-        ptTrainerId: chosenTrainer?.trainerId,
-        ptTrainerName: chosenTrainer?.displayName,
-        metadata: {
-          packageId: chosenPackage.id,
-          sessionsCount: chosenPackage.sessions,
-          trainerId: chosenTrainer?.trainerId,
-          trainerName: chosenTrainer?.displayName
-        }
-      });
+      // Attempt offline transaction logging
+      let transactionRef = '';
+      try {
+        const { transaction } = await submitOfflinePaymentRequest({
+          clientId: currentUser.uid,
+          clientName: (currentUser as any).fullName || currentUser.displayName || clientProfile?.displayName || 'Member',
+          clientPhone: currentUser.phone || (currentUser as any).mobileNumber || clientProfile?.phone || '',
+          clientEmail: clientProfile?.email || currentUser.email || '',
+          purpose: 'personal_training',
+          itemTitle: `${chosenPackage.name} with ${chosenTrainer?.displayName || 'Coach'}`,
+          planId: chosenPackage.id,
+          planName: `${chosenPackage.name} (${chosenTrainer?.displayName || 'Personal Trainer'})`,
+          durationMonths: chosenPackage.durationMonths || 1,
+          originalPrice: chosenPackage.price,
+          finalAmount: chosenPackage.price,
+          ptIncluded: true,
+          ptTrainerId: chosenTrainer?.trainerId || (chosenTrainer as any)?.id || '',
+          ptTrainerName: chosenTrainer?.displayName || (chosenTrainer as any)?.name || 'Coach',
+          metadata: {
+            packageId: chosenPackage.id,
+            sessionsCount: chosenPackage.sessions,
+            trainerId: chosenTrainer?.trainerId || (chosenTrainer as any)?.id || '',
+            trainerName: chosenTrainer?.displayName || (chosenTrainer as any)?.name || 'Coach'
+          }
+        });
+        transactionRef = transaction.id || transaction.referenceId || '';
+      } catch (txnErr) {
+        console.warn('submitOfflinePaymentRequest non-blocking notice:', txnErr);
+      }
 
-      const reqId = myPtRequest?.id || `ptreq_${currentUser.uid}`;
-      const newReqData: PtRequest = {
-        id: reqId,
+      // 2. Create clean request document in Firestore (pt_requests/{requestId})
+      const nowIso = new Date().toISOString();
+      const ptReqPayload = {
+        id: requestId,
         clientId: currentUser.uid,
-        clientName: clientProfile?.displayName || currentUser.displayName,
-        clientPhotoUrl: currentUser.photoUrl || clientProfile?.photoUrl || '',
-        trainerId: chosenTrainer?.trainerId || '',
-        trainerName: chosenTrainer?.displayName || 'Coach',
-        fee: chosenPackage.price,
-        status: 'PENDING_CASH_CONFIRMATION',
-        paymentMode: 'cash',
+        clientName: (currentUser as any).fullName || currentUser.displayName || clientProfile?.displayName || 'Member',
+        clientUsername: (currentUser as any).username || clientProfile?.username || '',
+        clientPhone: currentUser.phone || (currentUser as any).mobileNumber || clientProfile?.phone || '',
+        requestedTrainerId: chosenTrainer?.trainerId || (chosenTrainer as any)?.id || '',
+        requestedTrainerName: (chosenTrainer as any)?.fullName || chosenTrainer?.displayName || (chosenTrainer as any)?.name || 'Personal Trainer',
+        planName: chosenPackage.name,
+        durationMonths: chosenPackage.durationMonths || 1,
+        amount: Number(chosenPackage.price) || 0,
+        paymentMode: 'OFFLINE_CASH',
+        paymentStatus: 'PENDING_DESK_VERIFICATION',
+        status: 'PENDING_ADMIN_APPROVAL',
+        rejectionSeenByClient: false,
+        createdAt: serverTimestamp(),
+        // Backwards compatibility fields for legacy views
+        trainerId: chosenTrainer?.trainerId || (chosenTrainer as any)?.id || '',
+        trainerName: (chosenTrainer as any)?.fullName || chosenTrainer?.displayName || (chosenTrainer as any)?.name || 'Personal Trainer',
+        fee: Number(chosenPackage.price) || 0,
         paidStatus: 'pending',
-        transactionId: transaction.id || transaction.referenceId,
-        requestedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        transactionId: transactionRef,
+        clientPhotoUrl: currentUser.photoUrl || clientProfile?.photoUrl || '',
+        requestedAt: nowIso,
+        updatedAt: nowIso
       };
 
-      await setDoc(doc(db, 'ptRequests', reqId), newReqData, { merge: true });
+      // Write to pt_requests AND mirror to ptRequests for backwards compatibility
+      await setDoc(doc(db, 'pt_requests', requestId), ptReqPayload, { merge: true });
+      await setDoc(doc(db, 'ptRequests', requestId), ptReqPayload, { merge: true });
+
+      // 3. Update clientProfiles/{currentUser.uid} ({ merge: true }) with ptStatus: 'PENDING' and pendingPtRequestId: requestId
+      await setDoc(doc(db, 'clientProfiles', currentUser.uid), {
+        ptStatus: 'PENDING',
+        pendingPtRequestId: requestId,
+        updatedAt: nowIso
+      }, { merge: true });
+
       try {
-        await setDoc(doc(db, 'pt_requests', reqId), newReqData, { merge: true });
+        await updateClientProfile({ ptStatus: 'PENDING' as any });
       } catch {}
-      await updateClientProfile({ ptStatus: 'pending' });
 
+      // 4. Show an immediate confirmation toast ("Offline PT request sent to Gym Desk! Waiting for Admin approval.") and close the modal cleanly.
       setIsPtPlansModalOpen(false);
-
-      setPtNotice(
-        `Offline Cash Request (${transaction.referenceId}) submitted! Deposit ₹${chosenPackage.price.toLocaleString(
-          'en-IN'
-        )} at the gym desk. Once admin confirms offline cash receipt, your PT plan and trainer will become active!`
-      );
+      setOfflineToast("Offline PT request sent to Gym Desk! Waiting for Admin approval.");
+      setPtNotice("Offline PT request sent to Gym Desk! Waiting for Admin approval.");
+      setTimeout(() => setOfflineToast(null), 6000);
     } catch (err: any) {
       setPtNotice('Error submitting offline PT cash request: ' + err.message);
     } finally {
@@ -418,6 +475,19 @@ export const PtSectionView: React.FC = () => {
           Tailored nutrition plans, dedicated workout assignment and reserved regular gym timing.
         </p>
       </div>
+
+      {/* Offline PT Request Submitted Toast */}
+      {offlineToast && (
+        <div className="p-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-2xl shadow-lg border border-white/20 flex items-center gap-3 animate-fade-in">
+          <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+            <CheckCircle className="w-4 h-4 text-white" />
+          </div>
+          <div className="text-xs">
+            <span className="font-black block">PT Request Sent!</span>
+            <span className="text-white/90">{offlineToast}</span>
+          </div>
+        </div>
+      )}
 
       {/* Incoming Live Chat Notification Toast */}
       {incomingChatToast && (
@@ -694,7 +764,10 @@ export const PtSectionView: React.FC = () => {
           {myPtRequest &&
           (myPtRequest.status === 'PAID_PENDING_TRAINER_ASSIGNMENT' ||
             (myPtRequest.status as string) === 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT' ||
-            myPtRequest.status === 'PENDING_CASH_CONFIRMATION') ? (
+            myPtRequest.status === 'PENDING_CASH_CONFIRMATION' ||
+            myPtRequest.status === 'PENDING_ADMIN_APPROVAL' ||
+            myPtRequest.status === 'PENDING' ||
+            myPtRequest.status === 'pending') ? (
             /* Existing Request Status Tracker */
             <div className="clay-surface rounded-3xl p-5 border border-white/80 shadow-xl space-y-3">
               <h3 className="text-sm font-bold text-slate-800 tracking-tight">Current PT Request Status</h3>
@@ -702,7 +775,7 @@ export const PtSectionView: React.FC = () => {
               <div className="p-4 bg-[#E2EAF3] border border-cyan-500/30 rounded-2xl space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-slate-600">Trainer Requested:</span>
-                  <span className="text-xs font-bold text-slate-800">{myPtRequest.trainerName}</span>
+                  <span className="text-xs font-bold text-slate-800">{(myPtRequest as any).requestedTrainerName || myPtRequest.trainerName}</span>
                 </div>
 
                 <div className="flex items-center justify-between">
@@ -718,7 +791,7 @@ export const PtSectionView: React.FC = () => {
                     {myPtRequest.status === 'PAID_PENDING_TRAINER_ASSIGNMENT' ||
                     (myPtRequest.status as string) === 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT'
                       ? 'Paid — Awaiting Admin Coach Assignment'
-                      : 'Pending Cash Desk Verification'}
+                      : 'Pending Desk Verification & Admin Approval'}
                   </span>
                 </div>
 
@@ -730,19 +803,22 @@ export const PtSectionView: React.FC = () => {
                       <span>Payment Verified Online (PAID_PENDING_TRAINER_ASSIGNMENT)</span>
                     </div>
                     <p className="text-[11px] text-teal-700 leading-relaxed">
-                      Your payment of ₹{myPtRequest.fee.toLocaleString('en-IN')} has been verified. Master Admin will finalize your trainer allocation and assign <strong>{myPtRequest.trainerName}</strong> shortly.
+                      Your payment of ₹{((myPtRequest as any).amount || myPtRequest.fee || 0).toLocaleString('en-IN')} has been verified. Master Admin will finalize your trainer allocation and assign <strong>{(myPtRequest as any).requestedTrainerName || myPtRequest.trainerName}</strong> shortly.
                     </p>
                   </div>
                 )}
 
-                {myPtRequest.status === 'PENDING_CASH_CONFIRMATION' && (
+                {(myPtRequest.status === 'PENDING_CASH_CONFIRMATION' ||
+                  myPtRequest.status === 'PENDING_ADMIN_APPROVAL' ||
+                  myPtRequest.status === 'PENDING' ||
+                  myPtRequest.status === 'pending') && (
                   <div className="p-3 bg-orange-50 border border-orange-200 rounded-xl space-y-1">
                     <div className="flex items-center gap-1.5 text-xs font-bold text-orange-800">
                       <Clock className="w-4 h-4 text-orange-600" />
                       <span>Cash Request Pending Desk Verification</span>
                     </div>
                     <p className="text-[11px] text-orange-700 leading-relaxed">
-                      Please deposit ₹{myPtRequest.fee.toLocaleString('en-IN')} at the gym front desk. Once reception verifies the cash receipt, Admin will activate your PT and confirm trainer allocation.
+                      Please deposit ₹{((myPtRequest as any).amount || myPtRequest.fee || 0).toLocaleString('en-IN')} at the gym front desk. Once reception verifies the cash receipt, Admin will activate your PT and confirm trainer allocation.
                     </p>
                   </div>
                 )}

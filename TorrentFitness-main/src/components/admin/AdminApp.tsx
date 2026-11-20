@@ -399,18 +399,46 @@ export const AdminApp: React.FC = () => {
     );
 
     let initialPtLoadDone = false;
-    const unsubPt = onSnapshot(
-      query(collection(db, 'ptRequests'), limit(50)),
+    const ptReqMap = new Map<string, PtRequest>();
+    const mergeAndSetPtRequests = () => {
+      const merged = Array.from(ptReqMap.values());
+      merged.sort((a, b) => {
+        const tA = new Date((a as any).updatedAt || (a as any).requestedAt || 0).getTime();
+        const tB = new Date((b as any).updatedAt || (b as any).requestedAt || 0).getTime();
+        return tB - tA;
+      });
+      setPtRequests(merged);
+      setCachedData('admin_pt_requests', merged);
+    };
+
+    const unsubPtRequests = onSnapshot(
+      query(collection(db, 'pt_requests'), limit(60)),
       (s) => {
-        const list = s.docs.map((d) => ({ id: d.id, ...d.data() } as PtRequest));
-        setPtRequests(list);
-        setCachedData('admin_pt_requests', list);
+        s.docs.forEach((d) => {
+          const data = d.data() as any;
+          ptReqMap.set(d.id, {
+            id: d.id,
+            ...data,
+            trainerId: data.trainerId || data.requestedTrainerId || '',
+            trainerName: data.trainerName || data.requestedTrainerName || 'Trainer',
+            fee: data.fee || data.amount || 0,
+            status: data.status || 'PENDING_ADMIN_APPROVAL'
+          });
+        });
+        mergeAndSetPtRequests();
 
         if (initialPtLoadDone) {
           s.docChanges().forEach((change) => {
             if (change.type === 'added') {
-              const req = change.doc.data() as PtRequest;
-              if (req.status === 'pending' || req.status === 'needs_action' || req.paidStatus === 'paid') {
+              const req = change.doc.data() as any;
+              if (
+                req.status === 'pending' ||
+                req.status === 'PENDING' ||
+                req.status === 'PENDING_ADMIN_APPROVAL' ||
+                req.status === 'PENDING_CASH_CONFIRMATION' ||
+                req.status === 'needs_action' ||
+                req.paidStatus === 'paid'
+              ) {
                 playChatNotificationChime();
                 showAdminNotice(
                   `🔔 New PT Booking Request received from ${req.clientName || 'Client'} (${req.planName || 'Personal Training'})!`,
@@ -422,13 +450,35 @@ export const AdminApp: React.FC = () => {
         }
         initialPtLoadDone = true;
       },
-      (err) => console.warn('Admin ptRequests listener note:', err)
+      (err) => console.warn('Admin pt_requests listener note:', err)
+    );
+
+    const unsubPtLegacy = onSnapshot(
+      query(collection(db, 'ptRequests'), limit(60)),
+      (s) => {
+        s.docs.forEach((d) => {
+          if (!ptReqMap.has(d.id)) {
+            const data = d.data() as any;
+            ptReqMap.set(d.id, {
+              id: d.id,
+              ...data,
+              trainerId: data.trainerId || data.requestedTrainerId || '',
+              trainerName: data.trainerName || data.requestedTrainerName || 'Trainer',
+              fee: data.fee || data.amount || 0,
+              status: data.status || 'pending'
+            });
+          }
+        });
+        mergeAndSetPtRequests();
+      },
+      (err) => console.warn('Admin ptRequests legacy listener note:', err)
     );
 
     return () => {
       unsubClients();
       unsubPayTx();
-      unsubPt();
+      unsubPtRequests();
+      unsubPtLegacy();
     };
   }, []);
 
@@ -731,13 +781,22 @@ export const AdminApp: React.FC = () => {
           (err) => console.warn('Admin trainers listener note:', err)
         ),
         onSnapshot(
-          query(collection(db, 'ptRequests'), limit(30)),
+          query(collection(db, 'pt_requests'), limit(50)),
           (s) => {
-            const list = s.docs.map((d) => ({ id: d.id, ...d.data() } as PtRequest));
+            const list = s.docs.map((d) => {
+              const data = d.data() as any;
+              return {
+                id: d.id,
+                ...data,
+                trainerId: data.trainerId || data.requestedTrainerId || '',
+                trainerName: data.trainerName || data.requestedTrainerName || 'Trainer',
+                fee: data.fee || data.amount || 0
+              } as PtRequest;
+            });
             setPtRequests(list);
             setCachedData('admin_pt_requests', list);
           },
-          (err) => console.warn('Admin ptRequests listener note:', err)
+          (err) => console.warn('Admin pt_requests listener note:', err)
         ),
         onSnapshot(
           query(collection(db, 'users'), limit(60)),
@@ -1119,19 +1178,21 @@ export const AdminApp: React.FC = () => {
   const handleUpdatePtRequestStatus = async (req: PtRequest, status: 'accepted' | 'rejected') => {
     try {
       const nowIso = new Date().toISOString();
+      const trId = req.trainerId || (req as any).requestedTrainerId || '';
+      const trName = (req as any).requestedTrainerName || req.trainerName || 'Trainer';
+
       if (status === 'accepted') {
         const batch = writeBatch(db);
         batch.set(doc(db, 'ptRequests', req.id), { status: 'accepted', updatedAt: nowIso }, { merge: true });
-        try {
-          batch.set(doc(db, 'pt_requests', req.id), { status: 'accepted', updatedAt: nowIso }, { merge: true });
-        } catch {}
+        batch.set(doc(db, 'pt_requests', req.id), { status: 'accepted', updatedAt: nowIso }, { merge: true });
 
         batch.set(
           doc(db, 'clientProfiles', req.clientId),
           {
-            assignedTrainerId: req.trainerId,
-            assignedTrainerName: req.trainerName,
+            assignedTrainerId: trId,
+            assignedTrainerName: trName,
             ptStatus: 'active',
+            pendingPtRequestId: null,
             updatedAt: nowIso
           },
           { merge: true }
@@ -1140,17 +1201,17 @@ export const AdminApp: React.FC = () => {
         batch.set(
           doc(db, 'members', req.clientId),
           {
-            assignedTrainerId: req.trainerId,
-            assignedTrainerName: req.trainerName,
+            assignedTrainerId: trId,
+            assignedTrainerName: trName,
             ptStatus: 'active',
             updatedAt: nowIso
           },
           { merge: true }
         );
 
-        if (req.trainerId) {
+        if (trId) {
           batch.set(
-            doc(db, 'trainers', req.trainerId),
+            doc(db, 'trainers', trId),
             {
               assignedClientIds: arrayUnion(req.clientId),
               updatedAt: nowIso
@@ -1158,7 +1219,7 @@ export const AdminApp: React.FC = () => {
             { merge: true }
           );
           batch.set(
-            doc(db, 'trainerProfiles', req.trainerId),
+            doc(db, 'trainerProfiles', trId),
             {
               assignedClientIds: arrayUnion(req.clientId),
               updatedAt: nowIso
@@ -1172,15 +1233,16 @@ export const AdminApp: React.FC = () => {
         setClients((prev) =>
           prev.map((c) =>
             c.userId === req.clientId
-              ? { ...c, assignedTrainerId: req.trainerId, assignedTrainerName: req.trainerName, ptStatus: 'active' }
+              ? { ...c, assignedTrainerId: trId, assignedTrainerName: trName, ptStatus: 'active' }
               : c
           )
         );
       } else {
-        await updateDoc(doc(db, 'ptRequests', req.id), { status, updatedAt: nowIso });
-        try {
-          await updateDoc(doc(db, 'pt_requests', req.id), { status, updatedAt: nowIso });
-        } catch {}
+        const batch = writeBatch(db);
+        batch.set(doc(db, 'ptRequests', req.id), { status: 'rejected', updatedAt: nowIso }, { merge: true });
+        batch.set(doc(db, 'pt_requests', req.id), { status: 'rejected', updatedAt: nowIso }, { merge: true });
+        batch.set(doc(db, 'clientProfiles', req.clientId), { ptStatus: 'none', pendingPtRequestId: null, updatedAt: nowIso }, { merge: true });
+        await batch.commit();
       }
       showAdminNotice(`PT request ${status.toUpperCase()}!`, 'success');
     } catch (err: any) {
@@ -1298,9 +1360,11 @@ export const AdminApp: React.FC = () => {
     setCashVerifying(true);
     try {
       const req = cashVerifyModalReq;
-      const recAmount = Number(cashVerifyAmount) || req.fee || 3500;
+      const recAmount = Number(cashVerifyAmount) || req.fee || (req as any).amount || 3500;
       const recDate = cashVerifyDate || new Date().toISOString().split('T')[0];
       const nowIso = new Date().toISOString();
+      const trId = req.trainerId || (req as any).requestedTrainerId || '';
+      const trName = (req as any).requestedTrainerName || req.trainerName || 'Trainer';
 
       const batch = writeBatch(db);
 
@@ -1339,9 +1403,10 @@ export const AdminApp: React.FC = () => {
       batch.set(
         doc(db, 'clientProfiles', req.clientId),
         {
-          assignedTrainerId: req.trainerId,
-          assignedTrainerName: req.trainerName,
+          assignedTrainerId: trId,
+          assignedTrainerName: trName,
           ptStatus: 'active',
+          pendingPtRequestId: null,
           ptStartDate: recDate,
           updatedAt: nowIso
         },
@@ -1351,17 +1416,17 @@ export const AdminApp: React.FC = () => {
       batch.set(
         doc(db, 'members', req.clientId),
         {
-          assignedTrainerId: req.trainerId,
-          assignedTrainerName: req.trainerName,
+          assignedTrainerId: trId,
+          assignedTrainerName: trName,
           ptStatus: 'active',
           updatedAt: nowIso
         },
         { merge: true }
       );
 
-      if (req.trainerId) {
+      if (trId) {
         batch.set(
-          doc(db, 'trainers', req.trainerId),
+          doc(db, 'trainers', trId),
           {
             assignedClientIds: arrayUnion(req.clientId),
             updatedAt: nowIso
@@ -1369,7 +1434,7 @@ export const AdminApp: React.FC = () => {
           { merge: true }
         );
         batch.set(
-          doc(db, 'trainerProfiles', req.trainerId),
+          doc(db, 'trainerProfiles', trId),
           {
             assignedClientIds: arrayUnion(req.clientId),
             updatedAt: nowIso
@@ -3689,7 +3754,13 @@ export const AdminApp: React.FC = () => {
               r => r.status === 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT'
             );
             const pendingCashRequests = ptRequests.filter(
-              r => r.status === 'PENDING_CASH_CONFIRMATION'
+              r =>
+                r.status === 'PENDING_CASH_CONFIRMATION' ||
+                r.status === 'PENDING_ADMIN_APPROVAL' ||
+                r.status === 'PENDING' ||
+                r.status === 'pending' ||
+                r.paymentMode === 'OFFLINE_CASH' ||
+                r.paymentMode === 'cash'
             );
             const activePtClients = clients.filter(
               c => c.ptStatus === 'active' || c.assignedTrainerName
@@ -3700,6 +3771,8 @@ export const AdminApp: React.FC = () => {
                 return (
                   r.status === 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT' ||
                   r.status === 'PENDING_CASH_CONFIRMATION' ||
+                  r.status === 'PENDING_ADMIN_APPROVAL' ||
+                  r.status === 'PENDING' ||
                   r.status === 'pending'
                 );
               }
@@ -3707,10 +3780,17 @@ export const AdminApp: React.FC = () => {
                 return r.status === 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT' || (r.paymentMode === 'online' && r.paidStatus === 'paid');
               }
               if (ptFilterStatus === 'cash_pending') {
-                return r.status === 'PENDING_CASH_CONFIRMATION' || r.paymentMode === 'cash';
+                return (
+                  r.status === 'PENDING_CASH_CONFIRMATION' ||
+                  r.status === 'PENDING_ADMIN_APPROVAL' ||
+                  r.status === 'PENDING' ||
+                  r.status === 'pending' ||
+                  r.paymentMode === 'cash' ||
+                  r.paymentMode === 'OFFLINE_CASH'
+                );
               }
               if (ptFilterStatus === 'active') {
-                return r.status === 'active';
+                return r.status === 'active' || r.status === 'accepted';
               }
               return true;
             });
@@ -3941,9 +4021,16 @@ export const AdminApp: React.FC = () => {
                         <tbody className="divide-y divide-slate-100">
                           {filteredRequests.map((r) => {
                             const isOnlinePaidNeedsAssign = r.status === 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT';
-                            const isCashPending = r.status === 'PENDING_CASH_CONFIRMATION';
-                            const isPending = r.status === 'pending';
-                            const isActive = r.status === 'active';
+                            const isCashPending =
+                              r.status === 'PENDING_CASH_CONFIRMATION' ||
+                              r.status === 'PENDING_DESK_VERIFICATION' ||
+                              r.paymentMode === 'OFFLINE_CASH' ||
+                              r.paymentMode === 'cash';
+                            const isPending =
+                              r.status === 'pending' ||
+                              r.status === 'PENDING' ||
+                              r.status === 'PENDING_ADMIN_APPROVAL';
+                            const isActive = r.status === 'active' || r.status === 'accepted';
 
                             return (
                               <tr key={r.id} className="hover:bg-slate-50/80 transition-colors">
@@ -3959,22 +4046,22 @@ export const AdminApp: React.FC = () => {
                                     />
                                     <div>
                                       <strong className="text-slate-900 block font-bold">{r.clientName || 'Client'}</strong>
-                                      <span className="text-[10px] text-slate-500 font-mono">@{r.clientId}</span>
+                                      <span className="text-[10px] text-slate-500 font-mono">@{(r as any).clientUsername || r.clientId}</span>
                                     </div>
                                   </div>
                                 </td>
                                 <td className="py-3 px-3">
-                                  <strong className="text-indigo-700 font-black">{r.trainerName || 'Coach'}</strong>
+                                  <strong className="text-indigo-700 font-black">{(r as any).requestedTrainerName || r.trainerName || 'Coach'}</strong>
                                 </td>
                                 <td className="py-3 px-3 font-mono font-bold text-slate-800">
-                                  ₹{(r.fee || 3500).toLocaleString('en-IN')}
+                                  ₹{(r.fee || (r as any).amount || 0).toLocaleString('en-IN')}
                                 </td>
                                 <td className="py-3 px-3">
                                   {r.paymentMode === 'online' ? (
                                     <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200">
                                       Online Gateway
                                     </span>
-                                  ) : r.paymentMode === 'cash' ? (
+                                  ) : r.paymentMode === 'cash' || r.paymentMode === 'OFFLINE_CASH' ? (
                                     <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
                                       Cash / Desk
                                     </span>

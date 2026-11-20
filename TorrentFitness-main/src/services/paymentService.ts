@@ -798,27 +798,39 @@ export async function deletePaymentGateway(gatewayId: string): Promise<void> {
     await deleteDoc(canonicalDocRef);
   }
 
-  // If this was the active gateway, also clear gym_config/payment_gateways
-  if (wasActive) {
-    await setDoc(doc(db, 'gym_config', 'payment_gateways'), {
-      isEnabled: false,
-      isDefault: false,
-      keyId: '',
-      keySecret: '',
-      appKeyId: '',
-      appKeySecret: '',
-      updatedAt: new Date().toISOString()
-    }, { merge: true }).catch(() => {});
+  // Also delete and purge settings/payment_gateway
+  await deleteDoc(doc(db, 'settings', 'payment_gateway')).catch(() => {});
+  await setDoc(doc(db, 'settings', 'payment_gateway'), {
+    keyId: null,
+    encryptedKey: null,
+    keySecret: null,
+    appKeyId: null,
+    appKeySecret: null,
+    isConfigured: false,
+    isEnabled: false,
+    isDefault: false,
+    updatedAt: new Date().toISOString()
+  }, { merge: true }).catch(() => {});
 
-    // Try to find another configured gateway to promote as active
-    const allSnap = await getDocs(collection(db, 'paymentGateways'));
-    const remainingConfigured = allSnap.docs
-      .map(d => ({ id: d.id, ...d.data() } as PaymentGateway))
-      .filter(g => g.id !== gatewayId && isGatewayConfigured(g));
+  // Clear gym_config/payment_gateways
+  await setDoc(doc(db, 'gym_config', 'payment_gateways'), {
+    isEnabled: false,
+    isDefault: false,
+    keyId: '',
+    keySecret: '',
+    appKeyId: '',
+    appKeySecret: '',
+    updatedAt: new Date().toISOString()
+  }, { merge: true }).catch(() => {});
 
-    if (remainingConfigured.length > 0) {
-      await activateSingleGateway(remainingConfigured[0].id);
-    }
+  // Try to find another configured gateway to promote as active
+  const allSnap = await getDocs(collection(db, 'paymentGateways'));
+  const remainingConfigured = allSnap.docs
+    .map(d => ({ id: d.id, ...d.data() } as PaymentGateway))
+    .filter(g => g.id !== gatewayId && isGatewayConfigured(g));
+
+  if (remainingConfigured.length > 0) {
+    await activateSingleGateway(remainingConfigured[0].id);
   }
 }
 

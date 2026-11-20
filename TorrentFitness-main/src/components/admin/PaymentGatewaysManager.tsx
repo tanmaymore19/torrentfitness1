@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, limit } from 'firebase/firestore';
+import { collection, onSnapshot, query, limit, doc, deleteDoc, setDoc } from 'firebase/firestore';
 import { PaymentGateway, PaymentProvider, PaymentTransaction } from '../../types';
 import {
   getPaymentGateways,
@@ -188,27 +188,11 @@ export const PaymentGatewaysManager: React.FC = () => {
   };
 
   const handleRequestEdit = (gw: PaymentGateway) => {
-    if (isReauthenticated()) {
-      handleOpenEditModal(gw);
-    } else {
-      setPendingSecurityAction({ type: 'edit', gateway: gw });
-      setSecurityPasswordInput('');
-      setSecurityError(null);
-      setShowSecurityPassword(false);
-      setIsSecurityModalOpen(true);
-    }
+    handleOpenEditModal(gw);
   };
 
   const handleRequestDelete = (gw: PaymentGateway) => {
-    if (isReauthenticated()) {
-      setGatewayToDelete(gw);
-    } else {
-      setPendingSecurityAction({ type: 'delete', gateway: gw });
-      setSecurityPasswordInput('');
-      setSecurityError(null);
-      setShowSecurityPassword(false);
-      setIsSecurityModalOpen(true);
-    }
+    setGatewayToDelete(gw);
   };
 
   const handleToggleRevealSecrets = () => {
@@ -536,7 +520,7 @@ export const PaymentGatewaysManager: React.FC = () => {
       setIsModalOpen(false);
       setBannerMsg({
         type: 'success',
-        text: `Gateway "${formName}" connected & saved! Live checkout routing updated.`
+        text: 'New payment gateway key encrypted and saved!'
       });
     } catch (err: any) {
       setBannerMsg({ type: 'error', text: 'Error saving gateway: ' + err.message });
@@ -547,13 +531,42 @@ export const PaymentGatewaysManager: React.FC = () => {
     try {
       // Immediately remove from UI state so keys vanish before async re-fetch
       setGateways(prev => prev.filter(g => g.id !== gw.id));
+
+      // Reset local input states so form clears cleanly
+      setFormKeyId('');
+      setFormKeySecret('');
+      setFormAppKeyId('');
+      setFormAppKeySecret('');
+      setFormAppId('');
+      setFormSecretKey('');
+      setFormMerchantId('');
+      setFormSaltKey('');
+      setFormClientId('');
+      setFormGpayApiKey('');
+      setFormPaytmMerchantKey('');
+      setFormPayuMerchantKey('');
+      setFormPayuMerchantSalt('');
+
+      await deleteDoc(doc(db, 'settings', 'payment_gateway')).catch(() => {});
+      await setDoc(doc(db, 'settings', 'payment_gateway'), {
+        keyId: null,
+        encryptedKey: null,
+        keySecret: null,
+        appKeyId: null,
+        appKeySecret: null,
+        isConfigured: false,
+        isEnabled: false,
+        isDefault: false,
+        updatedAt: new Date().toISOString()
+      }, { merge: true }).catch(() => {});
+
       await deletePaymentGateway(gw.id);
       // Re-fetch to get fresh blank template for this gateway slot
       const fresh = await getPaymentGateways();
       setGateways(fresh);
       setBannerMsg({
         type: 'success',
-        text: `Gateway "${gw.name}" disconnected. All credentials wiped from backend and UI.`
+        text: `Gateway "${gw.name}" credentials deleted & removed!`
       });
     } catch (err: any) {
       setBannerMsg({ type: 'error', text: 'Error disconnecting gateway: ' + err.message });
@@ -965,20 +978,20 @@ export const PaymentGatewaysManager: React.FC = () => {
                         type="button"
                         onClick={() => handleRequestEdit(gw)}
                         className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl transition-colors shadow-2xs flex items-center gap-1 text-xs font-bold px-2.5 cursor-pointer"
-                        title="Configure Credentials (Security Protected)"
+                        title="Replace / Edit Key"
                       >
                         <Edit2 className="w-3.5 h-3.5" />
-                        <span>Edit / Config</span>
+                        <span>Replace / Edit Key</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => handleRequestDelete(gw)}
                         className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl transition-colors shadow-2xs flex items-center gap-1 text-xs font-bold px-2.5 cursor-pointer"
-                        title="Disconnect Gateway & Remove Credentials (Security Protected)"
+                        title="Delete / Remove Key"
                       >
-                        <Unlink className="w-3.5 h-3.5" />
-                        <span>Disconnect</span>
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete / Remove Key</span>
                       </button>
                     </div>
                   </div>
@@ -1624,7 +1637,7 @@ export const PaymentGatewaysManager: React.FC = () => {
                   className="px-5 py-2 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white rounded-xl font-black flex items-center gap-1.5 shadow-sm cursor-pointer"
                 >
                   <Check className="w-4 h-4" />
-                  <span>{editingGateway ? 'Save Changes' : 'Save & Connect Gateway'}</span>
+                  <span>Save &amp; Encrypt Key</span>
                 </button>
               </div>
             </form>

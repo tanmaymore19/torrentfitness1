@@ -48,10 +48,10 @@ rules_version = '2';
 // Fields:
 //   - Audit trail and tombstone records for permanently deleted users
 //
-// Collection: gym_settings / gymSettings
+// Collection: gym_settings / gymSettings / settings
 // Document ID: {settingsId}
 // Fields:
-//   - Gym operating configuration, categories, and business settings
+//   - Gym operating configuration, categories, payment gateways, and business settings
 //
 // Collection: gym_config / gymQrConfig
 // Document ID: {configId}
@@ -140,6 +140,10 @@ service cloud.firestore {
     }
 
     match /gymSettings/{settingsId} {
+      allow read, write: if true;
+    }
+
+    match /settings/{settingsId} {
       allow read, write: if true;
     }
 
