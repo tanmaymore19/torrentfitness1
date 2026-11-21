@@ -487,7 +487,9 @@ export const AdminApp: React.FC = () => {
     const unsubClients = onSnapshot(
       query(collection(db, 'clientProfiles'), limit(60)),
       (s) => {
-        const list = s.docs.map((d) => ({ userId: d.id, ...d.data() } as ClientProfile));
+        const list = s.docs
+          .map((d) => ({ userId: d.id, ...d.data() } as ClientProfile))
+          .filter((c: any) => c.isDeletedByAdmin !== true && c.status !== 'archived');
         setClients(list);
         setCachedData('admin_clients', list);
       },
@@ -880,7 +882,7 @@ export const AdminApp: React.FC = () => {
               };
 
               return normalized;
-            });
+            }).filter((t: any) => t.isDeletedByAdmin !== true && t.status !== 'archived');
             setTrainers(loaded);
             setCachedData('admin_trainers', loaded);
           },
@@ -996,15 +998,23 @@ export const AdminApp: React.FC = () => {
       const uid = selectedUserForPasswordChange.uid;
       const cleanPass = newPasswordInput.trim();
 
-      await setDoc(doc(db, 'users', uid), { password: cleanPass }, { merge: true });
+      const pwUpdate = {
+        password: cleanPass,
+        plainPassword: cleanPass,
+        pass: cleanPass,
+        updatedAt: new Date().toISOString()
+      };
+
+      await setDoc(doc(db, 'users', uid), pwUpdate, { merge: true });
+      await setDoc(doc(db, 'members', uid), pwUpdate, { merge: true }).catch(() => {});
       if (selectedUserForPasswordChange.role === 'client') {
         try {
-          await setDoc(doc(db, 'clientProfiles', uid), { password: cleanPass }, { merge: true });
+          await setDoc(doc(db, 'clientProfiles', uid), pwUpdate, { merge: true });
         } catch (e) {}
       }
       if (selectedUserForPasswordChange.role === 'trainer') {
         try {
-          await setDoc(doc(db, 'trainerProfiles', uid), { password: cleanPass }, { merge: true });
+          await setDoc(doc(db, 'trainerProfiles', uid), pwUpdate, { merge: true });
         } catch (e) {}
       }
 

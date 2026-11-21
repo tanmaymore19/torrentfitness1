@@ -70,9 +70,15 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState<boolean>(false);
   const [checkoutStep, setCheckoutStep] = useState<1 | 2>(1);
 
+  // Online Gateway Modal & Post-Payment Success Confirmation Modal
+  const [isOnlineModalOpen, setIsOnlineModalOpen] = useState<boolean>(false);
+  const [activatedSuccessTxn, setActivatedSuccessTxn] = useState<PaymentTransaction | null>(null);
+  const [isDownloadingSuccessPdf, setIsDownloadingSuccessPdf] = useState<boolean>(false);
+
   // Lock body scroll and notify parent when checkout modal is active to prevent page and bottom dock scrolling
   useEffect(() => {
-    if (isCheckoutModalOpen) {
+    const isModalActive = isCheckoutModalOpen || isOnlineModalOpen;
+    if (isModalActive) {
       document.body.style.overflow = 'hidden';
       document.body.classList.add('checkout-modal-open');
       onCheckoutModalToggle?.(true);
@@ -86,7 +92,7 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
       document.body.classList.remove('checkout-modal-open');
       onCheckoutModalToggle?.(false);
     }
-  }, [isCheckoutModalOpen, onCheckoutModalToggle]);
+  }, [isCheckoutModalOpen, isOnlineModalOpen, onCheckoutModalToggle]);
 
   const [addPt, setAddPt] = useState<boolean>(false);
   const [selectedTrainerId, setSelectedTrainerId] = useState<string>(() => {
@@ -106,11 +112,6 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
 
   // Client's Pending / Recent Offline Requests
   const [myOfflineRequests, setMyOfflineRequests] = useState<PaymentTransaction[]>([]);
-
-  // Online Gateway Modal & Post-Payment Success Confirmation Modal
-  const [isOnlineModalOpen, setIsOnlineModalOpen] = useState<boolean>(false);
-  const [activatedSuccessTxn, setActivatedSuccessTxn] = useState<PaymentTransaction | null>(null);
-  const [isDownloadingSuccessPdf, setIsDownloadingSuccessPdf] = useState<boolean>(false);
 
   const PT_MONTHLY_RATE = 3500;
 

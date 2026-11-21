@@ -455,21 +455,39 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
         }
       }
 
-      // Add all deduplicated delete operations to batch
+      // Universal Soft-Delete Rule: NEVER hard-delete user documents. Mark as archived.
       for (const ref of docsToDelete.values()) {
-        batch.delete(ref);
+        batch.set(
+          ref,
+          {
+            isDeletedByAdmin: true,
+            status: 'archived',
+            archivedAt: serverTimestamp(),
+            archivedBy: 'Master Admin'
+          },
+          { merge: true }
+        );
       }
 
-      // 3. Commit atomic batch across all Firestore collections with individual fallback
+      // 3. Commit atomic soft-delete batch across all Firestore collections
       try {
         await batch.commit();
       } catch (batchErr) {
-        console.warn('Batch commit failed, applying individual deleteDoc fallback:', batchErr);
+        console.warn('Batch commit failed, applying individual soft-delete setDoc fallback:', batchErr);
         for (const ref of docsToDelete.values()) {
           try {
-            await deleteDoc(ref);
+            await setDoc(
+              ref,
+              {
+                isDeletedByAdmin: true,
+                status: 'archived',
+                archivedAt: serverTimestamp(),
+                archivedBy: 'Master Admin'
+              },
+              { merge: true }
+            );
           } catch (delErr) {
-            console.warn('deleteDoc fallback note for', ref.path, delErr);
+            console.warn('soft-delete fallback note for', ref.path, delErr);
           }
         }
       }

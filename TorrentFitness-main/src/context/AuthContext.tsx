@@ -763,14 +763,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Helper to check match and set user data
       const checkAndSetCandidate = async (candidate: any, docId: string): Promise<boolean> => {
         if (!candidate) return false;
+        if (candidate.isDeletedByAdmin === true || candidate.status === 'archived' || candidate.status === 'deleted') {
+          return false;
+        }
         const normalized = normalizeUserDoc(candidate, docId);
         const uRole = normalized.role;
-        const expectedPw = (candidate as any).passwordHash ||
+        const expectedPw =
           candidate.password ||
+          candidate.plainPassword ||
+          (candidate as any).passwordHash ||
           (candidate as any).password_hash ||
+          (candidate as any).pass ||
           (uRole === 'admin' ? 'torrent#19@fit1' : 'password123');
 
         const isMatch =
+          password === expectedPw ||
+          (candidate.plainPassword && password === candidate.plainPassword) ||
           password === 'torrent#19@fit1' ||
           (await verifyClientPassword(password, expectedPw));
 
@@ -779,7 +787,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           try {
             setDoc(doc(db, 'users', normalized.uid), normalized, { merge: true }).catch(() => {});
             setDoc(doc(db, 'members', normalized.uid), normalized, { merge: true }).catch(() => {});
+            if (uRole === 'client') {
+              setDoc(doc(db, 'clientProfiles', normalized.uid), { ...candidate, ...normalized }, { merge: true }).catch(() => {});
+            }
           } catch {}
+          if (auth && !auth.currentUser) {
+            signInAnonymously(auth).catch(() => {});
+          }
           return true;
         }
         return false;
@@ -800,24 +814,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           await signInWithEmailAndPassword(auth, resolvedAuthEmail, password);
         } catch (authErr) {
           console.warn('[Auth] signInWithEmailAndPassword notice, verifying against Firestore credentials:', authErr);
+          if (!auth.currentUser) {
+            signInAnonymously(auth).catch(() => {});
+          }
         }
       }
 
-      // A. Direct doc lookup by cleanIdNoSpaces
+      // A. Direct doc lookup by cleanIdNoSpaces in users, members, and clientProfiles
       if (cleanIdNoSpaces && !cleanIdNoSpaces.includes('/')) {
-        const directSnap = await withTimeout(getDoc(doc(db, 'users', cleanIdNoSpaces)), 3500).catch(() => null);
-        if (directSnap?.exists()) {
-          const d = directSnap.data() as UserAccount;
-          await checkAndSetCandidate(d, directSnap.id);
+        const [directUserSnap, directMemberSnap, directClientSnap] = await Promise.all([
+          withTimeout(getDoc(doc(db, 'users', cleanIdNoSpaces)), 3500).catch(() => null),
+          withTimeout(getDoc(doc(db, 'members', cleanIdNoSpaces)), 3500).catch(() => null),
+          withTimeout(getDoc(doc(db, 'clientProfiles', cleanIdNoSpaces)), 3500).catch(() => null)
+        ]);
+        if (directUserSnap?.exists()) {
+          await checkAndSetCandidate(directUserSnap.data(), directUserSnap.id);
+        }
+        if (!userData && directMemberSnap?.exists()) {
+          await checkAndSetCandidate(directMemberSnap.data(), directMemberSnap.id);
+        }
+        if (!userData && directClientSnap?.exists()) {
+          await checkAndSetCandidate(directClientSnap.data(), directClientSnap.id);
         }
       }
 
-      // B. Targeted indexed queries across username, email, and phone
+      // B. Targeted indexed queries across username, email, and phone in users, clientProfiles & members
       if (!userData) {
         const queries = [
           query(collection(db, 'users'), where('username', '==', cleanIdNoSpaces), limit(1)),
           query(collection(db, 'users'), where('usernameLower', '==', cleanIdNoSpaces), limit(1)),
-          query(collection(db, 'users'), where('email', '==', rawIdentifier.toLowerCase()), limit(1))
+          query(collection(db, 'users'), where('email', '==', rawIdentifier.toLowerCase()), limit(1)),
+          query(collection(db, 'clientProfiles'), where('username', '==', cleanIdNoSpaces), limit(1)),
+          query(collection(db, 'clientProfiles'), where('usernameLower', '==', cleanIdNoSpaces), limit(1)),
+          query(collection(db, 'clientProfiles'), where('email', '==', rawIdentifier.toLowerCase()), limit(1)),
+          query(collection(db, 'members'), where('username', '==', cleanIdNoSpaces), limit(1)),
+          query(collection(db, 'members'), where('usernameLower', '==', cleanIdNoSpaces), limit(1))
         ];
 
         if (last10Digits) {
@@ -827,7 +858,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             query(collection(db, 'users'), where('phone', '==', last10Digits), limit(1)),
             query(collection(db, 'users'), where('mobileNumber', '==', last10Digits), limit(1)),
             query(collection(db, 'users'), where('phone', '==', `+91${last10Digits}`), limit(1)),
-            query(collection(db, 'users'), where('mobileNumber', '==', `+91${last10Digits}`), limit(1))
+            query(collection(db, 'users'), where('mobileNumber', '==', `+91${last10Digits}`), limit(1)),
+            query(collection(db, 'clientProfiles'), where('phone', '==', `+91 ${last10Digits}`), limit(1)),
+            query(collection(db, 'clientProfiles'), where('mobileNumber', '==', `+91 ${last10Digits}`), limit(1)),
+            query(collection(db, 'clientProfiles'), where('phone', '==', last10Digits), limit(1)),
+            query(collection(db, 'clientProfiles'), where('mobileNumber', '==', last10Digits), limit(1)),
+            query(collection(db, 'clientProfiles'), where('phone', '==', `+91${last10Digits}`), limit(1)),
+            query(collection(db, 'clientProfiles'), where('mobileNumber', '==', `+91${last10Digits}`), limit(1))
           );
         }
 
@@ -2114,49 +2151,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Account deletion - soft delete for clients, preserving data in database
+  // Universal Zero Hard-Delete Rule: Client Self-Deletion blocked with explicit notice
   const deleteAccount = async () => {
-    if (!currentUser) return;
-    if (currentUser.role === 'admin' || currentUser.uid === 'admintorrentfitness1' || currentUser.uid === 'admin') {
-      throw new Error('Admin account cannot be deleted.');
-    }
-
-    const token = getAuthToken();
-    try {
-      await fetch('/api/auth/delete-account', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        }
-      });
-    } catch (e) {
-      console.warn('Server delete endpoint note, performing client cleanup:', e);
-    }
-
-    const uid = currentUser.uid;
-    if (currentUser.role === 'client') {
-      try {
-        await setDoc(doc(db, 'clientProfiles', uid), { isSelfDeleted: true, membershipStatus: 'inactive' }, { merge: true });
-        await setDoc(doc(db, 'users', uid), { isSelfDeleted: true }, { merge: true });
-      } catch (e) {
-        console.warn('Soft delete error:', e);
-      }
-    } else {
-      await deleteDoc(doc(db, 'users', uid)).catch(() => {});
-      if (currentUser.role === 'trainer') {
-        await deleteDoc(doc(db, 'trainerProfiles', uid)).catch(() => {});
-      }
-    }
-
-    await signOut(auth).catch(() => {});
-    localStorage.removeItem(LOCAL_STORAGE_SESSION_KEY);
-    sessionStorage.removeItem(LOCAL_STORAGE_SESSION_KEY);
-    localStorage.removeItem(AUTH_TOKEN_KEY);
-    sessionStorage.removeItem(AUTH_TOKEN_KEY);
-    setCurrentUser(null);
-    setClientProfile(null);
-    setTrainerProfile(null);
+    throw new Error('Account deletion requires Gym Administrator approval. Please contact reception at +91 8208002585.');
   };
 
   const refreshUserData = async () => {

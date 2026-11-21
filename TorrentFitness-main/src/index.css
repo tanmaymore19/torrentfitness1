@@ -331,9 +331,14 @@
 /* Hide fixed navigation bar when Direct Chat modal or Checkout modal is open */
 body.chat-modal-open nav.fixed,
 body.chat-modal-open nav,
+body.chat-modal-open #root nav,
 body.checkout-modal-open nav.fixed,
-body.checkout-modal-open nav {
+body.checkout-modal-open nav,
+body.checkout-modal-open #root nav {
   display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
 }
 
 /* Cyberpunk / High-Tech QR Scanner Laser Scanline Animation */

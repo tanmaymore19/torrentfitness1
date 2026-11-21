@@ -96,8 +96,23 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
   const [attendanceSuccessToast, setAttendanceSuccessToast] = useState<string | null>(null);
   const [showEndSessionModal, setShowEndSessionModal] = useState<boolean>(false);
   const [isEndingSession, setIsEndingSession] = useState<boolean>(false);
-  const [isCheckoutModalActive, setIsCheckoutModalActive] = useState<boolean>(false);
+  const [isCheckoutModalActive, setIsCheckoutModalActive] = useState<boolean>(() => {
+    return typeof document !== 'undefined' && document.body.classList.contains('checkout-modal-open');
+  });
   const [scannerLockedAlert, setScannerLockedAlert] = useState<string | null>(null);
+
+  // Auto-detect checkout modal open state via body mutation observer as a failsafe
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const checkModalState = () => {
+      const isOpen = document.body.classList.contains('checkout-modal-open');
+      setIsCheckoutModalActive((prev) => (prev !== isOpen ? isOpen : prev));
+    };
+    checkModalState();
+    const observer = new MutationObserver(checkModalState);
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
 
   const handleOpenScannerWithGuards = () => {
     if (activeSession && !isSessionExpired(activeSession)) {

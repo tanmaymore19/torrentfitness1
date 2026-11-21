@@ -680,29 +680,35 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
       const txId = txToDelete.id;
       const clientId = txToDelete.rawTx?.userId || txToDelete.rawTx?.clientId || txToDelete.clientId;
 
-      // 1. Permanently delete from all financial and billing collections
+      // 1. Universal Soft-Delete Rule: Archive transaction records instead of hard-deleting
       const finCollections = ['paymentTransactions', 'transactions', 'payments', 'invoices', 'bills', 'billing_history'];
+      const archivePayload = {
+        isDeletedByAdmin: true,
+        status: 'archived',
+        archivedAt: serverTimestamp(),
+        archivedBy: 'Master Admin'
+      };
       await Promise.allSettled(
-        finCollections.map((coll) => deleteDoc(doc(db, coll, txId)).catch(() => null))
+        finCollections.map((coll) => setDoc(doc(db, coll, txId), archivePayload, { merge: true }).catch(() => null))
       );
 
-      // 2. Delete from linked memberships collection
+      // 2. Soft-delete linked memberships
       if (txToDelete.rawTx?.membershipId) {
-        await deleteDoc(doc(db, 'memberships', txToDelete.rawTx.membershipId)).catch(() => null);
+        await setDoc(doc(db, 'memberships', txToDelete.rawTx.membershipId), archivePayload, { merge: true }).catch(() => null);
       }
       try {
         const memMatchSnap = await getDocs(query(collection(db, 'memberships'), where('transactionId', '==', txId)));
         if (!memMatchSnap.empty) {
-          await Promise.allSettled(memMatchSnap.docs.map((d) => deleteDoc(d.ref)));
+          await Promise.allSettled(memMatchSnap.docs.map((d) => setDoc(d.ref, archivePayload, { merge: true })));
         }
       } catch {}
 
-      // 3. Delete from client subcollections and clean client bill arrays
+      // 3. Soft-delete in client subcollections
       if (clientId) {
         await Promise.allSettled([
-          deleteDoc(doc(db, 'clientProfiles', clientId, 'transactions', txId)),
-          deleteDoc(doc(db, 'clientProfiles', clientId, 'invoices', txId)),
-          deleteDoc(doc(db, 'clientProfiles', clientId, 'bills', txId))
+          setDoc(doc(db, 'clientProfiles', clientId, 'transactions', txId), archivePayload, { merge: true }),
+          setDoc(doc(db, 'clientProfiles', clientId, 'invoices', txId), archivePayload, { merge: true }),
+          setDoc(doc(db, 'clientProfiles', clientId, 'bills', txId), archivePayload, { merge: true })
         ]);
       }
 
