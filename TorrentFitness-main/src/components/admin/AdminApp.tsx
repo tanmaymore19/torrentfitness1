@@ -61,6 +61,7 @@ import { GlobalDeleteConfirmModal } from '../common/GlobalDeleteConfirmModal';
 import { ViewSkeleton } from '../common/ViewSkeleton';
 import { GymLogo } from '../common/GymLogo';
 import { playChatNotificationChime } from '../../services/chatService';
+import { CANONICAL_RECOVERY_USERS } from '../../services/dataRecoveryService';
 
 // Lazy-load heavy domain sub-managers on demand
 const BillingPaymentsHub = lazy(() =>
@@ -129,6 +130,7 @@ import {
   Mail,
   RefreshCw,
   Lock,
+  Loader2,
   ArrowRight
 } from 'lucide-react';
 import { formatHeight, parseHeight } from '../../utils/heightUtils';
@@ -992,8 +994,9 @@ export const AdminApp: React.FC = () => {
   // Admin Change Any User's Password (Atomic writeBatch across users, members, clientProfiles, trainers)
   const handleSaveNewPassword = async (e?: React.FormEvent) => {
     if (e && e.preventDefault) e.preventDefault();
-    if (!selectedUserForPasswordChange || !newPasswordInput.trim()) return;
-    if (newPasswordInput.trim().length < 6) {
+    if (!selectedUserForPasswordChange || !newPasswordInput.trim() || passwordChangeLoading) return;
+    const cleanPass = newPasswordInput.trim();
+    if (cleanPass.length < 6) {
       alert('Password must be at least 6 characters.');
       showAdminNotice('Password must be at least 6 characters.', 'error');
       return;
@@ -1002,7 +1005,7 @@ export const AdminApp: React.FC = () => {
     try {
       const uid = selectedUserForPasswordChange.uid.trim();
       const lowerUid = uid.toLowerCase();
-      const cleanPass = newPasswordInput.trim();
+      const cleanId = lowerUid.replace(/\s+/g, '');
 
       // Collect all document references across collections matching uid, username, or clientId
       const matchingRefs = new Map<string, any>();
@@ -1011,56 +1014,99 @@ export const AdminApp: React.FC = () => {
       const directCandidates = [
         doc(db, 'users', uid),
         doc(db, 'users', lowerUid),
+        doc(db, 'users', cleanId),
         doc(db, 'members', uid),
         doc(db, 'members', lowerUid),
+        doc(db, 'members', cleanId),
         doc(db, 'clientProfiles', uid),
         doc(db, 'clientProfiles', lowerUid),
-        doc(db, 'trainers', uid),
-        doc(db, 'trainers', lowerUid),
-        doc(db, 'trainerProfiles', uid),
-        doc(db, 'trainerProfiles', lowerUid),
-        doc(db, 'usernames', lowerUid)
+        doc(db, 'clientProfiles', cleanId),
+        doc(db, 'usernames', lowerUid),
+        doc(db, 'usernames', cleanId)
       ];
+      if (selectedUserForPasswordChange.role === 'trainer') {
+        directCandidates.push(
+          doc(db, 'trainers', uid),
+          doc(db, 'trainers', lowerUid),
+          doc(db, 'trainers', cleanId),
+          doc(db, 'trainerProfiles', uid),
+          doc(db, 'trainerProfiles', lowerUid),
+          doc(db, 'trainerProfiles', cleanId)
+        );
+      }
       directCandidates.forEach((r) => matchingRefs.set(r.path, r));
 
-      // Sibling paths from loaded allUsers and clients
-      const existingUser = allUsers.find(
+      // Sibling paths from loaded allUsers, clients, trainers
+      const matchingUsers = allUsers.filter(
         (u) =>
           u.uid === uid ||
           u.uid.toLowerCase() === lowerUid ||
           u.username === uid ||
-          u.username?.toLowerCase() === lowerUid
+          u.username?.toLowerCase() === lowerUid ||
+          (u as any).clientId === uid ||
+          (u as any).userId === uid
       );
-      if (existingUser) {
-        if (existingUser.uid) {
-          matchingRefs.set(doc(db, 'users', existingUser.uid).path, doc(db, 'users', existingUser.uid));
-          matchingRefs.set(doc(db, 'clientProfiles', existingUser.uid).path, doc(db, 'clientProfiles', existingUser.uid));
-          matchingRefs.set(doc(db, 'members', existingUser.uid).path, doc(db, 'members', existingUser.uid));
+      matchingUsers.forEach((u) => {
+        if (u.uid) {
+          matchingRefs.set(doc(db, 'users', u.uid).path, doc(db, 'users', u.uid));
+          matchingRefs.set(doc(db, 'clientProfiles', u.uid).path, doc(db, 'clientProfiles', u.uid));
+          matchingRefs.set(doc(db, 'members', u.uid).path, doc(db, 'members', u.uid));
         }
-        if (existingUser.username) {
-          const uLower = existingUser.username.toLowerCase();
+        if (u.username) {
+          const uLower = u.username.toLowerCase();
           matchingRefs.set(doc(db, 'usernames', uLower).path, doc(db, 'usernames', uLower));
+          matchingRefs.set(doc(db, 'users', uLower).path, doc(db, 'users', uLower));
+          matchingRefs.set(doc(db, 'clientProfiles', uLower).path, doc(db, 'clientProfiles', uLower));
+          matchingRefs.set(doc(db, 'members', uLower).path, doc(db, 'members', uLower));
         }
-      }
+      });
 
-      const existingClient = clients.find(
+      const matchingClients = clients.filter(
         (c) =>
           c.userId === uid ||
           c.userId.toLowerCase() === lowerUid ||
           (c as any).username === uid ||
-          (c as any).username?.toLowerCase() === lowerUid
+          (c as any).username?.toLowerCase() === lowerUid ||
+          (c as any).clientId === uid ||
+          (c as any).uid === uid
       );
-      if (existingClient) {
-        if (existingClient.userId) {
-          matchingRefs.set(doc(db, 'users', existingClient.userId).path, doc(db, 'users', existingClient.userId));
-          matchingRefs.set(doc(db, 'clientProfiles', existingClient.userId).path, doc(db, 'clientProfiles', existingClient.userId));
-          matchingRefs.set(doc(db, 'members', existingClient.userId).path, doc(db, 'members', existingClient.userId));
+      matchingClients.forEach((c) => {
+        if (c.userId) {
+          matchingRefs.set(doc(db, 'users', c.userId).path, doc(db, 'users', c.userId));
+          matchingRefs.set(doc(db, 'clientProfiles', c.userId).path, doc(db, 'clientProfiles', c.userId));
+          matchingRefs.set(doc(db, 'members', c.userId).path, doc(db, 'members', c.userId));
         }
-        if ((existingClient as any).username) {
-          const uLower = (existingClient as any).username.toLowerCase();
+        if ((c as any).username) {
+          const uLower = (c as any).username.toLowerCase();
           matchingRefs.set(doc(db, 'usernames', uLower).path, doc(db, 'usernames', uLower));
+          matchingRefs.set(doc(db, 'users', uLower).path, doc(db, 'users', uLower));
+          matchingRefs.set(doc(db, 'clientProfiles', uLower).path, doc(db, 'clientProfiles', uLower));
+          matchingRefs.set(doc(db, 'members', uLower).path, doc(db, 'members', uLower));
         }
-      }
+      });
+
+      const matchingTrainers = trainers.filter(
+        (t) =>
+          t.trainerId === uid ||
+          t.trainerId.toLowerCase() === lowerUid ||
+          (t as any).username === uid ||
+          (t as any).username?.toLowerCase() === lowerUid ||
+          (t as any).uid === uid
+      );
+      matchingTrainers.forEach((t) => {
+        if (t.trainerId) {
+          matchingRefs.set(doc(db, 'users', t.trainerId).path, doc(db, 'users', t.trainerId));
+          matchingRefs.set(doc(db, 'trainers', t.trainerId).path, doc(db, 'trainers', t.trainerId));
+          matchingRefs.set(doc(db, 'trainerProfiles', t.trainerId).path, doc(db, 'trainerProfiles', t.trainerId));
+        }
+        if ((t as any).username) {
+          const uLower = (t as any).username.toLowerCase();
+          matchingRefs.set(doc(db, 'usernames', uLower).path, doc(db, 'usernames', uLower));
+          matchingRefs.set(doc(db, 'users', uLower).path, doc(db, 'users', uLower));
+          matchingRefs.set(doc(db, 'trainers', uLower).path, doc(db, 'trainers', uLower));
+          matchingRefs.set(doc(db, 'trainerProfiles', uLower).path, doc(db, 'trainerProfiles', uLower));
+        }
+      });
 
       // 2. Query collections to catch sibling documents (e.g. auth UID vs username)
       try {
@@ -1091,14 +1137,15 @@ export const AdminApp: React.FC = () => {
         console.warn('[Admin Change Pass] Sibling query warning:', qErr);
       }
 
-      // 3. Execute atomic writeBatch with { merge: true }
+      // 3. Execute atomic writeBatch with { merge: true } across ALL resolved documents
       const batch = writeBatch(db);
       const pwPayload = {
         password: cleanPass,
         plainPassword: cleanPass,
         passwordHash: cleanPass,
         pass: cleanPass,
-        updatedAt: serverTimestamp()
+        updatedAt: new Date().toISOString(),
+        updatedTimestamp: serverTimestamp()
       };
 
       matchingRefs.forEach((ref) => {
@@ -1107,14 +1154,13 @@ export const AdminApp: React.FC = () => {
 
       await batch.commit();
 
-      // 4. Update local React state and storage caches immediately so Admin cards reflect the new PASS: instantly
+      // 4. Update local React state and storage caches immediately so Admin cards and subsequent logins reflect new password
       const updatedAllUsers = allUsers.map((u) => {
         if (
           u.uid === uid ||
           u.uid.toLowerCase() === lowerUid ||
           u.username === uid ||
-          u.username?.toLowerCase() === lowerUid ||
-          (existingUser && u.uid === existingUser.uid)
+          u.username?.toLowerCase() === lowerUid
         ) {
           return { ...u, password: cleanPass, plainPassword: cleanPass, pass: cleanPass };
         }
@@ -1128,8 +1174,7 @@ export const AdminApp: React.FC = () => {
           c.userId === uid ||
           c.userId.toLowerCase() === lowerUid ||
           (c as any).username === uid ||
-          (c as any).username?.toLowerCase() === lowerUid ||
-          (existingClient && c.userId === existingClient.userId)
+          (c as any).username?.toLowerCase() === lowerUid
         ) {
           return { ...c, password: cleanPass, plainPassword: cleanPass, pass: cleanPass } as any;
         }
@@ -1152,33 +1197,78 @@ export const AdminApp: React.FC = () => {
       setTrainers(updatedTrainers);
       setCachedData('admin_trainers', updatedTrainers);
 
-      setShowPasswordMap((prev) => ({ ...prev, [uid]: true, [lowerUid]: true }));
+      setShowPasswordMap((prev) => ({ ...prev, [uid]: true, [lowerUid]: true, [cleanId]: true }));
 
-      // Also update any other member caches
+      // Immediately update torrent_users_cache in localStorage & sessionStorage
       try {
-        const rawCached = localStorage.getItem('torrent_cached_members');
-        if (rawCached) {
-          const parsed = JSON.parse(rawCached);
+        const rawUsersCache =
+          localStorage.getItem('torrent_users_cache') ||
+          sessionStorage.getItem('torrent_users_cache');
+        if (rawUsersCache) {
+          const parsed = JSON.parse(rawUsersCache);
           if (Array.isArray(parsed)) {
-            const up = parsed.map((m: any) => {
-              if (m.userId === uid || m.uid === uid || m.username === uid || m.userId?.toLowerCase() === lowerUid) {
-                return { ...m, password: cleanPass, plainPassword: cleanPass, pass: cleanPass };
+            const up = parsed.map((u: any) => {
+              const uId = String(u.uid || u.userId || u.id || '').toLowerCase();
+              const uName = String(u.username || u.usernameLower || '').toLowerCase();
+              if (
+                uId === lowerUid ||
+                uId === cleanId ||
+                uName === lowerUid ||
+                uName === cleanId ||
+                u.uid === uid
+              ) {
+                return {
+                  ...u,
+                  password: cleanPass,
+                  plainPassword: cleanPass,
+                  passwordHash: cleanPass,
+                  pass: cleanPass
+                };
               }
-              return m;
+              return u;
             });
-            localStorage.setItem('torrent_cached_members', JSON.stringify(up));
+            localStorage.setItem('torrent_users_cache', JSON.stringify(up));
+            sessionStorage.setItem('torrent_users_cache', JSON.stringify(up));
+          }
+        }
+      } catch (cacheErr) {
+        console.warn('Could not update torrent_users_cache:', cacheErr);
+      }
+
+      // Update in-memory CANONICAL_RECOVERY_USERS
+      CANONICAL_RECOVERY_USERS.forEach((u) => {
+        const uId = String(u.uid || '').toLowerCase();
+        const uName = String(u.username || '').toLowerCase();
+        if (uId === lowerUid || uId === cleanId || uName === lowerUid || uName === cleanId) {
+          u.password = cleanPass;
+          (u as any).plainPassword = cleanPass;
+          (u as any).pass = cleanPass;
+        }
+      });
+
+      // Update individual profile / session caches
+      try {
+        const sessionRaw = localStorage.getItem('torrent_fitness_user_session') || sessionStorage.getItem('torrent_fitness_user_session');
+        if (sessionRaw) {
+          const sess = JSON.parse(sessionRaw);
+          if (sess.uid === uid || sess.uid?.toLowerCase() === lowerUid || sess.username === uid) {
+            sess.password = cleanPass;
+            sess.plainPassword = cleanPass;
+            sess.pass = cleanPass;
+            localStorage.setItem('torrent_fitness_user_session', JSON.stringify(sess));
+            sessionStorage.setItem('torrent_fitness_user_session', JSON.stringify(sess));
           }
         }
       } catch {}
 
-      showAdminNotice('Password updated & saved to cloud! Old password deactivated.', 'success');
-      alert('Password updated & saved successfully!');
+      showAdminNotice('Password permanently updated in cloud! Old password is now inactive.', 'success');
+      alert('Password permanently updated in cloud! Old password is now inactive.');
       setSelectedUserForPasswordChange(null);
       setNewPasswordInput('');
     } catch (err: any) {
       console.error('[Admin Change Pass Error]', err);
-      alert('Save Error: ' + (err.message || 'Please try again'));
-      showAdminNotice('Error updating user password: ' + (err.message || 'Please try again'), 'error');
+      alert('Failed to update password in cloud: ' + (err.message || 'Please try again'));
+      showAdminNotice('Failed to update password in cloud: ' + (err.message || 'Please try again'), 'error');
     } finally {
       setPasswordChangeLoading(false);
     }
@@ -2832,8 +2922,22 @@ export const AdminApp: React.FC = () => {
 
   // Shared Client Card Renderer for Domain 01 (Strictly User Management — NO Attendance triggers)
   const renderDomain01ClientCard = (client: ClientProfile) => {
-    const clientUser = allUsers.find(u => u.uid === client.userId || u.username === client.userId);
-    const userPass = clientUser?.password || clientUser?.plainPassword || (clientUser as any)?.pass || (client as any).password || (client as any).plainPassword || (client as any).pass || 'password123';
+    const clientUser = allUsers.find(
+      (u) =>
+        u.uid === client.userId ||
+        u.username === client.userId ||
+        u.uid.toLowerCase() === client.userId.toLowerCase() ||
+        u.username?.toLowerCase() === client.userId.toLowerCase()
+    );
+    const candidatePasswords = [
+      (client as any).password,
+      (client as any).plainPassword,
+      (client as any).pass,
+      clientUser?.password,
+      clientUser?.plainPassword,
+      (clientUser as any)?.pass
+    ].filter((p) => p && typeof p === 'string' && p.trim() !== '' && p !== 'password123');
+    const userPass = candidatePasswords[0] || (client as any).password || clientUser?.password || 'password123';
     const userDob = clientUser?.dob || client.dob || 'Not set';
     const isPassShown = !!showPasswordMap[client.userId];
     const isSelfDel = client.isSelfDeleted || clientUser?.isSelfDeleted;
@@ -3659,10 +3763,21 @@ export const AdminApp: React.FC = () => {
                         })
                         .map((client) => {
                           const clientUser = allUsers.find(
-                            (u) => u.uid === client.userId || u.username === client.userId
+                            (u) =>
+                              u.uid === client.userId ||
+                              u.username === client.userId ||
+                              u.uid.toLowerCase() === client.userId.toLowerCase() ||
+                              u.username?.toLowerCase() === client.userId.toLowerCase()
                           );
-                          const userPass =
-                            clientUser?.password || clientUser?.plainPassword || (clientUser as any)?.pass || (client as any).password || (client as any).plainPassword || (client as any).pass || 'password123';
+                          const candidatePasswords = [
+                            (client as any).password,
+                            (client as any).plainPassword,
+                            (client as any).pass,
+                            clientUser?.password,
+                            clientUser?.plainPassword,
+                            (clientUser as any)?.pass
+                          ].filter((p) => p && typeof p === 'string' && p.trim() !== '' && p !== 'password123');
+                          const userPass = candidatePasswords[0] || (client as any).password || clientUser?.password || 'password123';
                           const isPassShown = !!showPasswordMap[client.userId];
                           const isSelfDel = client.isSelfDeleted || clientUser?.isSelfDeleted;
 
@@ -3989,10 +4104,21 @@ export const AdminApp: React.FC = () => {
                   })
                   .map((tr) => {
                     const trUser = allUsers.find(
-                      (u) => u.uid === tr.trainerId || u.username === tr.trainerId
+                      (u) =>
+                        u.uid === tr.trainerId ||
+                        u.username === tr.trainerId ||
+                        u.uid.toLowerCase() === tr.trainerId.toLowerCase() ||
+                        u.username?.toLowerCase() === tr.trainerId.toLowerCase()
                     );
-                    const userPass =
-                      trUser?.password || trUser?.plainPassword || (trUser as any)?.pass || (tr as any).password || (tr as any).plainPassword || (tr as any).pass || 'password123';
+                    const candidatePasswords = [
+                      (tr as any).password,
+                      (tr as any).plainPassword,
+                      (tr as any).pass,
+                      trUser?.password,
+                      trUser?.plainPassword,
+                      (trUser as any)?.pass
+                    ].filter((p) => p && typeof p === 'string' && p.trim() !== '' && p !== 'password123');
+                    const userPass = candidatePasswords[0] || (tr as any).password || trUser?.password || 'password123';
                     const userDob = trUser?.dob || tr.dob || 'Not set';
                     const isPassShown = !!showPasswordMap[tr.trainerId];
                     const statusLabel = String(tr.status || 'active').toUpperCase();
@@ -6139,9 +6265,16 @@ export const AdminApp: React.FC = () => {
                   type="button"
                   onClick={handleSaveNewPassword}
                   disabled={passwordChangeLoading || !newPasswordInput.trim()}
-                  className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold rounded-xl text-xs transition-all shadow-md disabled:opacity-50 pointer-events-auto cursor-pointer"
+                  className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold rounded-xl text-xs transition-all shadow-md disabled:opacity-50 pointer-events-auto cursor-pointer flex items-center justify-center gap-1.5"
                 >
-                  {passwordChangeLoading ? 'Saving...' : 'Save Password'}
+                  {passwordChangeLoading ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving in Cloud...</span>
+                    </>
+                  ) : (
+                    <span>Save Password</span>
+                  )}
                 </button>
               </div>
             </form>

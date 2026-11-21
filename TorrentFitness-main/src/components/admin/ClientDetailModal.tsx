@@ -314,7 +314,15 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
     }
   };
 
-  const userPass = user?.password || (client as any).password || 'password123';
+  const candidatePasswords = [
+    (client as any).password,
+    (client as any).plainPassword,
+    (client as any).pass,
+    user?.password,
+    user?.plainPassword,
+    (user as any)?.pass
+  ].filter((p) => p && typeof p === 'string' && p.trim() !== '' && p !== 'password123');
+  const userPass = candidatePasswords[0] || (client as any).password || user?.password || 'password123';
   const userDob = user?.dob || client.dob || 'Not set';
 
   // Compute total attendance hours

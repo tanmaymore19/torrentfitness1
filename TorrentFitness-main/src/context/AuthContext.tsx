@@ -21,6 +21,7 @@ import {
   getDoc,
   getDocFromCache,
   getDocFromServer,
+  getDocsFromServer,
   setDoc,
   updateDoc,
   onSnapshot,
@@ -848,24 +849,120 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Fall through to authoritative parallel Firestore multi-collection verification
       }
 
-      // 2. Multi-Tiered Resilient Identity Retrieval: Targeted Firestore Reads + Cached Caches + Recovery Users
+      // 2. Multi-Tiered Resilient Identity Retrieval: Fresh Server Firestore First -> Local Caches -> Recovery Users
       const rawId = rawIdentifier;
       const lowerId = rawId.toLowerCase();
       const rawPass = password.trim();
       const inputDigits = rawId.replace(/\D/g, '');
       const last10Digits = inputDigits.length >= 10 ? inputDigits.slice(-10) : '';
 
-      const allDocs: Array<{ data: any; id: string; collectionName: string }> = [];
+      // A. Fresh Cloud Firestore Server Retrieval (Bypasses Stale IndexedDB/Local Cache)
+      const firestoreServerDocs: Array<{ data: any; id: string; collectionName: string }> = [];
 
-      // A. Canonical Recovery Users (Always present in memory)
-      CANONICAL_RECOVERY_USERS.forEach((u) => {
-        allDocs.push({ data: u, id: u.uid, collectionName: u.role === 'trainer' ? 'trainers' : 'users' });
-        if (u.role === 'client') {
-          allDocs.push({ data: u, id: u.uid, collectionName: 'clientProfiles' });
+      const safeFetchServerDoc = async (docRef: any) => {
+        try {
+          const snap = await getDocFromServer(docRef);
+          if (snap && snap.exists()) return snap;
+        } catch {
+          try {
+            const snap = await getDoc(docRef);
+            if (snap && snap.exists()) return snap;
+          } catch (cacheErr: any) {
+            try {
+              const cacheSnap = await getDocFromCache(docRef);
+              if (cacheSnap && cacheSnap.exists()) return cacheSnap;
+            } catch {}
+          }
         }
-      });
+        return null;
+      };
 
-      // B. Local Cached Data (torrent_users_cache, admin_clients, admin_users, admin_trainers, tf_cache, torrent_cached_members)
+      const safeFetchServerDocs = async (q: any) => {
+        try {
+          const snap = await getDocsFromServer(q);
+          if (snap && !snap.empty) return snap;
+        } catch {
+          try {
+            const snap = await getDocs(q);
+            if (snap && !snap.empty) return snap;
+          } catch {}
+        }
+        return null;
+      };
+
+      try {
+        const targetDocFetches = [
+          withTimeout(safeFetchServerDoc(doc(db, 'users', cleanIdNoSpaces)), 2200, null),
+          withTimeout(safeFetchServerDoc(doc(db, 'clientProfiles', cleanIdNoSpaces)), 2200, null),
+          withTimeout(safeFetchServerDoc(doc(db, 'members', cleanIdNoSpaces)), 2200, null),
+          withTimeout(safeFetchServerDoc(doc(db, 'usernames', cleanIdNoSpaces)), 2200, null),
+          withTimeout(safeFetchServerDoc(doc(db, 'trainers', cleanIdNoSpaces)), 2200, null),
+          withTimeout(safeFetchServerDoc(doc(db, 'trainerProfiles', cleanIdNoSpaces)), 2200, null)
+        ];
+        if (cleanIdNoSpaces !== lowerId) {
+          targetDocFetches.push(
+            withTimeout(safeFetchServerDoc(doc(db, 'users', lowerId)), 2200, null),
+            withTimeout(safeFetchServerDoc(doc(db, 'clientProfiles', lowerId)), 2200, null),
+            withTimeout(safeFetchServerDoc(doc(db, 'members', lowerId)), 2200, null),
+            withTimeout(safeFetchServerDoc(doc(db, 'usernames', lowerId)), 2200, null)
+          );
+        }
+        const docResults = await Promise.allSettled(targetDocFetches);
+        docResults.forEach((res) => {
+          if (res.status === 'fulfilled' && res.value && (res.value as any).exists?.()) {
+            const d = res.value as any;
+            firestoreServerDocs.push({ data: d.data(), id: d.id, collectionName: d.ref?.parent?.id || 'users' });
+          }
+        });
+
+        // If no direct doc found in Firestore, run targeted queries with limit(1)
+        const hasDirectMatch = firestoreServerDocs.some(
+          (d) => d.id.toLowerCase() === lowerId || d.id.toLowerCase() === cleanIdNoSpaces
+        );
+        if (!hasDirectMatch) {
+          const queryFetches = [
+            withTimeout(safeFetchServerDocs(query(collection(db, 'users'), where('username', '==', cleanIdNoSpaces), limit(1))), 2200, null),
+            withTimeout(safeFetchServerDocs(query(collection(db, 'users'), where('usernameLower', '==', cleanIdNoSpaces), limit(1))), 2200, null),
+            withTimeout(safeFetchServerDocs(query(collection(db, 'clientProfiles'), where('username', '==', cleanIdNoSpaces), limit(1))), 2200, null),
+            withTimeout(safeFetchServerDocs(query(collection(db, 'clientProfiles'), where('usernameLower', '==', cleanIdNoSpaces), limit(1))), 2200, null),
+            withTimeout(safeFetchServerDocs(query(collection(db, 'clientProfiles'), where('clientId', '==', cleanIdNoSpaces), limit(1))), 2200, null),
+            withTimeout(safeFetchServerDocs(query(collection(db, 'clientProfiles'), where('userId', '==', cleanIdNoSpaces), limit(1))), 2200, null),
+            withTimeout(safeFetchServerDocs(query(collection(db, 'members'), where('username', '==', cleanIdNoSpaces), limit(1))), 2200, null),
+            withTimeout(safeFetchServerDocs(query(collection(db, 'members'), where('usernameLower', '==', cleanIdNoSpaces), limit(1))), 2200, null),
+            withTimeout(safeFetchServerDocs(query(collection(db, 'trainers'), where('username', '==', cleanIdNoSpaces), limit(1))), 2200, null),
+            withTimeout(safeFetchServerDocs(query(collection(db, 'trainerProfiles'), where('username', '==', cleanIdNoSpaces), limit(1))), 2200, null)
+          ];
+          if (rawId.includes('@')) {
+            queryFetches.push(
+              withTimeout(safeFetchServerDocs(query(collection(db, 'users'), where('email', '==', lowerId), limit(1))), 2200, null),
+              withTimeout(safeFetchServerDocs(query(collection(db, 'clientProfiles'), where('email', '==', lowerId), limit(1))), 2200, null)
+            );
+          }
+          if (last10Digits) {
+            queryFetches.push(
+              withTimeout(safeFetchServerDocs(query(collection(db, 'clientProfiles'), where('phone', '==', rawId), limit(1))), 2200, null),
+              withTimeout(safeFetchServerDocs(query(collection(db, 'clientProfiles'), where('mobileNumber', '==', rawId), limit(1))), 2200, null)
+            );
+          }
+          const qResults = await Promise.allSettled(queryFetches);
+          qResults.forEach((res) => {
+            if (res.status === 'fulfilled' && res.value && !(res.value as any).empty) {
+              (res.value as any).docs?.forEach((d: any) => {
+                firestoreServerDocs.push({ data: d.data(), id: d.id, collectionName: d.ref?.parent?.id || 'users' });
+              });
+            }
+          });
+        }
+      } catch (fErr) {
+        console.warn('[Auth Firestore lookup note]', fErr);
+      }
+
+      // Prioritize fresh Cloud Firestore server documents at the very top of allDocs
+      const allDocs: Array<{ data: any; id: string; collectionName: string }> = [
+        ...firestoreServerDocs
+      ];
+
+      // B. Local Cached Data (Fallback only if Firestore was unreachable or cached session is needed)
       try {
         const cachedTorrentUsers = getTorrentUsersCache();
         if (Array.isArray(cachedTorrentUsers)) {
@@ -896,114 +993,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (id) allDocs.push({ data: t, id: String(id), collectionName: 'trainers' });
           });
         }
-
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k && (k.includes('client') || k.includes('user') || k.includes('member') || k.includes('trainer'))) {
-            try {
-              const rawVal = localStorage.getItem(k);
-              if (rawVal) {
-                const parsed = JSON.parse(rawVal);
-                const items = Array.isArray(parsed)
-                  ? parsed
-                  : (parsed?.data && Array.isArray(parsed.data))
-                  ? parsed.data
-                  : [parsed];
-                items.forEach((item: any) => {
-                  if (item && typeof item === 'object') {
-                    const id = item.uid || item.userId || item.clientId || item.trainerId || item.id;
-                    if (id) allDocs.push({ data: item, id: String(id), collectionName: 'cache' });
-                  }
-                });
-              }
-            } catch {}
-          }
-        }
       } catch (cacheErr) {
         console.warn('[Auth Login] Cache lookup warning:', cacheErr);
       }
 
-      // C. Targeted Cloud Firestore Single-Document Lookups (Safe from read quota exhaustion)
-      const safeFetchDoc = async (docRef: any) => {
-        try {
-          const snap = await getDoc(docRef);
-          if (snap && snap.exists()) return snap;
-        } catch (err: any) {
-          const msg = String(err?.message || '');
-          if (
-            msg.includes('quota') ||
-            msg.includes('Quota') ||
-            msg.includes('resource-exhausted') ||
-            err?.code === 'resource-exhausted'
-          ) {
-            try {
-              const cacheSnap = await getDocFromCache(docRef);
-              if (cacheSnap && cacheSnap.exists()) return cacheSnap;
-            } catch {}
-          }
+      // C. Canonical Recovery Users (Fallback ONLY if user record does not exist anywhere else)
+      CANONICAL_RECOVERY_USERS.forEach((u) => {
+        allDocs.push({ data: u, id: u.uid, collectionName: u.role === 'trainer' ? 'trainers' : 'users' });
+        if (u.role === 'client') {
+          allDocs.push({ data: u, id: u.uid, collectionName: 'clientProfiles' });
         }
-        return null;
-      };
-
-      try {
-        const targetDocFetches = [
-          withTimeout(safeFetchDoc(doc(db, 'users', cleanIdNoSpaces)), 1800, null),
-          withTimeout(safeFetchDoc(doc(db, 'clientProfiles', cleanIdNoSpaces)), 1800, null),
-          withTimeout(safeFetchDoc(doc(db, 'members', cleanIdNoSpaces)), 1800, null),
-          withTimeout(safeFetchDoc(doc(db, 'usernames', cleanIdNoSpaces)), 1800, null),
-          withTimeout(safeFetchDoc(doc(db, 'trainers', cleanIdNoSpaces)), 1800, null),
-          withTimeout(safeFetchDoc(doc(db, 'trainerProfiles', cleanIdNoSpaces)), 1800, null)
-        ];
-        if (cleanIdNoSpaces !== lowerId) {
-          targetDocFetches.push(
-            withTimeout(safeFetchDoc(doc(db, 'users', lowerId)), 1800, null),
-            withTimeout(safeFetchDoc(doc(db, 'clientProfiles', lowerId)), 1800, null),
-            withTimeout(safeFetchDoc(doc(db, 'members', lowerId)), 1800, null)
-          );
-        }
-        const docResults = await Promise.allSettled(targetDocFetches);
-        docResults.forEach((res) => {
-          if (res.status === 'fulfilled' && res.value && (res.value as any).exists?.()) {
-            const d = res.value as any;
-            allDocs.push({ data: d.data(), id: d.id, collectionName: d.ref?.parent?.id || 'users' });
-          }
-        });
-
-        // If no direct doc found in Firestore, run targeted queries with limit(1)
-        const hasDirectMatch = allDocs.some((d) => d.id.toLowerCase() === lowerId || d.id.toLowerCase() === cleanIdNoSpaces);
-        if (!hasDirectMatch) {
-          const queryFetches = [
-            withTimeout(getDocs(query(collection(db, 'users'), where('username', '==', cleanIdNoSpaces), limit(1))), 1800, null),
-            withTimeout(getDocs(query(collection(db, 'users'), where('usernameLower', '==', cleanIdNoSpaces), limit(1))), 1800, null),
-            withTimeout(getDocs(query(collection(db, 'clientProfiles'), where('username', '==', cleanIdNoSpaces), limit(1))), 1800, null),
-            withTimeout(getDocs(query(collection(db, 'clientProfiles'), where('usernameLower', '==', cleanIdNoSpaces), limit(1))), 1800, null),
-            withTimeout(getDocs(query(collection(db, 'clientProfiles'), where('clientId', '==', cleanIdNoSpaces), limit(1))), 1800, null),
-            withTimeout(getDocs(query(collection(db, 'clientProfiles'), where('userId', '==', cleanIdNoSpaces), limit(1))), 1800, null)
-          ];
-          if (rawId.includes('@')) {
-            queryFetches.push(
-              withTimeout(getDocs(query(collection(db, 'users'), where('email', '==', lowerId), limit(1))), 1800, null),
-              withTimeout(getDocs(query(collection(db, 'clientProfiles'), where('email', '==', lowerId), limit(1))), 1800, null)
-            );
-          }
-          if (last10Digits) {
-            queryFetches.push(
-              withTimeout(getDocs(query(collection(db, 'clientProfiles'), where('phone', '==', rawId), limit(1))), 1800, null),
-              withTimeout(getDocs(query(collection(db, 'clientProfiles'), where('mobileNumber', '==', rawId), limit(1))), 1800, null)
-            );
-          }
-          const qResults = await Promise.allSettled(queryFetches);
-          qResults.forEach((res) => {
-            if (res.status === 'fulfilled' && res.value && !(res.value as any).empty) {
-              (res.value as any).docs?.forEach((d: any) => {
-                allDocs.push({ data: d.data(), id: d.id, collectionName: d.ref?.parent?.id || 'users' });
-              });
-            }
-          });
-        }
-      } catch (fErr) {
-        console.warn('[Auth Firestore lookup note]', fErr);
-      }
+      });
 
       // Filter to find matching active record (case-insensitive) where any identifier matches
       const isMatchDoc = (d: any, docId: string): boolean => {
@@ -1053,26 +1053,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       // Extract stored password from ANY password field across matched and related sibling docs
+      // Prioritize fresh custom passwords over default 'password123'
       let activePassword = '';
+      const candidateList: string[] = [];
       for (const item of [...matchedDocs, ...relatedDocs]) {
         const d = item.data;
         const candidatePass = String(
           d.password ?? d.plainPassword ?? d.passwordHash ?? d.pass ?? (d as any).password_hash ?? ''
         ).trim();
         if (candidatePass) {
-          activePassword = candidatePass;
-          break;
+          candidateList.push(candidatePass);
         }
       }
-      if (!activePassword) {
-        activePassword = 'password123';
-      }
+      const nonDefaultPass = candidateList.find((p) => p !== 'password123');
+      activePassword = nonDefaultPass || candidateList[0] || 'password123';
 
-      // Exact Match Rule
+      // Exact Match Rule: entered password MUST match activePassword (or its PBKDF2 hash).
+      // STRICT: Old password fallbacks are permanently rejected once updated.
       const isPasswordMatch =
         rawPass === activePassword ||
-        rawPass === 'password123' ||
-        rawPass === 'torrent#19@fit1' ||
         (await verifyClientPassword(rawPass, activePassword));
 
       if (!isPasswordMatch) {
@@ -1082,7 +1081,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Password matches: GRANT LOGIN IMMEDIATELY!
       const primaryItem = matchedDocs.find((m) => m.collectionName === 'users') || matchedDocs[0];
       const normalized = normalizeUserDoc(primaryItem.data, primaryItem.id);
+      normalized.password = activePassword;
+      (normalized as any).pass = activePassword;
+      (normalized as any).plainPassword = activePassword;
       let userData: UserAccount = normalized;
+
+      try {
+        const canonicalIdx = CANONICAL_RECOVERY_USERS.findIndex(
+          (u) =>
+            (u.uid && u.uid.toLowerCase() === normalized.uid.toLowerCase()) ||
+            (u.username && u.username.toLowerCase() === (normalized.username || '').toLowerCase())
+        );
+        if (canonicalIdx !== -1) {
+          CANONICAL_RECOVERY_USERS[canonicalIdx].password = activePassword;
+          (CANONICAL_RECOVERY_USERS[canonicalIdx] as any).plainPassword = activePassword;
+        }
+      } catch {}
 
       // Sync user records in Firestore asynchronously (never block login)
       try {

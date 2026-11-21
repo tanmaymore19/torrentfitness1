@@ -222,6 +222,22 @@ export async function executeEmergencyDataRecovery(): Promise<RecoveryReport> {
         } catch {}
       }
 
+      // A2. torrent_users_cache (holds fresh updated passwords)
+      const cachedTorrentUsersRaw = localStorage.getItem('torrent_users_cache') || sessionStorage.getItem('torrent_users_cache');
+      if (cachedTorrentUsersRaw) {
+        try {
+          const list = JSON.parse(cachedTorrentUsersRaw);
+          if (Array.isArray(list)) {
+            list.forEach((u) => {
+              if (u && (u.uid || u.username)) {
+                const norm = normalizeUserDoc(u);
+                recoveredUsersMap.set(norm.uid, norm);
+              }
+            });
+          }
+        } catch {}
+      }
+
       // B. admin_payment_tx / cached_payment_transactions
       const cachedTxRaw = localStorage.getItem('admin_payment_tx') || localStorage.getItem('cached_payment_transactions');
       if (cachedTxRaw) {
@@ -301,6 +317,14 @@ export async function executeEmergencyDataRecovery(): Promise<RecoveryReport> {
             const norm = normalizeUserDoc(data, d.id);
             if (!recoveredUsersMap.has(norm.uid)) {
               recoveredUsersMap.set(norm.uid, norm);
+            } else {
+              // Preserve any custom password found in Firestore
+              const existing = recoveredUsersMap.get(norm.uid)!;
+              const foundPass = String(data.password || data.plainPassword || data.pass || '');
+              if (foundPass && foundPass !== 'password123') {
+                existing.password = foundPass;
+                (existing as any).plainPassword = foundPass;
+              }
             }
           });
         }
@@ -415,7 +439,8 @@ export async function executeEmergencyDataRecovery(): Promise<RecoveryReport> {
 
   for (const [uid, user] of recoveredUsersMap.entries()) {
     recoveredUserIds.push(uid);
-    const userPayload = {
+    const resolvedPass = (user as any).password || (user as any).plainPassword || (user as any).pass;
+    const userPayload: any = {
       uid: user.uid,
       username: user.username,
       usernameLower: user.usernameLower || user.username.toLowerCase(),
@@ -435,11 +460,17 @@ export async function executeEmergencyDataRecovery(): Promise<RecoveryReport> {
       planExpiryDate: user.planExpiryDate || user.membershipExpiryDate || null,
       dob: user.dob || '2000-01-01',
       gender: user.gender || 'Male',
-      password: user.password || (user.role === 'admin' ? 'torrent#19@fit1' : 'password123'),
       passwordHash: user.passwordHash || null,
       isSelfDeleted: false,
       restoredAt: new Date().toISOString()
     };
+
+    // Only merge non-default passwords so recovery never accidentally reverts custom passwords
+    if (resolvedPass && resolvedPass !== 'password123') {
+      userPayload.password = resolvedPass;
+      userPayload.plainPassword = resolvedPass;
+      userPayload.pass = resolvedPass;
+    }
 
     const clientPayload = normalizeClientProfile(userPayload, uid);
 
