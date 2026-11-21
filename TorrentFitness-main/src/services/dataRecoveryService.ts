@@ -288,6 +288,57 @@ export async function executeEmergencyDataRecovery(): Promise<RecoveryReport> {
       }
     }
 
+    // Inspect PT, Membership, and Aerobics request & subscription collections
+    const requestCollections = [
+      'pt_requests',
+      'ptRequests',
+      'membership_requests',
+      'membershipRequests',
+      'aerobics_requests',
+      'aerobicsSubscriptions',
+      'pt_chats'
+    ];
+    for (const coll of requestCollections) {
+      sourcesChecked.push(`firestore:${coll}`);
+      try {
+        const snap = await getDocs(query(collection(db, coll), limit(200))).catch(() => null);
+        if (snap && !snap.empty) {
+          snap.docs.forEach((d) => {
+            const data = d.data() as any;
+            const clientId = data.clientId || data.userId || data.memberId;
+            if (clientId && !recoveredUsersMap.has(clientId)) {
+              recoveredUsersMap.set(clientId, normalizeUserDoc({
+                uid: clientId,
+                displayName: data.clientName || data.displayName || 'Member',
+                email: data.clientEmail || data.email,
+                phone: data.clientPhone || data.phone,
+                membershipStatus: data.status === 'APPROVED' || data.status === 'active' ? 'ACTIVE' : 'inactive',
+                membershipPlan: data.planName || data.itemTitle || data.batchName
+              }));
+            }
+            if (data.referenceId || data.paymentId || data.transactionId) {
+              const txId = data.referenceId || data.paymentId || data.transactionId || `tx_${d.id}`;
+              if (!recoveredTxMap.has(txId)) {
+                recoveredTxMap.set(txId, {
+                  id: txId,
+                  clientId,
+                  clientName: data.clientName || 'Member',
+                  amount: data.amount || data.amountPaid || data.finalAmount || 0,
+                  finalAmount: data.amount || data.amountPaid || data.finalAmount || 0,
+                  planName: data.planName || data.itemTitle || data.batchName || 'Gym Service',
+                  status: 'COMPLETED',
+                  paymentStatus: 'PAID',
+                  createdAt: data.createdAt || new Date().toISOString()
+                });
+              }
+            }
+          });
+        }
+      } catch (reqErr) {
+        console.warn(`[DATA RECOVERY] Query ${coll} note:`, reqErr);
+      }
+    }
+
     // Inspect attendance logs to recover any active members
     try {
       sourcesChecked.push('firestore:attendance_logs');

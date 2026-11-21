@@ -1,7 +1,7 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, where, limit } from 'firebase/firestore';
+import { collection, doc, setDoc, onSnapshot, query, where, limit } from 'firebase/firestore';
 import { Announcement, AttendanceRecord } from '../../types';
 import { INITIAL_ANNOUNCEMENTS } from '../../services/db';
 import { getCachedData, setCachedData } from '../../services/cacheService';
@@ -15,7 +15,8 @@ import {
   clearActiveSessionLocally
 } from '../../services/attendanceService';
 import { Header } from '../common/Header';
-import { verifyAndActivateOnlinePayment } from '../../services/paymentService';
+import { verifyAndActivateOnlinePayment, calculateExpiryFromPaymentDate } from '../../services/paymentService';
+import { isQrScannerUnlocked } from '../../utils/memberStatus';
 import { PromotionalCarousel } from './PromotionalCarousel';
 import { GymPhotoGallery } from './GymPhotoGallery';
 import { QRScannerModal } from '../common/QRScannerModal';
@@ -96,6 +97,20 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
   const [showEndSessionModal, setShowEndSessionModal] = useState<boolean>(false);
   const [isEndingSession, setIsEndingSession] = useState<boolean>(false);
   const [isCheckoutModalActive, setIsCheckoutModalActive] = useState<boolean>(false);
+  const [scannerLockedAlert, setScannerLockedAlert] = useState<string | null>(null);
+
+  const handleOpenScannerWithGuards = () => {
+    if (activeSession && !isSessionExpired(activeSession)) {
+      setActiveTab('qr');
+      return;
+    }
+    const { unlocked, reason } = isQrScannerUnlocked(clientProfile, currentUser);
+    if (!unlocked) {
+      setScannerLockedAlert(reason || 'Active membership required to access the QR turnstile scanner.');
+      return;
+    }
+    setIsScannerOpen(true);
+  };
 
   // Sync activeSession with clientProfile changes
   useEffect(() => {
@@ -482,6 +497,64 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
     };
   }, [currentUser?.uid]);
 
+  // Automated Seamless Rollover: Queued Gym Membership and Queued Aerobics Batches
+  useEffect(() => {
+    if (!currentUser?.uid || !clientProfile) return;
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    // Check Queued Gym Membership Rollover
+    if (
+      clientProfile.queuedPlan &&
+      clientProfile.membershipEndDate &&
+      clientProfile.membershipEndDate < todayStr
+    ) {
+      const queued = clientProfile.queuedPlan;
+      const newStartDate = queued.startDate || todayStr;
+      const newEndDate = queued.endDate || calculateExpiryFromPaymentDate(newStartDate, queued.durationMonths || 1);
+
+      const rolloverUpdates = {
+        membershipStatus: 'active',
+        membershipPlan: queued.planName,
+        membershipPlanId: queued.planId,
+        membershipStartDate: newStartDate,
+        membershipEndDate: newEndDate,
+        durationMonths: queued.durationMonths || 1,
+        queuedPlan: null
+      };
+
+      setDoc(doc(db, 'clientProfiles', currentUser.uid), rolloverUpdates, { merge: true }).catch(console.warn);
+      setDoc(doc(db, 'members', currentUser.uid), rolloverUpdates, { merge: true }).catch(console.warn);
+      setDoc(doc(db, 'users', currentUser.uid), rolloverUpdates, { merge: true }).catch(console.warn);
+    }
+
+    // Check Queued Aerobics Batch Rollover
+    if (
+      clientProfile.queuedAerobicsBatchId &&
+      clientProfile.aerobicsEndDate &&
+      clientProfile.aerobicsEndDate < todayStr
+    ) {
+      const aeroUpdates = {
+        aerobicsStatus: 'active',
+        aerobicsBatchId: clientProfile.queuedAerobicsBatchId,
+        aerobicsBatchName: clientProfile.queuedAerobicsBatchName || 'Aerobics Studio Batch',
+        aerobicsSlotTiming: clientProfile.queuedAerobicsSlotTiming || '',
+        aerobicsInstructorName: clientProfile.queuedAerobicsInstructorName || 'Coach Pooja Sharma',
+        aerobicsStartDate: clientProfile.queuedAerobicsStartDate || todayStr,
+        aerobicsEndDate: clientProfile.queuedAerobicsEndDate || calculateExpiryFromPaymentDate(todayStr, 1),
+        aerobicsPlanDuration: clientProfile.queuedAerobicsPlanDuration || 'monthly',
+        queuedAerobicsBatchId: null,
+        queuedAerobicsBatchName: null,
+        queuedAerobicsSlotTiming: null,
+        queuedAerobicsInstructorName: null,
+        queuedAerobicsStartDate: null,
+        queuedAerobicsEndDate: null,
+        queuedAerobicsPlanDuration: null
+      };
+
+      setDoc(doc(db, 'clientProfiles', currentUser.uid), aeroUpdates, { merge: true }).catch(console.warn);
+    }
+  }, [currentUser?.uid, clientProfile?.membershipEndDate, clientProfile?.aerobicsEndDate]);
+
   return (
     <div className="w-full h-full min-h-0 flex flex-col overflow-hidden relative bg-[#EEF2F6] text-slate-800 selection:bg-indigo-500/20 selection:text-indigo-800">
       {/* Subtle Ambient Light Orbs */}
@@ -719,13 +792,7 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
 
             {/* Quick Gym Entry Hero Banner */}
             <div
-              onClick={() => {
-                if (activeSession && !isSessionExpired(activeSession)) {
-                  setActiveTab('qr');
-                } else {
-                  setIsScannerOpen(true);
-                }
-              }}
+              onClick={handleOpenScannerWithGuards}
               className="vision-card rounded-3xl p-4 border border-white/80 flex items-center justify-between cursor-pointer transition-all group active:scale-[0.99] shadow-sm"
             >
               <div className="flex items-center gap-3">
@@ -968,11 +1035,7 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
             {/* Tab 3: QR ATTENDANCE */}
             {activeTab === 'qr' && (
               <QrAttendanceView
-                onOpenScanner={() => {
-                  if (!activeSession || isSessionExpired(activeSession)) {
-                    setIsScannerOpen(true);
-                  }
-                }}
+                onOpenScanner={handleOpenScannerWithGuards}
               />
             )}
 
@@ -1010,81 +1073,77 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
       </main>
 
       {/* Tier 3: Fixed Bottom Navigation Dock: Anchored outside scroll view */}
-      <nav className={`shrink-0 z-40 w-full bg-white/95 backdrop-blur-md border-t border-slate-200/90 shadow-[0_-10px_25px_-5px_rgba(0,0,0,0.06)] pb-[max(env(safe-area-inset-bottom,16px),10px)] pt-2 ${isCheckoutModalActive ? 'hidden' : ''}`}>
-        <div className="w-full h-16 grid grid-cols-5 items-center px-1">
-          {/* 1. Home */}
-          <button
-            onClick={() => setActiveTab('home')}
-            className={`w-full h-full flex flex-col items-center justify-center transition-colors ${
-              activeTab === 'home' ? 'text-indigo-600 font-bold' : 'text-slate-500 hover:text-slate-900 font-semibold'
-            }`}
-          >
-            <Home className="w-5 h-5" strokeWidth={1.75} />
-            <span className="text-[10px] mt-0.5 tracking-tight">Home</span>
-          </button>
-
-          {/* 2. Workouts */}
-          <button
-            onClick={() => setActiveTab('workouts')}
-            className={`w-full h-full flex flex-col items-center justify-center transition-colors ${
-              activeTab === 'workouts' ? 'text-indigo-600 font-bold' : 'text-slate-500 hover:text-slate-900 font-semibold'
-            }`}
-          >
-            <Dumbbell className="w-5 h-5 -rotate-45" strokeWidth={1.75} />
-            <span className="text-[10px] mt-0.5 tracking-tight">Workouts</span>
-          </button>
-
-          {/* 3. Center Highlighted QR Scanner Button (Mathematically Centered) */}
-          <div className="w-full h-full flex flex-col items-center justify-center relative">
+      {!isCheckoutModalActive && (
+        <nav className="shrink-0 z-40 w-full bg-white/95 backdrop-blur-md border-t border-slate-200/90 shadow-[0_-10px_25px_-5px_rgba(0,0,0,0.06)] pb-[max(env(safe-area-inset-bottom,16px),10px)] pt-2">
+          <div className="w-full h-16 grid grid-cols-5 items-center px-1">
+            {/* 1. Home */}
             <button
-              onClick={() => {
-                if (activeSession && !isSessionExpired(activeSession)) {
-                  setActiveTab('qr');
-                } else {
-                  setIsScannerOpen(true);
-                }
-              }}
-              title={activeSession && !isSessionExpired(activeSession) ? 'Active Workout Session In Progress' : 'Scan Gym QR'}
-              className={`w-13 h-13 -mt-6 rounded-full text-white flex items-center justify-center shadow-xl ring-4 ring-[#F8FAFC] active:scale-95 transition-all ${
-                activeSession && !isSessionExpired(activeSession)
-                  ? 'bg-gradient-to-tr from-emerald-500 to-teal-500 shadow-emerald-500/40'
-                  : 'vision-btn-aurora shadow-[0_8px_20px_rgba(99,102,241,0.35)]'
+              onClick={() => setActiveTab('home')}
+              className={`w-full h-full flex flex-col items-center justify-center transition-colors ${
+                activeTab === 'home' ? 'text-indigo-600 font-bold' : 'text-slate-500 hover:text-slate-900 font-semibold'
               }`}
             >
-              {activeSession && !isSessionExpired(activeSession) ? (
-                <Clock className="w-6 h-6" strokeWidth={1.75} />
-              ) : (
-                <QrCode className="w-6 h-6" strokeWidth={1.75} />
-              )}
+              <Home className="w-5 h-5" strokeWidth={1.75} />
+              <span className="text-[10px] mt-0.5 tracking-tight">Home</span>
             </button>
-            <span className={`text-[10px] mt-1 font-semibold ${activeTab === 'qr' ? 'text-indigo-600 font-bold' : 'text-slate-500'}`}>
-              Scan QR
-            </span>
+
+            {/* 2. Workouts */}
+            <button
+              onClick={() => setActiveTab('workouts')}
+              className={`w-full h-full flex flex-col items-center justify-center transition-colors ${
+                activeTab === 'workouts' ? 'text-indigo-600 font-bold' : 'text-slate-500 hover:text-slate-900 font-semibold'
+              }`}
+            >
+              <Dumbbell className="w-5 h-5 -rotate-45" strokeWidth={1.75} />
+              <span className="text-[10px] mt-0.5 tracking-tight">Workouts</span>
+            </button>
+
+            {/* 3. Center Highlighted QR Scanner Button (Mathematically Centered) */}
+            <div className="w-full h-full flex flex-col items-center justify-center relative">
+              <button
+                onClick={handleOpenScannerWithGuards}
+                title={activeSession && !isSessionExpired(activeSession) ? 'Active Workout Session In Progress' : 'Scan Gym QR'}
+                className={`w-13 h-13 -mt-6 rounded-full text-white flex items-center justify-center shadow-xl ring-4 ring-[#F8FAFC] active:scale-95 transition-all ${
+                  activeSession && !isSessionExpired(activeSession)
+                    ? 'bg-gradient-to-tr from-emerald-500 to-teal-500 shadow-emerald-500/40'
+                    : 'vision-btn-aurora shadow-[0_8px_20px_rgba(99,102,241,0.35)]'
+                }`}
+              >
+                {activeSession && !isSessionExpired(activeSession) ? (
+                  <Clock className="w-6 h-6" strokeWidth={1.75} />
+                ) : (
+                  <QrCode className="w-6 h-6" strokeWidth={1.75} />
+                )}
+              </button>
+              <span className={`text-[10px] mt-1 font-semibold ${activeTab === 'qr' ? 'text-indigo-600 font-bold' : 'text-slate-500'}`}>
+                Scan QR
+              </span>
+            </div>
+
+            {/* 4. My PT */}
+            <button
+              onClick={() => setActiveTab('pt')}
+              className={`w-full h-full flex flex-col items-center justify-center transition-colors ${
+                activeTab === 'pt' ? 'text-indigo-600 font-bold' : 'text-slate-500 hover:text-slate-900 font-semibold'
+              }`}
+            >
+              <UserCheck className="w-5 h-5" strokeWidth={1.75} />
+              <span className="text-[10px] mt-0.5 tracking-tight">My PT</span>
+            </button>
+
+            {/* 5. Plans */}
+            <button
+              onClick={() => setActiveTab('plans')}
+              className={`w-full h-full flex flex-col items-center justify-center transition-colors ${
+                activeTab === 'plans' ? 'text-indigo-600 font-bold' : 'text-slate-500 hover:text-slate-900 font-semibold'
+              }`}
+            >
+              <CreditCard className="w-5 h-5" strokeWidth={1.75} />
+              <span className="text-[10px] mt-0.5 tracking-tight">Plans</span>
+            </button>
           </div>
-
-          {/* 4. My PT */}
-          <button
-            onClick={() => setActiveTab('pt')}
-            className={`w-full h-full flex flex-col items-center justify-center transition-colors ${
-              activeTab === 'pt' ? 'text-indigo-600 font-bold' : 'text-slate-500 hover:text-slate-900 font-semibold'
-            }`}
-          >
-            <UserCheck className="w-5 h-5" strokeWidth={1.75} />
-            <span className="text-[10px] mt-0.5 tracking-tight">My PT</span>
-          </button>
-
-          {/* 5. Plans */}
-          <button
-            onClick={() => setActiveTab('plans')}
-            className={`w-full h-full flex flex-col items-center justify-center transition-colors ${
-              activeTab === 'plans' ? 'text-indigo-600 font-bold' : 'text-slate-500 hover:text-slate-900 font-semibold'
-            }`}
-          >
-            <CreditCard className="w-5 h-5" strokeWidth={1.75} />
-            <span className="text-[10px] mt-0.5 tracking-tight">Plans</span>
-          </button>
-        </div>
-      </nav>
+        </nav>
+      )}
 
       {/* QR Scanner Modal Triggered strictly from User Tap */}
       {currentUser && isScannerOpen && (
@@ -1240,6 +1299,57 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
                 type="button"
                 onClick={() => setShowAnnouncementsModal(false)}
                 className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QR Turnstile Scanner Locked Alert Modal */}
+      {scannerLockedAlert && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-6 border border-rose-200 shadow-2xl text-center space-y-4 animate-scale-up">
+            <div className="w-14 h-14 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto shadow-inner text-2xl">
+              🔒
+            </div>
+            <div className="space-y-1.5">
+              <h3 className="text-base font-black text-slate-900">QR Turnstile Scanner Locked</h3>
+              <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                {scannerLockedAlert}
+              </p>
+            </div>
+            <div className="space-y-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setScannerLockedAlert(null);
+                  setActiveTab('plans');
+                }}
+                className="w-full py-3 px-4 vision-btn-aurora text-white text-xs font-black rounded-xl shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <span>View Membership Plans</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+              {isFemaleClient && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setScannerLockedAlert(null);
+                    setWorkoutInitialSubTab('aerobics');
+                    setActiveTab('workouts');
+                  }}
+                  className="w-full py-2.5 px-4 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <Music className="w-4 h-4" />
+                  <span>Join Aerobics Studio Batch</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setScannerLockedAlert(null)}
+                className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-colors cursor-pointer"
               >
                 Close
               </button>

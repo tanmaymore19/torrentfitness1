@@ -1104,13 +1104,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch {}
 
       const formattedPhone = `+91 ${cleanPhone.slice(-10)}`;
+      const passwordHash = await hashPasswordPBKDF2(password);
+
       const newUser: UserAccount = {
         uid: cleanUser,
         username: cleanUser,
         usernameLower: cleanUser,
         authEmail,
         password,
+        passwordHash,
         displayName: displayName.trim(),
+        fullName: displayName.trim(),
         email: email.trim().toLowerCase(),
         phone: formattedPhone,
         mobileNumber: formattedPhone,
@@ -1125,6 +1129,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const newClientProfile: ClientProfile = {
         userId: cleanUser,
         displayName: displayName.trim(),
+        fullName: displayName.trim(),
         email: email.trim().toLowerCase(),
         phone: formattedPhone,
         photoUrl,
@@ -1136,11 +1141,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         fitnessGoal: fitnessGoal || 'General Fitness',
         membershipStatus: 'inactive',
         ptStatus: 'none',
+        passwordHash,
         createdAt: new Date().toISOString()
       };
 
-      await setDoc(userRef, newUser);
-      await setDoc(doc(db, 'clientProfiles', cleanUser), newClientProfile);
+      // Atomic Permanent Credential Storage across users/{uid}, usernames/{usernameLower}, clientProfiles/{uid}, and members/{uid}
+      const batch = writeBatch(db);
+      batch.set(userRef, newUser, { merge: true });
+      batch.set(doc(db, 'usernames', cleanUser), {
+        uid: cleanUser,
+        username: cleanUser,
+        usernameLower: cleanUser,
+        authEmail,
+        role: 'client',
+        claimedAt: new Date().toISOString()
+      }, { merge: true });
+      batch.set(doc(db, 'clientProfiles', cleanUser), newClientProfile, { merge: true });
+      batch.set(doc(db, 'members', cleanUser), { ...newUser, ...newClientProfile }, { merge: true });
+      await batch.commit();
 
       localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(newUser));
       sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(newUser));
@@ -1307,6 +1325,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           ? bio.trim()
           : 'Certified Trainer at Torrent Fitness';
       const timestamp = new Date().toISOString();
+      const passwordHash = await hashPasswordPBKDF2(password);
 
       const newUser: UserAccount = {
         uid: cleanUser,
@@ -1314,6 +1333,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         usernameLower: cleanUser,
         authEmail,
         password,
+        passwordHash,
         displayName: displayName.trim(),
         fullName: displayName.trim(),
         email: email.trim(),
@@ -1353,11 +1373,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         verificationStatus: 'pending_verification',
         isVerified: false,
         rating: 5.0,
+        passwordHash,
         createdAt: timestamp
       };
 
-      await setDoc(userRef, newUser);
-      await setDoc(doc(db, 'trainerProfiles', cleanUser), newTrainerProfile);
+      // Atomic Permanent Storage across users, usernames, trainerProfiles, and trainers
+      const batch = writeBatch(db);
+      batch.set(userRef, newUser, { merge: true });
+      batch.set(doc(db, 'usernames', cleanUser), {
+        uid: cleanUser,
+        username: cleanUser,
+        usernameLower: cleanUser,
+        authEmail,
+        role: 'trainer',
+        claimedAt: timestamp
+      }, { merge: true });
+      batch.set(doc(db, 'trainerProfiles', cleanUser), newTrainerProfile, { merge: true });
+      batch.set(doc(db, 'trainers', cleanUser), { ...newUser, ...newTrainerProfile }, { merge: true });
+      await batch.commit();
 
       localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(newUser));
       sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(newUser));

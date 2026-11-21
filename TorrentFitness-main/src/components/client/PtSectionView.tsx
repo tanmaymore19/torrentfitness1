@@ -1048,8 +1048,11 @@ export const PtSectionView: React.FC<PtSectionViewProps> = ({ onCheckoutModalTog
 
       {/* DEDICATED PT PLANS MODAL (PRE-LINKED TO CHOSEN TRAINER) */}
       {isPtPlansModalOpen && modalTrainer && createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fade-in touch-none overscroll-none">
-          <div className="w-full max-w-lg max-h-[88dvh] flex flex-col bg-white rounded-3xl border border-slate-100 shadow-2xl overflow-hidden text-slate-800 relative z-10">
+        <div
+          style={{ zIndex: 99999 }}
+          className="fixed inset-0 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fade-in overscroll-none"
+        >
+          <div className="w-full max-w-lg max-h-[85dvh] sm:max-h-[88dvh] flex flex-col bg-white rounded-3xl border border-slate-100 shadow-2xl overflow-hidden text-slate-800 relative z-10">
             {/* Modal Header */}
             <div className="shrink-0 p-5 bg-white border-b border-slate-100 flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">

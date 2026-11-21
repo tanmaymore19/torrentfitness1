@@ -602,16 +602,10 @@ export async function getPaymentGateways(): Promise<PaymentGateway[]> {
       }
     }
 
-    // Clean up duplicate non-canonical documents in the background
-    if (deleteDocIds.length > 0) {
-      for (const idToDelete of deleteDocIds) {
-        try {
-          await deleteDoc(doc(db, 'paymentGateways', idToDelete));
-        } catch (e) {
-          console.warn('Could not delete duplicate gateway doc:', idToDelete, e);
-        }
-      }
-    }
+    // Clean up duplicate non-canonical documents in the background:
+    // STRICT ANTI-DELETE LOCK: Automated background deletions disabled.
+    // Deletion is strictly permitted ONLY via explicit manual Admin prompt.
+    // Documents remain preserved permanently in Firestore.
 
     const decryptedList = await Promise.all(deduplicatedList.map(decryptGateway));
     return decryptedList;
@@ -1475,9 +1469,9 @@ export async function verifyAndActivateOnlinePayment(
         updatedTimestamp: serverTimestamp(),
         ...(input.ptIncluded
           ? {
-              ptStatus: 'active',
-              ...(input.ptTrainerId ? { assignedTrainerId: input.ptTrainerId } : {}),
-              ...(input.ptTrainerName ? { assignedTrainerName: input.ptTrainerName } : {})
+              ptStatus: 'pending_approval',
+              ...(input.ptTrainerId ? { requestedTrainerId: input.ptTrainerId } : {}),
+              ...(input.ptTrainerName ? { requestedTrainerName: input.ptTrainerName } : {})
             }
           : {})
       });
@@ -1515,9 +1509,9 @@ export async function verifyAndActivateOnlinePayment(
         updatedTimestamp: serverTimestamp(),
         ...(input.ptIncluded
           ? {
-              ptStatus: 'active',
-              ...(input.ptTrainerId ? { assignedTrainerId: input.ptTrainerId } : {}),
-              ...(input.ptTrainerName ? { assignedTrainerName: input.ptTrainerName } : {})
+              ptStatus: 'pending_approval',
+              ...(input.ptTrainerId ? { requestedTrainerId: input.ptTrainerId } : {}),
+              ...(input.ptTrainerName ? { requestedTrainerName: input.ptTrainerName } : {})
             }
           : {})
       });
@@ -1527,6 +1521,34 @@ export async function verifyAndActivateOnlinePayment(
         batch.set(doc(db, 'members', id), activePayload, { merge: true });
         batch.set(doc(db, 'users', id), activePayload, { merge: true });
       });
+    }
+
+    // Queue PT Request for Master Admin Approval when PT add-on is included in membership checkout
+    if (input.ptIncluded) {
+      const ptReqId = `ptreq_${input.clientId}_${Date.now()}`;
+      const ptReqPayload = sanitizeFirestorePayload({
+        id: ptReqId,
+        requestId: ptReqId,
+        transactionId: cleanPaymentId || transaction.id,
+        clientId: input.clientId,
+        clientName: input.clientName,
+        clientPhone: input.clientPhone || '',
+        clientEmail: input.clientEmail || '',
+        trainerId: input.ptTrainerId || '',
+        trainerName: input.ptTrainerName || '',
+        requestedTrainerId: input.ptTrainerId || '',
+        requestedTrainerName: input.ptTrainerName || '',
+        durationMonths: durationMonths,
+        paymentMode: 'online',
+        paymentStatus: 'PAID',
+        status: 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT',
+        queueStatus: 'PENDING_ADMIN_APPROVAL',
+        amount: input.ptAmount || (PT_MONTHLY_RATE * durationMonths),
+        requestedAt: nowIso,
+        createdAt: nowIso
+      });
+      batch.set(doc(db, 'pt_requests', ptReqId), ptReqPayload, { merge: true });
+      batch.set(doc(db, 'ptRequests', ptReqId), ptReqPayload, { merge: true });
     }
 
     // Ensure transaction written to transactions/{txId} includes all required fields
@@ -1557,91 +1579,134 @@ export async function verifyAndActivateOnlinePayment(
     const planDuration =
       (input.metadata?.planDuration as 'monthly' | 'quarterly') ||
       (durationMonths >= 3 ? 'quarterly' : 'monthly');
-    const subId = `aerosub_${input.clientId}_${Date.now()}`;
+    const aeroReqId = `aeroreq_${input.clientId}_${Date.now()}`;
 
-    await setDoc(
-      doc(db, 'aerobicsSubscriptions', subId),
-      sanitizeFirestorePayload({
-        id: subId,
-        clientId: input.clientId,
-        clientName: input.clientName,
-        clientPhone: input.clientPhone || '',
-        batchId,
-        batchName,
-        slotTiming,
-        instructorName,
-        planDuration,
-        durationMonths,
-        amountPaid: enforcedPaid,
-        originalPrice: input.originalPrice,
-        couponCode: input.couponCode || '',
-        discountAmount: enforcedDiscount,
-        paymentMode: 'online',
-        gatewayName: input.gatewayName,
-        referenceId: cleanPaymentId,
-        status: 'active',
-        startDate,
-        endDate,
-        createdAt: nowIso
-      }),
-      { merge: true }
-    );
+    // Record online payment in transactions
+    const txSyncPayload = sanitizeFirestorePayload({
+      clientId: input.clientId,
+      clientName: input.clientName,
+      clientUsername: input.metadata?.clientUsername || input.clientId,
+      category: 'AEROBICS',
+      categoryType: 'AEROBICS',
+      planName: batchName,
+      amount: enforcedPaid,
+      finalAmount: enforcedPaid,
+      status: 'COMPLETED',
+      paymentStatus: 'PAID',
+      verificationStatus: 'ACTIVE',
+      paymentId: cleanPaymentId,
+      referenceId: cleanPaymentId,
+      updatedAt: serverTimestamp()
+    });
+    await setDoc(doc(db, 'transactions', transaction.id), txSyncPayload, { merge: true });
+    await setDoc(doc(db, 'paymentTransactions', transaction.id), txSyncPayload, { merge: true });
 
-    if (batchId) {
-      try {
-        await updateDoc(doc(db, 'aerobicsBatches', batchId), {
-          enrolledClientIds: arrayUnion(input.clientId)
-        });
-      } catch (e) {
-        console.warn('Could not append clientId to aerobicsBatches:', e);
-      }
-    }
+    // Send Aerobics Request to Admin Approval Queue (Status remains PENDING until Admin approves)
+    const aeroReqDoc = sanitizeFirestorePayload({
+      id: aeroReqId,
+      requestId: aeroReqId,
+      transactionId: cleanPaymentId || transaction.id,
+      paymentId: cleanPaymentId,
+      referenceId: cleanPaymentId,
+      status: 'PENDING',
+      queueStatus: 'PENDING_ADMIN_APPROVAL',
+      paymentMode: 'online',
+      paymentStatus: 'PAID',
+      clientId: input.clientId,
+      clientName: input.clientName,
+      clientPhone: input.clientPhone || '',
+      clientEmail: input.clientEmail || '',
+      batchId,
+      batchName,
+      slotTiming,
+      instructorName,
+      planDuration,
+      durationMonths,
+      amount: enforcedPaid,
+      amountPaid: enforcedPaid,
+      originalPrice: input.originalPrice,
+      couponCode: input.couponCode || '',
+      discountAmount: enforcedDiscount,
+      discountPercent: input.discountPercent || 0,
+      startDate,
+      endDate,
+      requestedAt: nowIso,
+      createdAt: nowIso
+    });
+    await setDoc(doc(db, 'aerobics_requests', aeroReqId), aeroReqDoc, { merge: true });
 
+    // Mark pending on client profile (does NOT activate aerobicsStatus until Admin approves)
     await setDoc(
       doc(db, 'clientProfiles', input.clientId),
       sanitizeFirestorePayload({
-        aerobicsStatus: 'active',
-        aerobicsBatchId: batchId,
-        aerobicsBatchName: batchName,
-        aerobicsSlotTiming: slotTiming,
-        aerobicsPlanType: planDuration,
-        aerobicsStartDate: startDate,
-        aerobicsEndDate: endDate
+        aerobicsRequestStatus: 'pending',
+        pendingAerobicsRequestId: aeroReqId,
+        pendingAerobicsBatchId: batchId,
+        pendingAerobicsBatchName: batchName,
+        pendingAerobicsSlotTiming: slotTiming,
+        pendingAerobicsPlanType: planDuration
       }),
       { merge: true }
     );
   } else if (input.purpose === 'personal_training') {
-    const ptRequestId = input.metadata?.ptRequestId || input.planId || '';
+    const ptRequestId = input.metadata?.ptRequestId || `ptreq_${input.clientId}_${Date.now()}`;
     const trainerId = input.ptTrainerId || input.metadata?.trainerId || '';
     const trainerName = input.ptTrainerName || input.metadata?.trainerName || '';
 
-    if (ptRequestId) {
-      try {
-        await setDoc(
-          doc(db, 'ptRequests', ptRequestId),
-          {
-            status: 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT',
-            paymentMode: 'online',
-            paidStatus: 'paid',
-            transactionId: cleanPaymentId || transaction.id,
-            updatedAt: nowIso
-          },
-          { merge: true }
-        );
-      } catch (e) {
-        console.warn('Could not update ptRequest:', e);
-      }
-    }
+    // Record online payment in transactions
+    const txSyncPayload = sanitizeFirestorePayload({
+      clientId: input.clientId,
+      clientName: input.clientName,
+      clientUsername: input.metadata?.clientUsername || input.clientId,
+      category: 'PERSONAL_TRAINING',
+      categoryType: 'PERSONAL_TRAINING',
+      planName: input.planName || input.itemTitle,
+      amount: enforcedPaid,
+      finalAmount: enforcedPaid,
+      status: 'COMPLETED',
+      paymentStatus: 'PAID',
+      verificationStatus: 'ACTIVE',
+      paymentId: cleanPaymentId,
+      referenceId: cleanPaymentId,
+      updatedAt: serverTimestamp()
+    });
+    await setDoc(doc(db, 'transactions', transaction.id), txSyncPayload, { merge: true });
+    await setDoc(doc(db, 'paymentTransactions', transaction.id), txSyncPayload, { merge: true });
 
-    await setDoc(
-      doc(db, 'clientProfiles', input.clientId),
-      sanitizeFirestorePayload({
-        ptStatus: 'pending_assignment',
+    // PT Request sent to Admin Approval Queue
+    const ptReqDoc = sanitizeFirestorePayload({
+      id: ptRequestId,
+      requestId: ptRequestId,
+      transactionId: cleanPaymentId || transaction.id,
+      paymentId: cleanPaymentId,
+      referenceId: cleanPaymentId,
+      clientId: input.clientId,
+      clientName: input.clientName,
+      clientPhone: input.clientPhone || '',
+      clientEmail: input.clientEmail || '',
+      trainerId,
+      trainerName,
+      requestedTrainerId: trainerId,
+      requestedTrainerName: trainerName,
+      durationMonths,
+      paymentMode: 'online',
+      paymentStatus: 'PAID',
+      status: 'PAYMENT_SUCCESS_NEEDS_ASSIGNMENT',
+      queueStatus: 'PENDING_ADMIN_APPROVAL',
+      amount: enforcedPaid,
+      requestedAt: nowIso,
+      createdAt: nowIso
+    });
+    await Promise.allSettled([
+      setDoc(doc(db, 'pt_requests', ptRequestId), ptReqDoc, { merge: true }),
+      setDoc(doc(db, 'ptRequests', ptRequestId), ptReqDoc, { merge: true }),
+      setDoc(doc(db, 'clientProfiles', input.clientId), sanitizeFirestorePayload({
+        ptStatus: 'pending_approval',
+        pendingPtRequestId: ptRequestId,
         requestedTrainerId: trainerId,
         requestedTrainerName: trainerName
-      }),
-      { merge: true }
-    );
+      }), { merge: true })
+    ]);
   }
 
   return transaction;
@@ -1819,6 +1884,69 @@ export async function submitOfflinePaymentRequest(
     setDoc(doc(db, 'transactions', txId), transaction)
   ]);
 
+  // If request includes PT or purpose is PT, record in PT approval queue
+  if (input.purpose === 'personal_training' || input.ptIncluded) {
+    const ptReqDoc = sanitizeFirestorePayload({
+      id: txId,
+      requestId: txId,
+      transactionId: txId,
+      referenceId: refId,
+      status: 'PENDING',
+      paymentMode: 'OFFLINE_CASH',
+      paymentStatus: 'PENDING',
+      clientId: input.clientId,
+      clientName: input.clientName,
+      clientPhone: input.clientPhone || '',
+      clientEmail: input.clientEmail || '',
+      trainerId: input.ptTrainerId || '',
+      trainerName: input.ptTrainerName || '',
+      requestedTrainerId: input.ptTrainerId || '',
+      requestedTrainerName: input.ptTrainerName || '',
+      durationMonths: input.durationMonths,
+      amount: enforcedFinal,
+      requestedAt: nowIso,
+      createdAt: nowIso
+    });
+    await Promise.allSettled([
+      setDoc(doc(db, 'pt_requests', txId), ptReqDoc, { merge: true }),
+      setDoc(doc(db, 'ptRequests', txId), ptReqDoc, { merge: true })
+    ]);
+  }
+
+  // If request purpose is Aerobics, record in Aerobics approval queue
+  if (input.purpose === 'aerobics') {
+    const aeroReqDoc = sanitizeFirestorePayload({
+      id: txId,
+      requestId: txId,
+      transactionId: txId,
+      referenceId: refId,
+      status: 'PENDING',
+      paymentMode: 'offline_cash',
+      paymentStatus: 'PENDING',
+      clientId: input.clientId,
+      clientName: input.clientName,
+      clientPhone: input.clientPhone || '',
+      clientEmail: input.clientEmail || '',
+      batchId: input.metadata?.batchId || input.planId || '',
+      batchName: input.metadata?.batchName || input.planName || input.itemTitle,
+      slotTiming: input.metadata?.slotTiming || '',
+      instructorName: input.metadata?.instructorName || 'Coach Pooja Sharma',
+      planDuration: input.metadata?.planDuration || (input.durationMonths >= 3 ? 'quarterly' : 'monthly'),
+      durationMonths: input.durationMonths,
+      amount: enforcedFinal,
+      amountPaid: enforcedFinal,
+      originalPrice: input.originalPrice,
+      couponCode: input.couponCode || '',
+      discountAmount: enforcedDiscount,
+      discountPercent: input.discountPercent || 0,
+      startDate,
+      endDate,
+      requestedAt: nowIso,
+      createdAt: nowIso
+    });
+    await setDoc(doc(db, 'aerobics_requests', txId), aeroReqDoc, { merge: true });
+  }
+
   // Mark client profile and members record as having a pending offline request
   // Membership strictly remains INACTIVE (or unchanged if renewing active) until Admin manually approves
   try {
@@ -1827,7 +1955,9 @@ export async function submitOfflinePaymentRequest(
       pendingOfflineRequestId: txId,
       offlineRequestStatus: 'pending',
       offlineRejectionReason: '',
-      membershipStatus: isCurrentlyActive ? 'active' : 'inactive'
+      membershipStatus: isCurrentlyActive ? 'active' : 'inactive',
+      ...(input.purpose === 'aerobics' ? { aerobicsRequestStatus: 'pending', pendingAerobicsRequestId: txId } : {}),
+      ...(input.purpose === 'personal_training' || input.ptIncluded ? { ptStatus: 'pending_approval' } : {})
     });
 
     await Promise.allSettled([

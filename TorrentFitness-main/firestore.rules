@@ -105,6 +105,11 @@ rules_version = '2';
 // Fields:
 //   - Member registration and plan enrollment requests
 //
+// Collection: aerobics_requests / aerobicsRequests
+// Document ID: {requestId}
+// Fields:
+//   - Aerobics studio enrollment and batch registration requests
+//
 // ===============================================================
 
 service cloud.firestore {
@@ -300,6 +305,14 @@ service cloud.firestore {
     }
 
     match /aerobicsSubscriptions/{subId} {
+      allow read, write: if true;
+    }
+
+    match /aerobics_requests/{requestId} {
+      allow read, write: if true;
+    }
+
+    match /aerobicsRequests/{requestId} {
       allow read, write: if true;
     }
 

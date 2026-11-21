@@ -6,6 +6,7 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  getDoc,
   onSnapshot
 } from 'firebase/firestore';
 import {
@@ -49,11 +50,13 @@ const CATEGORIES: AerobicsCategory[] = [
 const INTENSITIES: AerobicsIntensity[] = ['Low', 'Moderate', 'High', 'Peak Burn'];
 
 export const AerobicsAdminManager: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'batches' | 'enrollments' | 'ledger'>('batches');
+  const [activeTab, setActiveTab] = useState<'batches' | 'enrollments' | 'ledger' | 'requests'>('batches');
   const [batches, setBatches] = useState<AerobicsBatch[]>(INITIAL_AEROBICS_BATCHES);
   const [subscriptions, setSubscriptions] = useState<AerobicsSubscription[]>([]);
   const [clients, setClients] = useState<ClientProfile[]>([]);
   const [trainers, setTrainers] = useState<TrainerProfile[]>(INITIAL_TRAINERS);
+  const [aerobicsRequests, setAerobicsRequests] = useState<any[]>([]);
+  const [isProcessingAction, setIsProcessingAction] = useState<boolean>(false);
   const [statusBanner, setStatusBanner] = useState<string>('');
   const [pendingDeleteAction, setPendingDeleteAction] = useState<{
     title: string;
@@ -136,11 +139,22 @@ export const AerobicsAdminManager: React.FC = () => {
       (err) => console.warn('Aerobics trainers listener note:', err)
     );
 
+    const unsubRequests = onSnapshot(
+      collection(db, 'aerobics_requests'),
+      (snap) => {
+        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        list.sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+        setAerobicsRequests(list);
+      },
+      (err) => console.warn('Aerobics requests listener note:', err)
+    );
+
     return () => {
       unsubBatches();
       unsubSubs();
       unsubClients();
       unsubTrainers();
+      unsubRequests();
     };
   }, []);
 
@@ -395,6 +409,183 @@ export const AerobicsAdminManager: React.FC = () => {
       batches.some((b) => b.active && (b.enrolledClientIds || []).includes(c.userId))
   ).length;
 
+  const pendingRequests = aerobicsRequests.filter((r) => r.status === 'PENDING');
+
+  const calculateFutureExpiry = (startDateStr: string, months: number): string => {
+    const d = new Date(`${startDateStr}T00:00:00`);
+    d.setMonth(d.getMonth() + months);
+    return d.toISOString().split('T')[0];
+  };
+
+  const handleApproveAerobicsRequest = async (req: any) => {
+    if (isProcessingAction) return;
+    setIsProcessingAction(true);
+    try {
+      const clientRef = doc(db, 'clientProfiles', req.clientId);
+      const clientSnap = await getDoc(clientRef);
+      const clientData = clientSnap.exists() ? clientSnap.data() : null;
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      const isCurrentlyActive =
+        clientData?.aerobicsStatus === 'active' &&
+        clientData?.aerobicsEndDate &&
+        clientData.aerobicsEndDate >= todayStr;
+
+      let effectiveStartDate = todayStr;
+      let effectiveEndDate = '';
+      const months = Number(req.durationMonths) || (req.planDuration === 'quarterly' ? 3 : 1);
+
+      if (isCurrentlyActive) {
+        // Queued enrollment
+        const d = new Date(`${clientData.aerobicsEndDate}T00:00:00`);
+        d.setDate(d.getDate() + 1);
+        effectiveStartDate = d.toISOString().split('T')[0];
+        effectiveEndDate = calculateFutureExpiry(effectiveStartDate, months);
+
+        await setDoc(
+          clientRef,
+          {
+            queuedAerobicsBatchId: req.batchId,
+            queuedAerobicsBatchName: req.batchName,
+            queuedAerobicsSlotTiming: req.slotTiming || '',
+            queuedAerobicsInstructorName: req.instructorName || 'Coach Pooja Sharma',
+            queuedAerobicsStartDate: effectiveStartDate,
+            queuedAerobicsEndDate: effectiveEndDate,
+            queuedAerobicsPlanDuration: req.planDuration || 'monthly',
+            aerobicsRequestStatus: 'approved',
+            pendingAerobicsRequestId: ''
+          },
+          { merge: true }
+        );
+      } else {
+        // Immediate active enrollment
+        effectiveEndDate = calculateFutureExpiry(effectiveStartDate, months);
+        await setDoc(
+          clientRef,
+          {
+            aerobicsStatus: 'active',
+            aerobicsBatchId: req.batchId,
+            aerobicsBatchName: req.batchName,
+            aerobicsSlotTiming: req.slotTiming || '',
+            aerobicsInstructorName: req.instructorName || 'Coach Pooja Sharma',
+            aerobicsStartDate: effectiveStartDate,
+            aerobicsEndDate: effectiveEndDate,
+            aerobicsPlanDuration: req.planDuration || 'monthly',
+            aerobicsRequestStatus: 'approved',
+            pendingAerobicsRequestId: ''
+          },
+          { merge: true }
+        );
+
+        // Add to batch enrolledClientIds
+        const batchRef = doc(db, 'aerobicsBatches', req.batchId);
+        const batchDoc = batches.find((b) => b.id === req.batchId);
+        const enrolled = Array.isArray(batchDoc?.enrolledClientIds) ? batchDoc.enrolledClientIds : [];
+        if (!enrolled.includes(req.clientId)) {
+          await setDoc(batchRef, { enrolledClientIds: [...enrolled, req.clientId] }, { merge: true });
+        }
+      }
+
+      // Record in aerobicsSubscriptions
+      const subId = `sub_aero_${req.id || Date.now()}`;
+      await setDoc(
+        doc(db, 'aerobicsSubscriptions', subId),
+        {
+          id: subId,
+          clientId: req.clientId,
+          clientName: req.clientName,
+          batchId: req.batchId,
+          batchName: req.batchName,
+          slotTiming: req.slotTiming || '',
+          instructorName: req.instructorName || 'Coach Pooja Sharma',
+          planDuration: req.planDuration || 'monthly',
+          durationMonths: months,
+          amountPaid: req.amount || req.amountPaid || 0,
+          startDate: effectiveStartDate,
+          endDate: effectiveEndDate,
+          status: 'active',
+          paymentMode: req.paymentMode || 'cash',
+          createdAt: new Date().toISOString()
+        },
+        { merge: true }
+      );
+
+      // Update aerobics_requests doc
+      await setDoc(
+        doc(db, 'aerobics_requests', req.id),
+        {
+          status: 'APPROVED',
+          queueStatus: 'APPROVED_AND_ACTIVATED',
+          approvedAt: new Date().toISOString(),
+          verifiedBy: 'Master Admin'
+        },
+        { merge: true }
+      );
+
+      // Ensure transaction record is marked completed
+      const nowIso = new Date().toISOString();
+      const txPayload = {
+        id: req.id,
+        clientId: req.clientId,
+        clientName: req.clientName,
+        clientPhone: req.clientPhone || '',
+        clientEmail: req.clientEmail || '',
+        itemTitle: `Aerobics - ${req.batchName} (${req.planDuration || 'Monthly'})`,
+        amount: req.amount || req.amountPaid || 0,
+        finalAmount: req.amount || req.amountPaid || 0,
+        originalPrice: req.originalPrice || req.amount || 0,
+        status: 'COMPLETED',
+        paymentStatus: 'PAID',
+        paymentMode: req.paymentMode === 'online' ? 'online' : 'cash',
+        gatewayProvider: req.paymentMode === 'online' ? (req.gatewayProvider || 'razorpay') : 'offline_cash',
+        verifiedBy: 'Master Admin',
+        verifiedAt: nowIso,
+        createdAt: req.createdAt || nowIso,
+        type: 'aerobics_subscription'
+      };
+      await setDoc(doc(db, 'transactions', req.id), txPayload, { merge: true });
+      await setDoc(doc(db, 'paymentTransactions', req.id), txPayload, { merge: true });
+
+      showToast(`Approved Aerobics batch enrollment for ${req.clientName}!`);
+    } catch (err: any) {
+      showToast('Error approving request: ' + err.message);
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+
+  const handleDeclineAerobicsRequest = async (req: any) => {
+    if (isProcessingAction) return;
+    setIsProcessingAction(true);
+    try {
+      await setDoc(
+        doc(db, 'aerobics_requests', req.id),
+        {
+          status: 'DECLINED',
+          queueStatus: 'DECLINED',
+          declinedAt: new Date().toISOString(),
+          verifiedBy: 'Master Admin'
+        },
+        { merge: true }
+      );
+
+      await setDoc(
+        doc(db, 'clientProfiles', req.clientId),
+        {
+          aerobicsRequestStatus: 'declined',
+          pendingAerobicsRequestId: ''
+        },
+        { merge: true }
+      );
+
+      showToast(`Declined Aerobics request for ${req.clientName}.`);
+    } catch (err: any) {
+      showToast('Error declining request: ' + err.message);
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+
   return (
     <div className="space-y-5 animate-fade-in">
       {/* Header Banner */}
@@ -454,6 +645,22 @@ export const AerobicsAdminManager: React.FC = () => {
             }`}
           >
             Subscriptions Ledger ({subscriptions.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('requests')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+              activeTab === 'requests'
+                ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-sm'
+                : 'bg-white text-amber-800 border border-amber-300 hover:bg-amber-50'
+            }`}
+          >
+            <span>Pending Requests</span>
+            {pendingRequests.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-rose-600 text-white text-[10px] font-black animate-pulse">
+                {pendingRequests.length}
+              </span>
+            )}
           </button>
         </div>
       </div>
@@ -853,6 +1060,114 @@ export const AerobicsAdminManager: React.FC = () => {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 4: PENDING AEROBICS BATCH ENROLLMENT REQUESTS */}
+      {activeTab === 'requests' && (
+        <div className="p-5 rounded-3xl bg-white/95 border border-slate-200/90 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+            <div>
+              <h4 className="text-sm font-black text-slate-900">
+                Pending Aerobics Batch Requests ({pendingRequests.length})
+              </h4>
+              <p className="text-xs text-slate-600 mt-0.5">
+                Review and approve client batch enrollments (both Online Gateway payments and Offline Cash Desk requests).
+              </p>
+            </div>
+            {pendingRequests.length > 0 && (
+              <span className="px-3 py-1 rounded-full text-xs font-black bg-amber-100 text-amber-900 border border-amber-300 self-start sm:self-auto">
+                ⚠️ {pendingRequests.length} Pending Verification
+              </span>
+            )}
+          </div>
+
+          {pendingRequests.length === 0 ? (
+            <div className="p-12 text-center bg-slate-50 rounded-2xl border border-slate-200 text-xs text-slate-500 space-y-1">
+              <Sparkles className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+              <p className="font-bold text-slate-700">All caught up! No pending Aerobics requests.</p>
+              <p className="text-[11px] text-slate-400">New batch enrollments from female clients will appear here for verification.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {pendingRequests.map((req) => {
+                const isPaidOnline = req.paymentMode === 'online' || req.paymentStatus === 'PAID';
+                return (
+                  <div
+                    key={req.id}
+                    className="p-5 rounded-3xl border border-slate-200 bg-white shadow-xs space-y-3.5 hover:border-amber-300 transition-all"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-black text-slate-900">{req.clientName}</span>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                            isPaidOnline
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : 'bg-amber-50 text-amber-800 border-amber-300'
+                          }`}>
+                            {isPaidOnline ? '💳 Online Paid' : '💵 Cash Desk Pending'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          Phone: <strong>{req.clientPhone || 'N/A'}</strong> {req.clientEmail ? `• ${req.clientEmail}` : ''}
+                        </p>
+                      </div>
+                      <span className="text-base font-black text-slate-900 tabular-nums">
+                        ₹{Number(req.amount || req.amountPaid || 0).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+
+                    <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100 text-xs space-y-1.5">
+                      <div className="flex items-center justify-between text-slate-700 font-semibold">
+                        <span>Batch:</span>
+                        <strong className="text-slate-900 font-black">{req.batchName}</strong>
+                      </div>
+                      <div className="flex items-center justify-between text-slate-700 font-semibold">
+                        <span>Slot Timing:</span>
+                        <span className="text-rose-700 font-bold">{req.slotTiming || 'Morning / Evening'}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-slate-700 font-semibold">
+                        <span>Instructor:</span>
+                        <span className="text-slate-800 font-bold">{req.instructorName || 'Coach Pooja Sharma'}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-slate-700 font-semibold">
+                        <span>Duration:</span>
+                        <span className="text-indigo-700 font-bold uppercase">{req.planDuration || 'Monthly'} ({req.durationMonths || 1}M)</span>
+                      </div>
+                      {req.couponCode && (
+                        <div className="flex items-center justify-between text-emerald-700 font-bold">
+                          <span>Coupon Applied:</span>
+                          <span className="font-mono">{req.couponCode}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleApproveAerobicsRequest(req)}
+                        disabled={isProcessingAction}
+                        className="flex-1 py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-bold shadow-md flex items-center justify-center gap-1.5 transition-all active:scale-[0.98] disabled:opacity-50"
+                      >
+                        <CheckCircle className="w-4 h-4" />
+                        <span>Approve &amp; Activate Batch</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeclineAerobicsRequest(req)}
+                        disabled={isProcessingAction}
+                        className="py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 border border-slate-200 text-xs font-bold transition-all disabled:opacity-50"
+                      >
+                        <X className="w-4 h-4" />
+                        <span>Decline</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

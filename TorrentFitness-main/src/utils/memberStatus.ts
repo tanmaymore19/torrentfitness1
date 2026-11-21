@@ -1,9 +1,9 @@
 /**
- * Shared Membership Status Utility
- * Consistently determines whether a client membership is active across both Client and Admin apps.
- * Recognizes membershipStatus ('ACTIVE' | 'active'), status ('ACTIVE' | 'active'), isActive === true,
- * and future planExpiryDate / membershipEndDate.
+ * Shared Membership & Attendance Status Utility
+ * Consistently determines whether a client membership or aerobics enrollment is active across both Client and Admin apps.
+ * Implements strict canonical unlock rules for QR Attendance Scanner.
  */
+
 export function isClientActiveMembership(c: any): boolean {
   if (!c || c.isSelfDeleted) return false;
 
@@ -36,4 +36,79 @@ export function isClientActiveMembership(c: any): boolean {
   }
 
   return false;
+}
+
+/**
+ * Determines whether a client has an active Aerobics studio enrollment.
+ */
+export function isClientActiveAerobics(c: any): boolean {
+  if (!c || c.isSelfDeleted) return false;
+
+  const status = String(c.aerobicsStatus || '').trim().toLowerCase();
+  if (status === 'active') return true;
+
+  const expiry = c.aerobicsEndDate || c.aerobicsExpiryDate;
+  if (expiry && expiry !== '-') {
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (expiry >= todayStr && status !== 'inactive' && status !== 'expired' && status !== 'cancelled') {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export interface QrUnlockResult {
+  unlocked: boolean;
+  reason?: string;
+  isFemale: boolean;
+  hasActiveGym: boolean;
+  hasActiveAerobics: boolean;
+}
+
+/**
+ * CANONICAL QR ATTENDANCE SCANNER UNLOCK RULES:
+ * - Male Clients: Unlocked ONLY if valid unexpired Gym Membership is ACTIVE.
+ * - Female Clients: Unlocked if EITHER Gym Membership is ACTIVE OR Aerobics Batch is ACTIVE.
+ */
+export function isQrScannerUnlocked(profile: any, user?: any): QrUnlockResult {
+  const gender = (profile?.gender || user?.gender || '').trim().toLowerCase();
+  const isFemale = gender === 'female';
+
+  const hasActiveGym = isClientActiveMembership(profile) || isClientActiveMembership(user);
+  const hasActiveAerobics = isClientActiveAerobics(profile) || isClientActiveAerobics(user);
+
+  if (isFemale) {
+    if (hasActiveGym || hasActiveAerobics) {
+      return {
+        unlocked: true,
+        isFemale: true,
+        hasActiveGym,
+        hasActiveAerobics
+      };
+    }
+    return {
+      unlocked: false,
+      reason: 'QR Scanner Locked: An active Gym Membership or Aerobics Batch is required to mark attendance.',
+      isFemale: true,
+      hasActiveGym: false,
+      hasActiveAerobics: false
+    };
+  } else {
+    if (hasActiveGym) {
+      return {
+        unlocked: true,
+        isFemale: false,
+        hasActiveGym: true,
+        hasActiveAerobics: false
+      };
+    }
+    return {
+      unlocked: false,
+      reason: 'QR Scanner Locked: An active Gym Membership is required to mark attendance.',
+      isFemale: false,
+      hasActiveGym: false,
+      hasActiveAerobics: false
+    };
+  }
 }
