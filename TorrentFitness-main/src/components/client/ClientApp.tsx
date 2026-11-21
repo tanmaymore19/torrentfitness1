@@ -1089,7 +1089,7 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
 
       {/* Tier 3: Fixed Bottom Navigation Dock: Anchored outside scroll view */}
       {!isCheckoutModalActive && (
-        <nav className="shrink-0 z-40 w-full bg-white/95 backdrop-blur-md border-t border-slate-200/90 shadow-[0_-10px_25px_-5px_rgba(0,0,0,0.06)] pb-[max(env(safe-area-inset-bottom,16px),10px)] pt-2">
+        <nav className={`shrink-0 z-40 w-full bg-white/95 backdrop-blur-md border-t border-slate-200/90 shadow-[0_-10px_25px_-5px_rgba(0,0,0,0.06)] pb-[max(env(safe-area-inset-bottom,16px),10px)] pt-2 ${isCheckoutModalActive ? 'hidden !hidden' : ''}`}>
           <div className="w-full h-16 grid grid-cols-5 items-center px-1">
             {/* 1. Home */}
             <button

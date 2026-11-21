@@ -334,12 +334,16 @@ body.chat-modal-open nav,
 body.chat-modal-open #root nav,
 body.checkout-modal-open nav.fixed,
 body.checkout-modal-open nav,
-body.checkout-modal-open #root nav {
+body.checkout-modal-open #root nav,
+html:has(body.checkout-modal-open) nav,
+html:has(.checkout-modal-open) nav {
   display: none !important;
   visibility: hidden !important;
   pointer-events: none !important;
   opacity: 0 !important;
 }
+
+/* Cache-bust build timestamp: 2026-11-21T12:00:00Z */
 
 /* Cyberpunk / High-Tech QR Scanner Laser Scanline Animation */
 @keyframes qrLaserSweep {

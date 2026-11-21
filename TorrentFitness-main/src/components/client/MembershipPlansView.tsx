@@ -723,8 +723,8 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
       {/* 2-STEP CHECKOUT MODAL UPON CLICKING "BUY NOW" */}
       {isCheckoutModalOpen && selectedPlan && createPortal(
         <div
-          style={{ zIndex: 99999 }}
-          className="fixed inset-0 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fade-in overscroll-none"
+          style={{ zIndex: 999999 }}
+          className="fixed inset-0 z-[999999] flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fade-in overscroll-none"
         >
           <div className="w-full max-w-md max-h-[85dvh] sm:max-h-[88dvh] flex flex-col bg-white rounded-3xl border border-slate-100 shadow-2xl overflow-hidden text-slate-800 relative z-10">
             {/* Modal Header with 2-Step Progress Indicator (Fixed at Top) */}

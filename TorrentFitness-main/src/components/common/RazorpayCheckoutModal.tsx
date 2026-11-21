@@ -848,7 +848,10 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fade-in touch-none overscroll-none">
+    <div
+      style={{ zIndex: 999999 }}
+      className="fixed inset-0 z-[999999] flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fade-in touch-none overscroll-none"
+    >
       <div className="w-full max-w-lg max-h-[88dvh] flex flex-col bg-white rounded-3xl p-6 border border-slate-100 shadow-2xl text-slate-800 space-y-4 relative overflow-hidden z-10">
         {/* Soft Background Accent */}
         <div className="absolute -right-10 -top-10 w-44 h-44 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
