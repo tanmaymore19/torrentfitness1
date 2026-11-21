@@ -1,6 +1,14 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, setPersistence, browserLocalPersistence } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer, Firestore } from 'firebase/firestore';
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  getFirestore,
+  doc,
+  getDocFromServer,
+  Firestore
+} from 'firebase/firestore';
 import { getStorage, FirebaseStorage } from 'firebase/storage';
 import fallbackConfig from '../firebase-applet-config.json';
 import { withTimeout } from './services/cacheService';
@@ -54,18 +62,27 @@ try {
 
 export const app = appInstance;
 
-// Defensive Firestore initialization: binds to live named database ID with fallback to default
+// Defensive Firestore initialization: enables IndexedDB persistent local cache across multiple tabs
 let firestoreInstance: Firestore;
 try {
+  const cacheSettings = {
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager()
+    })
+  };
   if (firebaseConfig.firestoreDatabaseId) {
-    firestoreInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    firestoreInstance = initializeFirestore(app, cacheSettings, firebaseConfig.firestoreDatabaseId);
   } else {
-    firestoreInstance = getFirestore(app);
+    firestoreInstance = initializeFirestore(app, cacheSettings);
   }
 } catch (err) {
-  console.warn('[Firebase] Named database init failed, falling back to default database:', err);
+  console.warn('[Firebase] initializeFirestore with persistent cache note:', err);
   try {
-    firestoreInstance = getFirestore(app);
+    if (firebaseConfig.firestoreDatabaseId) {
+      firestoreInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    } else {
+      firestoreInstance = getFirestore(app);
+    }
   } catch (fatalErr) {
     console.error('[Firebase] Fatal getFirestore failure:', fatalErr);
     firestoreInstance = {} as Firestore;

@@ -45,6 +45,7 @@ import {
   updateDoc,
   deleteDoc,
   query,
+  limit,
   where,
   arrayUnion,
   writeBatch,
@@ -1011,7 +1012,7 @@ export async function validatePromoCouponCode(
     let matchedDoc = snap.docs[0];
     if (!matchedDoc) {
       // Fallback case-insensitive scan
-      const allSnap = await getDocs(collection(db, 'offers'));
+      const allSnap = await getDocs(query(collection(db, 'offers'), limit(20)));
       matchedDoc = allSnap.docs.find(
         d => String(d.data().code || '').trim().toUpperCase() === code
       ) as any;
@@ -1112,7 +1113,7 @@ export async function redeemCouponOnPaymentSuccess(rawCode?: string): Promise<vo
     let matchedDoc = snap.docs[0];
 
     if (!matchedDoc) {
-      const allSnap = await getDocs(collection(db, 'offers'));
+      const allSnap = await getDocs(query(collection(db, 'offers'), limit(20)));
       matchedDoc = allSnap.docs.find(
         d => String(d.data().code || '').trim().toUpperCase() === code
       ) as any;
@@ -2460,7 +2461,7 @@ export async function getAllPaymentTransactions(): Promise<PaymentTransaction[]>
   try {
     const collectionsToQuery = ['paymentTransactions', 'transactions', 'payments', 'invoices', 'billing_history'];
     const snaps = await Promise.allSettled(
-      collectionsToQuery.map(colName => getDocs(collection(db, colName)))
+      collectionsToQuery.map(colName => getDocs(query(collection(db, colName), limit(40))))
     );
 
     const txMap = new Map<string, PaymentTransaction>();
@@ -2497,7 +2498,7 @@ export async function getClientPaymentTransactions(clientId: string): Promise<Pa
     const collectionsToQuery = ['paymentTransactions', 'transactions', 'payments', 'invoices', 'billing_history'];
     const snaps = await Promise.allSettled(
       collectionsToQuery.map(colName =>
-        getDocs(query(collection(db, colName), where('clientId', '==', clientId)))
+        getDocs(query(collection(db, colName), where('clientId', '==', clientId), limit(40)))
       )
     );
 

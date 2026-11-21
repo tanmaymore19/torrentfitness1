@@ -181,6 +181,21 @@ const CANONICAL_GATEWAY = {
  * All writes use setDoc(..., { merge: true }) to strictly prevent destructive overwrites.
  */
 export async function executeEmergencyDataRecovery(): Promise<RecoveryReport> {
+  // If recovery already ran previously in this browser session, skip redundant full-collection scans to conserve Firestore reads
+  if (typeof window !== 'undefined' && window.localStorage) {
+    const status = localStorage.getItem('tf_data_recovery_status');
+    if (status === 'complete') {
+      return {
+        timestamp: new Date().toISOString(),
+        recoveredUsersCount: CANONICAL_RECOVERY_USERS.length,
+        recoveredTransactionsCount: 0,
+        recoveredUserIds: CANONICAL_RECOVERY_USERS.map((u) => u.uid),
+        recoveredTxIds: [],
+        sourcesChecked: ['cache_complete_skipped']
+      };
+    }
+  }
+
   const recoveredUsersMap = new Map<string, NormalizedUserAccount>();
   const recoveredTxMap = new Map<string, any>();
   const sourcesChecked: string[] = [];
@@ -279,7 +294,7 @@ export async function executeEmergencyDataRecovery(): Promise<RecoveryReport> {
     for (const coll of userCollections) {
       sourcesChecked.push(`firestore:${coll}`);
       try {
-        const snap = await getDocs(query(collection(db, coll), limit(200))).catch(() => null);
+        const snap = await getDocs(query(collection(db, coll), limit(20))).catch(() => null);
         if (snap && !snap.empty) {
           snap.docs.forEach((d) => {
             const data = d.data();
@@ -299,7 +314,7 @@ export async function executeEmergencyDataRecovery(): Promise<RecoveryReport> {
     for (const coll of finCollections) {
       sourcesChecked.push(`firestore:${coll}`);
       try {
-        const snap = await getDocs(query(collection(db, coll), limit(200))).catch(() => null);
+        const snap = await getDocs(query(collection(db, coll), limit(20))).catch(() => null);
         if (snap && !snap.empty) {
           snap.docs.forEach((d) => {
             const tx = { id: d.id, ...d.data() } as any;
@@ -336,7 +351,7 @@ export async function executeEmergencyDataRecovery(): Promise<RecoveryReport> {
     for (const coll of requestCollections) {
       sourcesChecked.push(`firestore:${coll}`);
       try {
-        const snap = await getDocs(query(collection(db, coll), limit(200))).catch(() => null);
+        const snap = await getDocs(query(collection(db, coll), limit(20))).catch(() => null);
         if (snap && !snap.empty) {
           snap.docs.forEach((d) => {
             const data = d.data() as any;
@@ -377,7 +392,7 @@ export async function executeEmergencyDataRecovery(): Promise<RecoveryReport> {
     // Inspect attendance logs to recover any active members
     try {
       sourcesChecked.push('firestore:attendance_logs');
-      const attSnap = await getDocs(query(collection(db, 'attendance_logs'), limit(100))).catch(() => null);
+      const attSnap = await getDocs(query(collection(db, 'attendance_logs'), limit(25))).catch(() => null);
       if (attSnap && !attSnap.empty) {
         attSnap.docs.forEach((d) => {
           const log = d.data();

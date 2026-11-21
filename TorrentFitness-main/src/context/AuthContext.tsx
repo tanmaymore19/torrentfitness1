@@ -19,6 +19,7 @@ import { LogoutConfirmationModal } from '../components/common/LogoutConfirmation
 import {
   doc,
   getDoc,
+  getDocFromCache,
   getDocFromServer,
   setDoc,
   updateDoc,
@@ -30,7 +31,8 @@ import {
   limit,
   where,
   addDoc,
-  serverTimestamp
+  serverTimestamp,
+  writeBatch
 } from 'firebase/firestore';
 import { initializeDatabaseSeed } from '../services/db';
 import { getCachedData, setCachedData, withTimeout } from '../services/cacheService';
@@ -98,7 +100,43 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const LOCAL_STORAGE_SESSION_KEY = 'torrent_fitness_user_session';
 export const AUTH_TOKEN_KEY = 'torrent_fitness_auth_token';
+export const TORRENT_USERS_CACHE_KEY = 'torrent_users_cache';
 const BOOT_TIMEOUT_MS = 2500;
+
+export function getTorrentUsersCache(): UserAccount[] {
+  try {
+    const raw =
+      (typeof localStorage !== 'undefined' ? localStorage.getItem(TORRENT_USERS_CACHE_KEY) : null) ||
+      (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(TORRENT_USERS_CACHE_KEY) : null);
+    if (!raw) return [];
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveUserToTorrentCache(user: UserAccount | any) {
+  try {
+    if (!user || typeof localStorage === 'undefined') return;
+    const cleanUser = normalizeUserDoc(user, user.uid || user.id || user.username);
+    const existing = getTorrentUsersCache();
+    const map = new Map<string, UserAccount>();
+    existing.forEach((u) => {
+      if (u.uid) map.set(u.uid.toLowerCase(), u);
+      if (u.username) map.set(u.username.toLowerCase(), u);
+    });
+    if (cleanUser.uid) map.set(cleanUser.uid.toLowerCase(), cleanUser);
+    if (cleanUser.username) map.set(cleanUser.username.toLowerCase(), cleanUser);
+    const updated = Array.from(new Set(map.values()));
+    localStorage.setItem(TORRENT_USERS_CACHE_KEY, JSON.stringify(updated));
+    try {
+      sessionStorage.setItem(TORRENT_USERS_CACHE_KEY, JSON.stringify(updated));
+    } catch {}
+  } catch (err) {
+    console.warn('[Cache] Could not save user to torrent_users_cache:', err);
+  }
+}
 
 // Verifies passwords matching either PBKDF2 hash (server-created) or plaintext
 async function verifyClientPassword(password: string, storedHashOrPlain: string): Promise<boolean> {
@@ -827,8 +865,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       });
 
-      // B. Local Cached Data (admin_clients, admin_users, admin_trainers, tf_cache, torrent_cached_members)
+      // B. Local Cached Data (torrent_users_cache, admin_clients, admin_users, admin_trainers, tf_cache, torrent_cached_members)
       try {
+        const cachedTorrentUsers = getTorrentUsersCache();
+        if (Array.isArray(cachedTorrentUsers)) {
+          cachedTorrentUsers.forEach((u) => {
+            const id = u.uid || (u as any).userId || (u as any).id;
+            if (id) allDocs.push({ data: u, id: String(id), collectionName: 'torrent_users_cache' });
+          });
+        }
+
         const cachedClients = getCachedData<any[]>('admin_clients', [], Infinity);
         if (Array.isArray(cachedClients)) {
           cachedClients.forEach((c) => {
@@ -878,20 +924,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // C. Targeted Cloud Firestore Single-Document Lookups (Safe from read quota exhaustion)
+      const safeFetchDoc = async (docRef: any) => {
+        try {
+          const snap = await getDoc(docRef);
+          if (snap && snap.exists()) return snap;
+        } catch (err: any) {
+          const msg = String(err?.message || '');
+          if (
+            msg.includes('quota') ||
+            msg.includes('Quota') ||
+            msg.includes('resource-exhausted') ||
+            err?.code === 'resource-exhausted'
+          ) {
+            try {
+              const cacheSnap = await getDocFromCache(docRef);
+              if (cacheSnap && cacheSnap.exists()) return cacheSnap;
+            } catch {}
+          }
+        }
+        return null;
+      };
+
       try {
         const targetDocFetches = [
-          withTimeout(getDoc(doc(db, 'users', cleanIdNoSpaces)), 1800, null),
-          withTimeout(getDoc(doc(db, 'clientProfiles', cleanIdNoSpaces)), 1800, null),
-          withTimeout(getDoc(doc(db, 'members', cleanIdNoSpaces)), 1800, null),
-          withTimeout(getDoc(doc(db, 'usernames', cleanIdNoSpaces)), 1800, null),
-          withTimeout(getDoc(doc(db, 'trainers', cleanIdNoSpaces)), 1800, null),
-          withTimeout(getDoc(doc(db, 'trainerProfiles', cleanIdNoSpaces)), 1800, null)
+          withTimeout(safeFetchDoc(doc(db, 'users', cleanIdNoSpaces)), 1800, null),
+          withTimeout(safeFetchDoc(doc(db, 'clientProfiles', cleanIdNoSpaces)), 1800, null),
+          withTimeout(safeFetchDoc(doc(db, 'members', cleanIdNoSpaces)), 1800, null),
+          withTimeout(safeFetchDoc(doc(db, 'usernames', cleanIdNoSpaces)), 1800, null),
+          withTimeout(safeFetchDoc(doc(db, 'trainers', cleanIdNoSpaces)), 1800, null),
+          withTimeout(safeFetchDoc(doc(db, 'trainerProfiles', cleanIdNoSpaces)), 1800, null)
         ];
         if (cleanIdNoSpaces !== lowerId) {
           targetDocFetches.push(
-            withTimeout(getDoc(doc(db, 'users', lowerId)), 1800, null),
-            withTimeout(getDoc(doc(db, 'clientProfiles', lowerId)), 1800, null),
-            withTimeout(getDoc(doc(db, 'members', lowerId)), 1800, null)
+            withTimeout(safeFetchDoc(doc(db, 'users', lowerId)), 1800, null),
+            withTimeout(safeFetchDoc(doc(db, 'clientProfiles', lowerId)), 1800, null),
+            withTimeout(safeFetchDoc(doc(db, 'members', lowerId)), 1800, null)
           );
         }
         const docResults = await Promise.allSettled(targetDocFetches);
@@ -1066,6 +1133,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       sessionStorage.setItem(AUTH_TOKEN_KEY, sessionToken);
       localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(userData));
       sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(userData));
+      saveUserToTorrentCache(userData);
       setCurrentUser(userData);
       await loadUserProfile(userData);
     } catch (err: any) {
@@ -1145,7 +1213,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // 2. Direct Firestore fallback with deleted account reclamation & zero-collision auth
       const userRef = doc(db, 'users', cleanUser);
-      const exists = await getDoc(userRef).catch(() => null);
+      let exists: any = null;
+      try {
+        exists = await getDoc(userRef);
+      } catch (e: any) {
+        const msg = String(e?.message || '');
+        if (
+          msg.includes('quota') ||
+          msg.includes('Quota') ||
+          msg.includes('resource-exhausted') ||
+          e?.code === 'resource-exhausted'
+        ) {
+          try {
+            exists = await getDocFromCache(userRef);
+          } catch {}
+        }
+      }
       if (exists?.exists()) {
         const uData = exists.data() as any;
         const isDeleted =
@@ -1160,7 +1243,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // True Active Check: Check ONLY if an active user profile exists in users
       try {
-        const qUsers = query(collection(db, 'users'), where('usernameLower', '==', cleanUser));
+        const qUsers = query(collection(db, 'users'), where('usernameLower', '==', cleanUser), limit(1));
         const qSnap = await getDocs(qUsers);
         const activeDoc = qSnap.docs.find((d) => {
           const dData = d.data() as any;
@@ -1197,7 +1280,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
-      // Reclaim usernames doc and delete any old tombstone
+      // Reclaim usernames doc
       try {
         await setDoc(doc(db, 'usernames', cleanUser), {
           uid: cleanUser,
@@ -1207,7 +1290,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           role: 'client',
           claimedAt: new Date().toISOString()
         }, { merge: true });
-        await deleteDoc(doc(db, 'deleted_users', cleanUser)).catch(() => {});
         if (typeof window !== 'undefined') {
           localStorage.removeItem(`tf_deleted_${cleanUser}`);
           sessionStorage.removeItem(`tf_deleted_${cleanUser}`);
@@ -1269,8 +1351,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }, { merge: true });
       batch.set(doc(db, 'clientProfiles', cleanUser), newClientProfile, { merge: true });
       batch.set(doc(db, 'members', cleanUser), { ...newUser, ...newClientProfile }, { merge: true });
-      await batch.commit();
 
+      try {
+        await batch.commit();
+      } catch (commitErr: any) {
+        const errMsg = String(commitErr?.message || '');
+        if (
+          errMsg.includes('quota') ||
+          errMsg.includes('Quota') ||
+          errMsg.includes('resource-exhausted') ||
+          commitErr?.code === 'resource-exhausted'
+        ) {
+          throw new Error('Server busy (daily limit reached). Please retry shortly.');
+        }
+        throw commitErr;
+      }
+
+      saveUserToTorrentCache(newUser);
       localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(newUser));
       sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(newUser));
       setCurrentUser(newUser);
@@ -1351,7 +1448,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // 2. Direct Firestore Fallback with deleted trainer reclamation & zero-collision auth
       const userRef = doc(db, 'users', cleanUser);
-      const exists = await getDoc(userRef).catch(() => null);
+      let exists: any = null;
+      try {
+        exists = await getDoc(userRef);
+      } catch (e: any) {
+        const msg = String(e?.message || '');
+        if (
+          msg.includes('quota') ||
+          msg.includes('Quota') ||
+          msg.includes('resource-exhausted') ||
+          e?.code === 'resource-exhausted'
+        ) {
+          try {
+            exists = await getDocFromCache(userRef);
+          } catch {}
+        }
+      }
       if (exists?.exists()) {
         const uData = exists.data() as any;
         const isDeleted =
@@ -1364,7 +1476,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       try {
-        const qUsers = query(collection(db, 'users'), where('usernameLower', '==', cleanUser));
+        const qUsers = query(collection(db, 'users'), where('usernameLower', '==', cleanUser), limit(1));
         const qSnap = await getDocs(qUsers);
         const activeDoc = qSnap.docs.find((d) => {
           const dData = d.data() as any;
@@ -1410,7 +1522,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           role: 'trainer',
           claimedAt: new Date().toISOString()
         }, { merge: true });
-        await deleteDoc(doc(db, 'deleted_users', cleanUser)).catch(() => {});
         if (typeof window !== 'undefined') {
           localStorage.removeItem(`tf_deleted_${cleanUser}`);
           sessionStorage.removeItem(`tf_deleted_${cleanUser}`);
@@ -1501,8 +1612,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }, { merge: true });
       batch.set(doc(db, 'trainerProfiles', cleanUser), newTrainerProfile, { merge: true });
       batch.set(doc(db, 'trainers', cleanUser), { ...newUser, ...newTrainerProfile }, { merge: true });
-      await batch.commit();
 
+      try {
+        await batch.commit();
+      } catch (commitErr: any) {
+        const errMsg = String(commitErr?.message || '');
+        if (
+          errMsg.includes('quota') ||
+          errMsg.includes('Quota') ||
+          errMsg.includes('resource-exhausted') ||
+          commitErr?.code === 'resource-exhausted'
+        ) {
+          throw new Error('Server busy (daily limit reached). Please retry shortly.');
+        }
+        throw commitErr;
+      }
+
+      saveUserToTorrentCache(newUser);
       localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(newUser));
       sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(newUser));
       setClientProfile(null);
