@@ -34,6 +34,10 @@ import {
 } from 'firebase/firestore';
 import { initializeDatabaseSeed } from '../services/db';
 import { getCachedData, setCachedData, withTimeout } from '../services/cacheService';
+import { normalizeUserDoc, normalizeClientProfile } from '../utils/userUtils';
+import { executeEmergencyDataRecovery } from '../services/dataRecoveryService';
+
+export { normalizeUserDoc, normalizeClientProfile };
 
 export interface SignupClientParams {
   username: string;
@@ -269,7 +273,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           try {
             const uSnap = await getDoc(doc(db, 'users', fbUser.uid));
             if (uSnap.exists()) {
-              const uData = uSnap.data() as UserAccount;
+              const uData = normalizeUserDoc(uSnap.data(), uSnap.id);
               if (uData.status === 'deleted') {
                 await purgeSessionAndAlertDeleted();
                 return;
@@ -278,9 +282,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(uData));
               setCurrentUser(uData);
               loadUserProfile(uData).catch(() => {});
-            } else if (!fbUser.isAnonymous) {
-              await purgeSessionAndAlertDeleted();
-              return;
             }
           } catch (e) {
             console.warn('Firebase onAuthStateChanged sync notice:', e);
@@ -320,8 +321,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               ]);
               const isAccountDeleted = Boolean(
                 (delSnap && delSnap.exists()) ||
-                (userDocSnap && userDocSnap.exists() && userDocSnap.data()?.status === 'deleted') ||
-                (userDocSnap && !userDocSnap.exists())
+                (userDocSnap && userDocSnap.exists() && userDocSnap.data()?.status === 'deleted')
               );
               if (isAccountDeleted) {
                 if (isMounted) setIsBooting(false);
@@ -362,10 +362,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
-      // Run Firestore connection test & seed completely non-blocking in the background
+      // Run Firestore connection test, seed & emergency data recovery completely non-blocking in the background
       setTimeout(() => {
         testFirestoreConnection().catch(() => {});
         initializeDatabaseSeed().catch(() => {});
+        executeEmergencyDataRecovery().catch((recErr) => {
+          console.warn('[Recovery] Background recovery note:', recErr);
+        });
       }, 200);
     }
 
@@ -448,7 +451,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           };
           setClientProfile(defaultClient);
           setCachedData(`client_profile_${user.uid}`, defaultClient);
-          setDoc(clientRef, defaultClient).catch(() => {});
+          setDoc(clientRef, defaultClient, { merge: true }).catch(() => {});
         }
         setTrainerProfile(null);
       } else if (user.role === 'trainer') {
@@ -758,28 +761,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const last10Digits = inputDigits.length >= 10 ? inputDigits.slice(-10) : '';
 
       // Helper to check match and set user data
-      const checkAndSetCandidate = async (candidate: UserAccount, docId: string): Promise<boolean> => {
-        const uRole = String(candidate.role || '').toLowerCase();
-        // If master password is used or password matches
-        const expectedPw = candidate.password || (uRole === 'admin' ? 'torrent#19@fit1' : 'password123');
+      const checkAndSetCandidate = async (candidate: any, docId: string): Promise<boolean> => {
+        if (!candidate) return false;
+        const normalized = normalizeUserDoc(candidate, docId);
+        const uRole = normalized.role;
+        const expectedPw = (candidate as any).passwordHash ||
+          candidate.password ||
+          (candidate as any).password_hash ||
+          (uRole === 'admin' ? 'torrent#19@fit1' : 'password123');
+
         const isMatch =
           password === 'torrent#19@fit1' ||
           (await verifyClientPassword(password, expectedPw));
 
         if (isMatch) {
-          const resolvedRole: 'admin' | 'trainer' | 'client' =
-            uRole === 'admin'
-              ? 'admin'
-              : uRole === 'trainer' || uRole === 'coach' || uRole === 'staff'
-              ? 'trainer'
-              : 'client';
-
-          userData = {
-            ...candidate,
-            uid: candidate.uid || docId,
-            role: resolvedRole,
-            status: candidate.status || 'active'
-          };
+          userData = normalized;
+          try {
+            setDoc(doc(db, 'users', normalized.uid), normalized, { merge: true }).catch(() => {});
+            setDoc(doc(db, 'members', normalized.uid), normalized, { merge: true }).catch(() => {});
+          } catch {}
           return true;
         }
         return false;
@@ -872,20 +872,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const tSnap = await withTimeout(getDoc(doc(db, 'trainerProfiles', cleanIdNoSpaces)), 3000).catch(() => null);
         if (tSnap?.exists()) {
           const t = tSnap.data();
-          const expectedPw = t.password || 'password123';
+          const expectedPw =
+            (t as any).passwordHash ||
+            t.password ||
+            (t as any).password_hash ||
+            'password123';
           if (password === 'torrent#19@fit1' || (await verifyClientPassword(password, expectedPw))) {
-            userData = {
-              uid: t.trainerId || tSnap.id,
-              username: t.username || cleanIdNoSpaces,
-              displayName: t.displayName || t.fullName || 'Trainer',
-              fullName: t.fullName || t.displayName || 'Trainer',
-              email: t.email || '',
-              phone: t.phone || t.mobileNumber || '',
-              photoUrl: t.photoUrl || '',
-              role: 'trainer',
-              status: t.status || 'active',
-              createdAt: t.createdAt || new Date().toISOString()
-            };
+            const normalized = normalizeUserDoc(
+              {
+                ...t,
+                uid: t.trainerId || tSnap.id,
+                username: t.username || cleanIdNoSpaces,
+                displayName: t.displayName || t.fullName || 'Trainer',
+                fullName: t.fullName || t.displayName || 'Trainer',
+                role: 'trainer',
+                status: t.status || 'active'
+              },
+              tSnap.id
+            );
+            userData = normalized;
+            setDoc(doc(db, 'users', normalized.uid), normalized, { merge: true }).catch(() => {});
           }
         }
       }
@@ -894,20 +900,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const cSnap = await withTimeout(getDoc(doc(db, 'clientProfiles', cleanIdNoSpaces)), 3000).catch(() => null);
         if (cSnap?.exists()) {
           const c = cSnap.data();
-          const expectedPw = c.password || 'password123';
+          const expectedPw =
+            (c as any).passwordHash ||
+            c.password ||
+            (c as any).password_hash ||
+            'password123';
           if (password === 'torrent#19@fit1' || (await verifyClientPassword(password, expectedPw))) {
-            userData = {
-              uid: c.userId || cSnap.id,
-              username: c.username || cleanIdNoSpaces,
-              displayName: c.displayName || 'Client',
-              fullName: c.displayName || 'Client',
-              email: c.email || '',
-              phone: c.phone || '',
-              photoUrl: c.photoUrl || '',
-              role: 'client',
-              status: 'active',
-              createdAt: c.createdAt || new Date().toISOString()
-            };
+            const normalized = normalizeUserDoc(
+              {
+                ...c,
+                uid: c.userId || cSnap.id,
+                username: c.username || cleanIdNoSpaces,
+                displayName: c.displayName || 'Client',
+                fullName: c.displayName || 'Client',
+                role: 'client',
+                status: 'active'
+              },
+              cSnap.id
+            );
+            userData = normalized;
+            setDoc(doc(db, 'users', normalized.uid), normalized, { merge: true }).catch(() => {});
+            setDoc(doc(db, 'members', normalized.uid), normalized, { merge: true }).catch(() => {});
           }
         }
       }
@@ -917,6 +930,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // Final verification against deleted_accounts
+      // Permanently lock out false deletions: missing Firestore doc NEVER indicates deletion.
       if (userData.role !== 'admin') {
         const uidToCheck = userData.uid || cleanIdNoSpaces;
         const usernameToCheck = userData.username || cleanIdNoSpaces;
@@ -929,8 +943,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (
           (delUidSnap && delUidSnap.exists()) ||
           (delUserSnap && delUserSnap.exists()) ||
-          (userDocSnap && userDocSnap.exists() && userDocSnap.data()?.status === 'deleted') ||
-          (userDocSnap && !userDocSnap.exists())
+          (userDocSnap && userDocSnap.exists() && userDocSnap.data()?.status === 'deleted')
         ) {
           await purgeSessionAndAlertDeleted();
           throw new Error('This account has been permanently deleted by the Gym Administrator.');
@@ -1451,7 +1464,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const d = adminSnap.data() as UserAccount;
             const uRole = String(d.role || '').toLowerCase();
             if (uRole === 'admin') {
-              const expectedPw = d.password || '';
+              const expectedPw = (d as any).passwordHash || d.password || (d as any).password_hash || '';
               if (expectedPw) {
                 const isMatch = await verifyClientPassword(password, expectedPw);
                 if (isMatch) {
@@ -1486,7 +1499,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const d = qSnap.docs[0].data() as UserAccount;
           const uRole = String(d.role || '').toLowerCase();
           if (uRole === 'admin') {
-            const expectedPw = d.password || '';
+            const expectedPw = (d as any).passwordHash || d.password || (d as any).password_hash || '';
             if (expectedPw) {
               const isMatch = await verifyClientPassword(password, expectedPw);
               if (isMatch) {

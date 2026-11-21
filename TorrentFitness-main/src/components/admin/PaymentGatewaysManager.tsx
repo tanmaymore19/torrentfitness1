@@ -569,7 +569,11 @@ export const PaymentGatewaysManager: React.FC = () => {
         localStorage.removeItem('rzp_key');
         localStorage.removeItem('razorpay_key_id');
         localStorage.removeItem('payment_gateway_key');
-        sessionStorage.clear();
+        sessionStorage.removeItem('cached_payment_gateway');
+        sessionStorage.removeItem('active_payment_gateway');
+        sessionStorage.removeItem('rzp_key');
+        sessionStorage.removeItem('razorpay_key_id');
+        sessionStorage.removeItem('payment_gateway_key');
       } catch (storageErr) {
         console.warn('Storage cleanup note:', storageErr);
       }

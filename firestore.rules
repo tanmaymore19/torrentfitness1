@@ -147,8 +147,7 @@ service cloud.firestore {
     // Permits delete operations for user documents
     // while permanently protecting Master Admin accounts from deletion.
     match /users/{userId} {
-      allow read: if true;
-      allow create, update: if true;
+      allow read, write: if true;
       allow delete: if !isMasterAdmin(userId);
     }
 
@@ -164,15 +163,15 @@ service cloud.firestore {
     }
 
     match /usernames/{username} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     match /deleted_users/{docId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     match /deleted_accounts/{docId} {
-      allow read, write: if true;
+      allow read, write, delete: if true;
     }
 
     // ==========================================
