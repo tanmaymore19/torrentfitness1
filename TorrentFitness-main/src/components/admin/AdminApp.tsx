@@ -6,10 +6,13 @@ import { db } from '../../firebase';
 import {
   collection,
   doc,
+  getDoc,
+  getDocs,
   setDoc,
   updateDoc,
   deleteDoc,
   query,
+  where,
   limit,
   onSnapshot,
   writeBatch,
@@ -985,9 +988,9 @@ export const AdminApp: React.FC = () => {
     });
   };
 
-  // Admin Change Any User's Password
-  const handleSaveNewPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Admin Change Any User's Password (Atomic writeBatch across users, members, clientProfiles, trainers)
+  const handleSaveNewPassword = async (e?: React.FormEvent) => {
+    if (e && e.preventDefault) e.preventDefault();
     if (!selectedUserForPasswordChange || !newPasswordInput.trim()) return;
     if (newPasswordInput.trim().length < 6) {
       showAdminNotice('Password must be at least 6 characters.', 'error');
@@ -995,34 +998,122 @@ export const AdminApp: React.FC = () => {
     }
     setPasswordChangeLoading(true);
     try {
-      const uid = selectedUserForPasswordChange.uid;
+      const uid = selectedUserForPasswordChange.uid.trim();
+      const lowerUid = uid.toLowerCase();
       const cleanPass = newPasswordInput.trim();
 
-      const pwUpdate = {
+      // Collect all document references across collections matching uid, username, or clientId
+      const matchingRefs = new Map<string, any>();
+
+      // 1. Direct candidate paths
+      const directCandidates = [
+        doc(db, 'users', uid),
+        doc(db, 'users', lowerUid),
+        doc(db, 'members', uid),
+        doc(db, 'members', lowerUid),
+        doc(db, 'clientProfiles', uid),
+        doc(db, 'clientProfiles', lowerUid),
+        doc(db, 'trainers', uid),
+        doc(db, 'trainers', lowerUid),
+        doc(db, 'trainerProfiles', uid),
+        doc(db, 'trainerProfiles', lowerUid),
+        doc(db, 'usernames', lowerUid)
+      ];
+      directCandidates.forEach((r) => matchingRefs.set(r.path, r));
+
+      // 2. Query collections to catch sibling documents (e.g. auth UID vs username)
+      try {
+        const queryPromises = [
+          getDocs(query(collection(db, 'users'), where('username', '==', uid), limit(5))),
+          getDocs(query(collection(db, 'users'), where('usernameLower', '==', lowerUid), limit(5))),
+          getDocs(query(collection(db, 'users'), where('clientId', '==', uid), limit(5))),
+          getDocs(query(collection(db, 'clientProfiles'), where('username', '==', uid), limit(5))),
+          getDocs(query(collection(db, 'clientProfiles'), where('usernameLower', '==', lowerUid), limit(5))),
+          getDocs(query(collection(db, 'clientProfiles'), where('clientId', '==', uid), limit(5))),
+          getDocs(query(collection(db, 'clientProfiles'), where('userId', '==', uid), limit(5))),
+          getDocs(query(collection(db, 'members'), where('username', '==', uid), limit(5))),
+          getDocs(query(collection(db, 'members'), where('usernameLower', '==', lowerUid), limit(5))),
+          getDocs(query(collection(db, 'members'), where('clientId', '==', uid), limit(5))),
+          getDocs(query(collection(db, 'members'), where('memberId', '==', uid), limit(5))),
+          getDocs(query(collection(db, 'trainers'), where('username', '==', uid), limit(5))),
+          getDocs(query(collection(db, 'trainers'), where('trainerId', '==', uid), limit(5))),
+          getDocs(query(collection(db, 'trainerProfiles'), where('username', '==', uid), limit(5))),
+          getDocs(query(collection(db, 'trainerProfiles'), where('trainerId', '==', uid), limit(5)))
+        ];
+        const results = await Promise.allSettled(queryPromises);
+        results.forEach((res) => {
+          if (res.status === 'fulfilled' && res.value && !res.value.empty) {
+            res.value.docs.forEach((d) => matchingRefs.set(d.ref.path, d.ref));
+          }
+        });
+      } catch (qErr) {
+        console.warn('[Admin Change Pass] Sibling query warning:', qErr);
+      }
+
+      // 3. Execute atomic writeBatch with { merge: true }
+      const batch = writeBatch(db);
+      const pwPayload = {
         password: cleanPass,
         plainPassword: cleanPass,
+        passwordHash: cleanPass,
         pass: cleanPass,
-        updatedAt: new Date().toISOString()
+        updatedAt: serverTimestamp()
       };
 
-      await setDoc(doc(db, 'users', uid), pwUpdate, { merge: true });
-      await setDoc(doc(db, 'members', uid), pwUpdate, { merge: true }).catch(() => {});
-      if (selectedUserForPasswordChange.role === 'client') {
-        try {
-          await setDoc(doc(db, 'clientProfiles', uid), pwUpdate, { merge: true });
-        } catch (e) {}
-      }
-      if (selectedUserForPasswordChange.role === 'trainer') {
-        try {
-          await setDoc(doc(db, 'trainerProfiles', uid), pwUpdate, { merge: true });
-        } catch (e) {}
-      }
+      matchingRefs.forEach((ref) => {
+        batch.set(ref, pwPayload, { merge: true });
+      });
 
-      showAdminNotice(`Password for ${selectedUserForPasswordChange.displayName} (${uid}) updated to "${cleanPass}".`, 'success');
+      await batch.commit();
+
+      // 4. Update local React state immediately so Admin cards reflect the new PASS: instantly
+      setAllUsers((prev) =>
+        prev.map((u) => {
+          if (
+            u.uid === uid ||
+            u.uid.toLowerCase() === lowerUid ||
+            u.username === uid ||
+            u.username?.toLowerCase() === lowerUid
+          ) {
+            return { ...u, password: cleanPass, plainPassword: cleanPass };
+          }
+          return u;
+        })
+      );
+      setClients((prev) =>
+        prev.map((c) => {
+          if (
+            c.userId === uid ||
+            c.userId.toLowerCase() === lowerUid ||
+            (c as any).username === uid ||
+            (c as any).username?.toLowerCase() === lowerUid
+          ) {
+            return { ...c, password: cleanPass, plainPassword: cleanPass } as any;
+          }
+          return c;
+        })
+      );
+      setTrainers((prev) =>
+        prev.map((t) => {
+          if (
+            t.trainerId === uid ||
+            t.trainerId.toLowerCase() === lowerUid ||
+            (t as any).username === uid ||
+            (t as any).username?.toLowerCase() === lowerUid
+          ) {
+            return { ...t, password: cleanPass, plainPassword: cleanPass } as any;
+          }
+          return t;
+        })
+      );
+      setShowPasswordMap((prev) => ({ ...prev, [uid]: true, [lowerUid]: true }));
+
+      showAdminNotice('Password updated & saved to cloud! Old password deactivated.', 'success');
       setSelectedUserForPasswordChange(null);
       setNewPasswordInput('');
     } catch (err: any) {
-      showAdminNotice('Error updating user password: ' + err.message, 'error');
+      console.error('[Admin Change Pass Error]', err);
+      showAdminNotice('Error updating user password: ' + (err.message || 'Please try again'), 'error');
     } finally {
       setPasswordChangeLoading(false);
     }
@@ -5973,11 +6064,12 @@ export const AdminApp: React.FC = () => {
                   Cancel
                 </button>
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={handleSaveNewPassword}
                   disabled={passwordChangeLoading || !newPasswordInput.trim()}
-                  className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold rounded-xl text-xs transition-all shadow-md disabled:opacity-50"
+                  className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold rounded-xl text-xs transition-all shadow-md disabled:opacity-50 pointer-events-auto cursor-pointer"
                 >
-                  {passwordChangeLoading ? 'Saving...' : 'Update Password Now'}
+                  {passwordChangeLoading ? 'Saving...' : 'Save Password'}
                 </button>
               </div>
             </form>

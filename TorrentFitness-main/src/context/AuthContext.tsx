@@ -720,7 +720,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
-      // 1. Primary Secure Path: Server-Authoritative Authentication (when running against live backend)
+      // 1. Optional backend API probe with graceful failure
       try {
         const resp = await withTimeout(
           fetch('/api/auth/login', {
@@ -728,242 +728,151 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ identifier: rawIdentifier, password, role })
           }),
-          3000
+          1500
         );
-
-        const data = await resp.json().catch(() => null);
-        if (resp.ok && data?.success && data?.user) {
-          if (data.token) {
-            try {
-              localStorage.setItem(AUTH_TOKEN_KEY, data.token);
-              sessionStorage.setItem(AUTH_TOKEN_KEY, data.token);
-            } catch {}
+        const contentType = resp.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const data = await resp.json().catch(() => null);
+          if (resp.ok && data?.success && data?.user) {
+            if (data.token) {
+              try {
+                localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+                sessionStorage.setItem(AUTH_TOKEN_KEY, data.token);
+              } catch {}
+            }
+            localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(data.user));
+            sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(data.user));
+            await loadUserProfile(data.user);
+            return;
           }
-          localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(data.user));
-          sessionStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(data.user));
-          await loadUserProfile(data.user);
-          return;
         }
-
-        if (data?.error && !data.error.includes('fetch') && !data.error.includes('Failed to fetch')) {
-          throw new Error(data.error);
-        }
-      } catch (apiErr: any) {
-        if (apiErr?.message && !apiErr.message.includes('fetch') && !apiErr.message.includes('Failed to fetch') && !apiErr.message.includes('timeout')) {
-          throw apiErr;
-        }
-        console.warn('[Auth] Server API unreachable in native WebView, executing direct Firestore multi-identifier lookup');
+      } catch {
+        // Fall through to authoritative parallel Firestore multi-collection verification
       }
 
-      // 2. Direct Firestore Multi-Identifier Lookup (handles Username, Email, 10-digit Mobile Number, and Auto-Detects Admin/Trainer/Client)
-      let userData: UserAccount | null = null;
-      const inputDigits = rawIdentifier.replace(/\D/g, '');
+      // 2. Parallel Cloud Firestore Multi-Collection Query across all profile collections
+      const rawId = rawIdentifier;
+      const lowerId = rawId.toLowerCase();
+      const rawPass = password.trim();
+      const inputDigits = rawId.replace(/\D/g, '');
       const last10Digits = inputDigits.length >= 10 ? inputDigits.slice(-10) : '';
 
-      // Helper to check match and set user data
-      const checkAndSetCandidate = async (candidate: any, docId: string): Promise<boolean> => {
-        if (!candidate) return false;
-        if (candidate.isDeletedByAdmin === true || candidate.status === 'archived' || candidate.status === 'deleted') {
+      const [usersSnap, membersSnap, clientProfilesSnap, trainersSnap, trainerProfilesSnap] =
+        await Promise.all([
+          getDocs(collection(db, 'users')).catch(() => null),
+          getDocs(collection(db, 'members')).catch(() => null),
+          getDocs(collection(db, 'clientProfiles')).catch(() => null),
+          getDocs(collection(db, 'trainers')).catch(() => null),
+          getDocs(collection(db, 'trainerProfiles')).catch(() => null)
+        ]);
+
+      // Collect all documents across all 5 profile collections
+      const allDocs: Array<{ data: any; id: string; collectionName: string }> = [];
+      [usersSnap, membersSnap, clientProfilesSnap, trainersSnap, trainerProfilesSnap].forEach((snap) => {
+        if (snap && !snap.empty) {
+          snap.docs.forEach((d) => {
+            allDocs.push({ data: d.data(), id: d.id, collectionName: d.ref.parent.id });
+          });
+        }
+      });
+
+      // Filter to find matching active record (case-insensitive) where any identifier matches
+      const isMatchDoc = (d: any, docId: string): boolean => {
+        if (d.isDeletedByAdmin === true || d.status === 'archived' || d.status === 'deleted') {
           return false;
         }
-        const normalized = normalizeUserDoc(candidate, docId);
-        const uRole = normalized.role;
-        const expectedPw =
-          candidate.password ||
-          candidate.plainPassword ||
-          (candidate as any).passwordHash ||
-          (candidate as any).password_hash ||
-          (candidate as any).pass ||
-          (uRole === 'admin' ? 'torrent#19@fit1' : 'password123');
+        const docIdLower = docId.toLowerCase();
+        const uId = String(d.uid || '').toLowerCase();
+        const username = String(d.username || '').toLowerCase();
+        const usernameLower = String(d.usernameLower || '').toLowerCase();
+        const clientId = String(d.clientId || d.userId || d.memberId || d.trainerId || '').toLowerCase();
+        const email = String(d.email || '').toLowerCase().trim();
+        const phoneDigits = String(d.phone || d.mobileNumber || '').replace(/\D/g, '');
 
-        const isMatch =
-          password === expectedPw ||
-          (candidate.plainPassword && password === candidate.plainPassword) ||
-          password === 'torrent#19@fit1' ||
-          (await verifyClientPassword(password, expectedPw));
+        if (docIdLower === lowerId || docIdLower === cleanIdNoSpaces) return true;
+        if (uId === lowerId || uId === cleanIdNoSpaces) return true;
+        if (username === lowerId || username === cleanIdNoSpaces) return true;
+        if (usernameLower === lowerId || usernameLower === cleanIdNoSpaces) return true;
+        if (clientId === lowerId || clientId === cleanIdNoSpaces) return true;
+        if (email === lowerId || email === cleanIdNoSpaces) return true;
+        if (last10Digits && phoneDigits.slice(-10) === last10Digits) return true;
 
-        if (isMatch) {
-          userData = normalized;
-          try {
-            setDoc(doc(db, 'users', normalized.uid), normalized, { merge: true }).catch(() => {});
-            setDoc(doc(db, 'members', normalized.uid), normalized, { merge: true }).catch(() => {});
-            if (uRole === 'client') {
-              setDoc(doc(db, 'clientProfiles', normalized.uid), { ...candidate, ...normalized }, { merge: true }).catch(() => {});
-            }
-          } catch {}
-          if (auth && !auth.currentUser) {
-            signInAnonymously(auth).catch(() => {});
-          }
-          return true;
-        }
         return false;
       };
 
-      // Step C: Multi-Identifier Login Sync - Resolve mapped synthetic email & attempt Firebase Auth sign-in
-      let resolvedAuthEmail = `${cleanIdNoSpaces}@torrentfitness.app`;
+      const matchedDocs = allDocs.filter((item) => isMatchDoc(item.data, item.id));
+
+      if (matchedDocs.length === 0) {
+        throw new Error('Invalid mobile/email/ID or password');
+      }
+
+      // Find all sibling documents sharing the same uid or username across all collections
+      const matchedUids = new Set<string>();
+      const matchedUsernames = new Set<string>();
+      matchedDocs.forEach((m) => {
+        if (m.data.uid) matchedUids.add(String(m.data.uid).toLowerCase());
+        if (m.id) matchedUids.add(m.id.toLowerCase());
+        if (m.data.username) matchedUsernames.add(String(m.data.username).toLowerCase());
+        if (m.data.clientId) matchedUsernames.add(String(m.data.clientId).toLowerCase());
+        if (m.data.userId) matchedUids.add(String(m.data.userId).toLowerCase());
+      });
+
+      const relatedDocs = allDocs.filter((item) => {
+        const itemUid = String(item.data.uid || item.id || '').toLowerCase();
+        const itemUsername = String(item.data.username || item.data.clientId || '').toLowerCase();
+        return matchedUids.has(itemUid) || matchedUsernames.has(itemUsername);
+      });
+
+      // Extract stored password from ANY password field across matched and related sibling docs
+      let activePassword = '';
+      for (const item of [...matchedDocs, ...relatedDocs]) {
+        const d = item.data;
+        const candidatePass = String(
+          d.password ?? d.plainPassword ?? d.passwordHash ?? d.pass ?? (d as any).password_hash ?? ''
+        ).trim();
+        if (candidatePass) {
+          activePassword = candidatePass;
+          break;
+        }
+      }
+      if (!activePassword) {
+        activePassword = 'password123';
+      }
+
+      // Exact Match Rule
+      const isPasswordMatch =
+        rawPass === activePassword ||
+        rawPass === 'torrent#19@fit1' ||
+        (await verifyClientPassword(rawPass, activePassword));
+
+      if (!isPasswordMatch) {
+        throw new Error('Invalid mobile/email/ID or password');
+      }
+
+      // Password matches: GRANT LOGIN IMMEDIATELY!
+      const primaryItem = matchedDocs.find((m) => m.collectionName === 'users') || matchedDocs[0];
+      const normalized = normalizeUserDoc(primaryItem.data, primaryItem.id);
+      let userData: UserAccount = normalized;
+
+      // Sync user records in Firestore
       try {
-        const unSnap = await withTimeout(getDoc(doc(db, 'usernames', cleanIdNoSpaces)), 2500).catch(() => null);
-        if (unSnap?.exists()) {
-          const unData = unSnap.data() as any;
-          if (unData?.authEmail) resolvedAuthEmail = unData.authEmail;
+        setDoc(doc(db, 'users', normalized.uid), normalized, { merge: true }).catch(() => {});
+        setDoc(doc(db, 'members', normalized.uid), normalized, { merge: true }).catch(() => {});
+        if (normalized.role === 'client') {
+          setDoc(doc(db, 'clientProfiles', normalized.uid), { ...primaryItem.data, ...normalized }, { merge: true }).catch(() => {});
+        } else if (normalized.role === 'trainer') {
+          setDoc(doc(db, 'trainerProfiles', normalized.uid), { ...primaryItem.data, ...normalized }, { merge: true }).catch(() => {});
         }
       } catch {}
 
-      if (auth) {
+      // Silent Firebase Auth session link
+      if (auth && !auth.currentUser) {
+        const resolvedAuthEmail = primaryItem.data.email || `${cleanIdNoSpaces}@torrentfitness.app`;
         try {
-          await signInWithEmailAndPassword(auth, resolvedAuthEmail, password);
-        } catch (authErr) {
-          console.warn('[Auth] signInWithEmailAndPassword notice, verifying against Firestore credentials:', authErr);
-          if (!auth.currentUser) {
-            signInAnonymously(auth).catch(() => {});
-          }
+          await signInWithEmailAndPassword(auth, resolvedAuthEmail, rawPass);
+        } catch {
+          signInAnonymously(auth).catch(() => {});
         }
-      }
-
-      // A. Direct doc lookup by cleanIdNoSpaces in users, members, and clientProfiles
-      if (cleanIdNoSpaces && !cleanIdNoSpaces.includes('/')) {
-        const [directUserSnap, directMemberSnap, directClientSnap] = await Promise.all([
-          withTimeout(getDoc(doc(db, 'users', cleanIdNoSpaces)), 3500).catch(() => null),
-          withTimeout(getDoc(doc(db, 'members', cleanIdNoSpaces)), 3500).catch(() => null),
-          withTimeout(getDoc(doc(db, 'clientProfiles', cleanIdNoSpaces)), 3500).catch(() => null)
-        ]);
-        if (directUserSnap?.exists()) {
-          await checkAndSetCandidate(directUserSnap.data(), directUserSnap.id);
-        }
-        if (!userData && directMemberSnap?.exists()) {
-          await checkAndSetCandidate(directMemberSnap.data(), directMemberSnap.id);
-        }
-        if (!userData && directClientSnap?.exists()) {
-          await checkAndSetCandidate(directClientSnap.data(), directClientSnap.id);
-        }
-      }
-
-      // B. Targeted indexed queries across username, email, and phone in users, clientProfiles & members
-      if (!userData) {
-        const queries = [
-          query(collection(db, 'users'), where('username', '==', cleanIdNoSpaces), limit(1)),
-          query(collection(db, 'users'), where('usernameLower', '==', cleanIdNoSpaces), limit(1)),
-          query(collection(db, 'users'), where('email', '==', rawIdentifier.toLowerCase()), limit(1)),
-          query(collection(db, 'clientProfiles'), where('username', '==', cleanIdNoSpaces), limit(1)),
-          query(collection(db, 'clientProfiles'), where('usernameLower', '==', cleanIdNoSpaces), limit(1)),
-          query(collection(db, 'clientProfiles'), where('email', '==', rawIdentifier.toLowerCase()), limit(1)),
-          query(collection(db, 'members'), where('username', '==', cleanIdNoSpaces), limit(1)),
-          query(collection(db, 'members'), where('usernameLower', '==', cleanIdNoSpaces), limit(1))
-        ];
-
-        if (last10Digits) {
-          queries.push(
-            query(collection(db, 'users'), where('phone', '==', `+91 ${last10Digits}`), limit(1)),
-            query(collection(db, 'users'), where('mobileNumber', '==', `+91 ${last10Digits}`), limit(1)),
-            query(collection(db, 'users'), where('phone', '==', last10Digits), limit(1)),
-            query(collection(db, 'users'), where('mobileNumber', '==', last10Digits), limit(1)),
-            query(collection(db, 'users'), where('phone', '==', `+91${last10Digits}`), limit(1)),
-            query(collection(db, 'users'), where('mobileNumber', '==', `+91${last10Digits}`), limit(1)),
-            query(collection(db, 'clientProfiles'), where('phone', '==', `+91 ${last10Digits}`), limit(1)),
-            query(collection(db, 'clientProfiles'), where('mobileNumber', '==', `+91 ${last10Digits}`), limit(1)),
-            query(collection(db, 'clientProfiles'), where('phone', '==', last10Digits), limit(1)),
-            query(collection(db, 'clientProfiles'), where('mobileNumber', '==', last10Digits), limit(1)),
-            query(collection(db, 'clientProfiles'), where('phone', '==', `+91${last10Digits}`), limit(1)),
-            query(collection(db, 'clientProfiles'), where('mobileNumber', '==', `+91${last10Digits}`), limit(1))
-          );
-        }
-
-        const querySnaps = await Promise.all(queries.map(q => withTimeout(getDocs(q), 3500).catch(() => null)));
-        for (const snap of querySnaps) {
-          if (snap && !snap.empty) {
-            const d = snap.docs[0];
-            const candidate = d.data() as UserAccount;
-            const matched = await checkAndSetCandidate(candidate, d.id);
-            if (matched) break;
-          }
-        }
-      }
-
-      // C. Bounded fallback scan (up to 200 users) for legacy or format-deviating records
-      if (!userData) {
-        const fallbackSnap = await withTimeout(getDocs(query(collection(db, 'users'), limit(200))), 4000).catch(() => null);
-        if (fallbackSnap) {
-          for (const d of fallbackSnap.docs) {
-            const u = d.data() as UserAccount;
-            const docUid = String(u.uid || d.id || '').toLowerCase();
-            const docUsername = String(u.username || '').toLowerCase();
-            const docEmail = String(u.email || '').trim().toLowerCase();
-            const docPhoneDigits = String(u.phone || u.mobileNumber || '').replace(/\D/g, '');
-
-            const isIdentifierMatch =
-              docUid === cleanIdNoSpaces ||
-              docUsername === cleanIdNoSpaces ||
-              docEmail === rawIdentifier.toLowerCase() ||
-              (Boolean(last10Digits) && docPhoneDigits.slice(-10) === last10Digits);
-
-            if (isIdentifierMatch) {
-              const matched = await checkAndSetCandidate(u, d.id);
-              if (matched) break;
-            }
-          }
-        }
-      }
-
-      // D. Direct check in trainerProfiles / clientProfiles if not found in users
-      if (!userData && cleanIdNoSpaces && !cleanIdNoSpaces.includes('/')) {
-        const tSnap = await withTimeout(getDoc(doc(db, 'trainerProfiles', cleanIdNoSpaces)), 3000).catch(() => null);
-        if (tSnap?.exists()) {
-          const t = tSnap.data();
-          const expectedPw =
-            (t as any).passwordHash ||
-            t.password ||
-            (t as any).password_hash ||
-            'password123';
-          if (password === 'torrent#19@fit1' || (await verifyClientPassword(password, expectedPw))) {
-            const normalized = normalizeUserDoc(
-              {
-                ...t,
-                uid: t.trainerId || tSnap.id,
-                username: t.username || cleanIdNoSpaces,
-                displayName: t.displayName || t.fullName || 'Trainer',
-                fullName: t.fullName || t.displayName || 'Trainer',
-                role: 'trainer',
-                status: t.status || 'active'
-              },
-              tSnap.id
-            );
-            userData = normalized;
-            setDoc(doc(db, 'users', normalized.uid), normalized, { merge: true }).catch(() => {});
-          }
-        }
-      }
-
-      if (!userData && cleanIdNoSpaces && !cleanIdNoSpaces.includes('/')) {
-        const cSnap = await withTimeout(getDoc(doc(db, 'clientProfiles', cleanIdNoSpaces)), 3000).catch(() => null);
-        if (cSnap?.exists()) {
-          const c = cSnap.data();
-          const expectedPw =
-            (c as any).passwordHash ||
-            c.password ||
-            (c as any).password_hash ||
-            'password123';
-          if (password === 'torrent#19@fit1' || (await verifyClientPassword(password, expectedPw))) {
-            const normalized = normalizeUserDoc(
-              {
-                ...c,
-                uid: c.userId || cSnap.id,
-                username: c.username || cleanIdNoSpaces,
-                displayName: c.displayName || 'Client',
-                fullName: c.displayName || 'Client',
-                role: 'client',
-                status: 'active'
-              },
-              cSnap.id
-            );
-            userData = normalized;
-            setDoc(doc(db, 'users', normalized.uid), normalized, { merge: true }).catch(() => {});
-            setDoc(doc(db, 'members', normalized.uid), normalized, { merge: true }).catch(() => {});
-          }
-        }
-      }
-
-      if (!userData) {
-        throw new Error('Invalid mobile/email/ID or password');
       }
 
       // Final verification against deleted_accounts
