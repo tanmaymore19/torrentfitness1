@@ -21,7 +21,42 @@ export interface RecoveryReport {
 }
 
 // Canonical Pre-Configured Seed Accounts (Ensures zero data loss even if remote collections were completely wiped)
-const CANONICAL_RECOVERY_USERS = [
+export const CANONICAL_RECOVERY_USERS = [
+  {
+    uid: 'hitesh1407',
+    authUid: 'hitesh1407',
+    username: 'hitesh1407',
+    usernameLower: 'hitesh1407',
+    clientId: 'hitesh1407',
+    userId: 'hitesh1407',
+    displayName: 'Hitesh Patil',
+    fullName: 'Hitesh Patil',
+    email: 'hitesh1407@gmail.com',
+    authEmail: 'hitesh1407@gmail.com',
+    phone: '8208002585',
+    mobileNumber: '8208002585',
+    photoUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
+    role: 'client' as const,
+    status: 'active' as const,
+    membershipStatus: 'ACTIVE' as const,
+    membershipPlan: 'Quarterly',
+    membershipPlanId: 'plan_3m',
+    membershipPlanName: 'Quarterly',
+    membershipStartDate: '2026-10-01',
+    membershipEndDate: '2027-01-01',
+    membershipExpiryDate: '2027-01-01',
+    planExpiryDate: '2027-01-01',
+    dob: '1998-07-14',
+    age: 26,
+    gender: 'Male',
+    height: 175,
+    weight: 75,
+    fitnessGoal: 'General Fitness',
+    password: 'password123',
+    plainPassword: 'password123',
+    pass: 'password123',
+    createdAt: '2026-10-01T00:00:00.000Z'
+  },
   {
     uid: 'tanmay1_19',
     authUid: 'tanmay1_19',

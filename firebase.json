@@ -34,6 +34,7 @@
     ]
   },
   "firestore": {
+    "database": "ai-studio-torrentfitness-3a8f4657-6c04-44f3-85e5-0b93052d79db",
     "rules": "TorrentFitness-main/firestore.rules"
   }
 }

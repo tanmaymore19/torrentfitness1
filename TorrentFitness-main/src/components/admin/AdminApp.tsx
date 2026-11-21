@@ -1,4 +1,5 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../../context/AuthContext';
 import { usePdfDownload } from '../../context/PdfDownloadContext';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -993,6 +994,7 @@ export const AdminApp: React.FC = () => {
     if (e && e.preventDefault) e.preventDefault();
     if (!selectedUserForPasswordChange || !newPasswordInput.trim()) return;
     if (newPasswordInput.trim().length < 6) {
+      alert('Password must be at least 6 characters.');
       showAdminNotice('Password must be at least 6 characters.', 'error');
       return;
     }
@@ -1020,6 +1022,45 @@ export const AdminApp: React.FC = () => {
         doc(db, 'usernames', lowerUid)
       ];
       directCandidates.forEach((r) => matchingRefs.set(r.path, r));
+
+      // Sibling paths from loaded allUsers and clients
+      const existingUser = allUsers.find(
+        (u) =>
+          u.uid === uid ||
+          u.uid.toLowerCase() === lowerUid ||
+          u.username === uid ||
+          u.username?.toLowerCase() === lowerUid
+      );
+      if (existingUser) {
+        if (existingUser.uid) {
+          matchingRefs.set(doc(db, 'users', existingUser.uid).path, doc(db, 'users', existingUser.uid));
+          matchingRefs.set(doc(db, 'clientProfiles', existingUser.uid).path, doc(db, 'clientProfiles', existingUser.uid));
+          matchingRefs.set(doc(db, 'members', existingUser.uid).path, doc(db, 'members', existingUser.uid));
+        }
+        if (existingUser.username) {
+          const uLower = existingUser.username.toLowerCase();
+          matchingRefs.set(doc(db, 'usernames', uLower).path, doc(db, 'usernames', uLower));
+        }
+      }
+
+      const existingClient = clients.find(
+        (c) =>
+          c.userId === uid ||
+          c.userId.toLowerCase() === lowerUid ||
+          (c as any).username === uid ||
+          (c as any).username?.toLowerCase() === lowerUid
+      );
+      if (existingClient) {
+        if (existingClient.userId) {
+          matchingRefs.set(doc(db, 'users', existingClient.userId).path, doc(db, 'users', existingClient.userId));
+          matchingRefs.set(doc(db, 'clientProfiles', existingClient.userId).path, doc(db, 'clientProfiles', existingClient.userId));
+          matchingRefs.set(doc(db, 'members', existingClient.userId).path, doc(db, 'members', existingClient.userId));
+        }
+        if ((existingClient as any).username) {
+          const uLower = (existingClient as any).username.toLowerCase();
+          matchingRefs.set(doc(db, 'usernames', uLower).path, doc(db, 'usernames', uLower));
+        }
+      }
 
       // 2. Query collections to catch sibling documents (e.g. auth UID vs username)
       try {
@@ -1066,53 +1107,77 @@ export const AdminApp: React.FC = () => {
 
       await batch.commit();
 
-      // 4. Update local React state immediately so Admin cards reflect the new PASS: instantly
-      setAllUsers((prev) =>
-        prev.map((u) => {
-          if (
-            u.uid === uid ||
-            u.uid.toLowerCase() === lowerUid ||
-            u.username === uid ||
-            u.username?.toLowerCase() === lowerUid
-          ) {
-            return { ...u, password: cleanPass, plainPassword: cleanPass };
-          }
-          return u;
-        })
-      );
-      setClients((prev) =>
-        prev.map((c) => {
-          if (
-            c.userId === uid ||
-            c.userId.toLowerCase() === lowerUid ||
-            (c as any).username === uid ||
-            (c as any).username?.toLowerCase() === lowerUid
-          ) {
-            return { ...c, password: cleanPass, plainPassword: cleanPass } as any;
-          }
-          return c;
-        })
-      );
-      setTrainers((prev) =>
-        prev.map((t) => {
-          if (
-            t.trainerId === uid ||
-            t.trainerId.toLowerCase() === lowerUid ||
-            (t as any).username === uid ||
-            (t as any).username?.toLowerCase() === lowerUid
-          ) {
-            return { ...t, password: cleanPass, plainPassword: cleanPass } as any;
-          }
-          return t;
-        })
-      );
+      // 4. Update local React state and storage caches immediately so Admin cards reflect the new PASS: instantly
+      const updatedAllUsers = allUsers.map((u) => {
+        if (
+          u.uid === uid ||
+          u.uid.toLowerCase() === lowerUid ||
+          u.username === uid ||
+          u.username?.toLowerCase() === lowerUid ||
+          (existingUser && u.uid === existingUser.uid)
+        ) {
+          return { ...u, password: cleanPass, plainPassword: cleanPass, pass: cleanPass };
+        }
+        return u;
+      });
+      setAllUsers(updatedAllUsers);
+      setCachedData('admin_users', updatedAllUsers);
+
+      const updatedClients = clients.map((c) => {
+        if (
+          c.userId === uid ||
+          c.userId.toLowerCase() === lowerUid ||
+          (c as any).username === uid ||
+          (c as any).username?.toLowerCase() === lowerUid ||
+          (existingClient && c.userId === existingClient.userId)
+        ) {
+          return { ...c, password: cleanPass, plainPassword: cleanPass, pass: cleanPass } as any;
+        }
+        return c;
+      });
+      setClients(updatedClients);
+      setCachedData('admin_clients', updatedClients);
+
+      const updatedTrainers = trainers.map((t) => {
+        if (
+          t.trainerId === uid ||
+          t.trainerId.toLowerCase() === lowerUid ||
+          (t as any).username === uid ||
+          (t as any).username?.toLowerCase() === lowerUid
+        ) {
+          return { ...t, password: cleanPass, plainPassword: cleanPass, pass: cleanPass } as any;
+        }
+        return t;
+      });
+      setTrainers(updatedTrainers);
+      setCachedData('admin_trainers', updatedTrainers);
+
       setShowPasswordMap((prev) => ({ ...prev, [uid]: true, [lowerUid]: true }));
 
+      // Also update any other member caches
+      try {
+        const rawCached = localStorage.getItem('torrent_cached_members');
+        if (rawCached) {
+          const parsed = JSON.parse(rawCached);
+          if (Array.isArray(parsed)) {
+            const up = parsed.map((m: any) => {
+              if (m.userId === uid || m.uid === uid || m.username === uid || m.userId?.toLowerCase() === lowerUid) {
+                return { ...m, password: cleanPass, plainPassword: cleanPass, pass: cleanPass };
+              }
+              return m;
+            });
+            localStorage.setItem('torrent_cached_members', JSON.stringify(up));
+          }
+        }
+      } catch {}
+
       showAdminNotice('Password updated & saved to cloud! Old password deactivated.', 'success');
+      alert('Password updated & saved successfully!');
       setSelectedUserForPasswordChange(null);
       setNewPasswordInput('');
     } catch (err: any) {
       console.error('[Admin Change Pass Error]', err);
+      alert('Save Error: ' + (err.message || 'Please try again'));
       showAdminNotice('Error updating user password: ' + (err.message || 'Please try again'), 'error');
     } finally {
       setPasswordChangeLoading(false);
@@ -2768,7 +2833,7 @@ export const AdminApp: React.FC = () => {
   // Shared Client Card Renderer for Domain 01 (Strictly User Management — NO Attendance triggers)
   const renderDomain01ClientCard = (client: ClientProfile) => {
     const clientUser = allUsers.find(u => u.uid === client.userId || u.username === client.userId);
-    const userPass = clientUser?.password || (client as any).password || 'password123';
+    const userPass = clientUser?.password || clientUser?.plainPassword || (clientUser as any)?.pass || (client as any).password || (client as any).plainPassword || (client as any).pass || 'password123';
     const userDob = clientUser?.dob || client.dob || 'Not set';
     const isPassShown = !!showPasswordMap[client.userId];
     const isSelfDel = client.isSelfDeleted || clientUser?.isSelfDeleted;
@@ -2857,7 +2922,9 @@ export const AdminApp: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => {
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
                 setSelectedUserForPasswordChange({
                   uid: client.userId,
                   displayName: client.displayName,
@@ -2866,7 +2933,7 @@ export const AdminApp: React.FC = () => {
                 });
                 setNewPasswordInput('');
               }}
-              className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs"
+              className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer pointer-events-auto"
             >
               <Key className="w-3.5 h-3.5 text-amber-600" />
               <span>Change Pass</span>
@@ -3595,7 +3662,7 @@ export const AdminApp: React.FC = () => {
                             (u) => u.uid === client.userId || u.username === client.userId
                           );
                           const userPass =
-                            clientUser?.password || (client as any).password || 'password123';
+                            clientUser?.password || clientUser?.plainPassword || (clientUser as any)?.pass || (client as any).password || (client as any).plainPassword || (client as any).pass || 'password123';
                           const isPassShown = !!showPasswordMap[client.userId];
                           const isSelfDel = client.isSelfDeleted || clientUser?.isSelfDeleted;
 
@@ -3673,7 +3740,9 @@ export const AdminApp: React.FC = () => {
                                 <div className="inline-flex items-center gap-2">
                                   <button
                                     type="button"
-                                    onClick={() => {
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
                                       setSelectedUserForPasswordChange({
                                         uid: client.userId,
                                         displayName: client.displayName,
@@ -3682,10 +3751,10 @@ export const AdminApp: React.FC = () => {
                                       });
                                       setNewPasswordInput('');
                                     }}
-                                    className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold transition-all inline-flex items-center gap-1"
+                                    className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold transition-all inline-flex items-center gap-1 cursor-pointer pointer-events-auto"
                                   >
                                     <Key className="w-3.5 h-3.5 text-amber-600" />
-                                    <span>Reset Password</span>
+                                    <span>Change Pass</span>
                                   </button>
                                   <button
                                     type="button"
@@ -3923,7 +3992,7 @@ export const AdminApp: React.FC = () => {
                       (u) => u.uid === tr.trainerId || u.username === tr.trainerId
                     );
                     const userPass =
-                      trUser?.password || (tr as any).password || 'password123';
+                      trUser?.password || trUser?.plainPassword || (trUser as any)?.pass || (tr as any).password || (tr as any).plainPassword || (tr as any).pass || 'password123';
                     const userDob = trUser?.dob || tr.dob || 'Not set';
                     const isPassShown = !!showPasswordMap[tr.trainerId];
                     const statusLabel = String(tr.status || 'active').toUpperCase();
@@ -4044,7 +4113,9 @@ export const AdminApp: React.FC = () => {
 
                             <button
                               type="button"
-                              onClick={() => {
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
                                 setSelectedUserForPasswordChange({
                                   uid: tr.trainerId,
                                   displayName: tr.displayName,
@@ -4053,7 +4124,7 @@ export const AdminApp: React.FC = () => {
                                 });
                                 setNewPasswordInput('');
                               }}
-                              className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold transition-all"
+                              className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold transition-all cursor-pointer pointer-events-auto"
                             >
                               Change Pass
                             </button>
@@ -6004,8 +6075,8 @@ export const AdminApp: React.FC = () => {
       </div>
 
       {/* MODAL 1: CHANGE USER PASSWORD MODAL */}
-      {selectedUserForPasswordChange && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-md animate-fade-in">
+      {selectedUserForPasswordChange && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in pointer-events-auto">
           <div className="w-full max-w-md vision-surface border border-white/90 rounded-3xl p-6 shadow-2xl text-slate-800 space-y-4">
             <div className="flex items-center justify-between border-b border-slate-200/80 pb-3">
               <div className="flex items-center gap-2">
@@ -6018,8 +6089,9 @@ export const AdminApp: React.FC = () => {
                 </div>
               </div>
               <button
+                type="button"
                 onClick={() => setSelectedUserForPasswordChange(null)}
-                className="text-slate-400 hover:text-slate-700 p-1"
+                className="text-slate-400 hover:text-slate-700 p-1 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -6059,7 +6131,7 @@ export const AdminApp: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setSelectedUserForPasswordChange(null)}
-                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all border border-slate-200"
+                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all border border-slate-200 cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -6074,7 +6146,8 @@ export const AdminApp: React.FC = () => {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* MODAL 2: DETAILED TRAINER / STAFF PROFILE MODAL */}
