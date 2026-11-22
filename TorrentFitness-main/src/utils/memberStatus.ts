@@ -5,32 +5,48 @@
  */
 
 export function isClientActiveMembership(c: any): boolean {
-  if (!c || c.isSelfDeleted) return false;
+  if (!c || c.isSelfDeleted || c.isDeletedByAdmin || c.status === 'archived' || c.status === 'deleted') return false;
 
-  // 1. Explicit boolean flag
-  if (c.isActive === true) return true;
+  // Explicit false flags
+  if (c.isActive === false) return false;
 
-  // 2. Status string normalization
+  // Status string normalization
   const memStatus = String(c.membershipStatus || '').trim().toUpperCase();
   const accStatus = String(c.status || '').trim().toUpperCase();
 
-  if (memStatus === 'ACTIVE' || accStatus === 'ACTIVE') {
+  // If explicitly inactive, rejected, expired, or cancelled, membership is strictly not active
+  if (
+    memStatus === 'INACTIVE' ||
+    memStatus === 'REJECTED' ||
+    memStatus === 'EXPIRED' ||
+    memStatus === 'CANCELLED' ||
+    memStatus === 'NONE' ||
+    memStatus === 'PENDING' ||
+    accStatus === 'INACTIVE' ||
+    accStatus === 'REJECTED'
+  ) {
+    return false;
+  }
+
+  // 1. Explicit membership status ACTIVE
+  if (memStatus === 'ACTIVE') {
+    // If an expiry date is set, ensure it hasn't passed
+    const expiry = c.planExpiryDate || c.membershipEndDate || c.membershipExpiryDate;
+    if (expiry && expiry !== '-') {
+      const todayStr = new Date().toISOString().split('T')[0];
+      if (expiry < todayStr) return false;
+    }
     return true;
   }
+
+  // 2. Explicit boolean flag if membershipStatus is not inactive
+  if (c.isActive === true) return true;
 
   // 3. Expiry date check if not explicitly inactive or expired
   const expiry = c.planExpiryDate || c.membershipEndDate || c.membershipExpiryDate;
   if (expiry && expiry !== '-') {
     const todayStr = new Date().toISOString().split('T')[0];
-    if (
-      expiry >= todayStr &&
-      memStatus !== 'INACTIVE' &&
-      memStatus !== 'EXPIRED' &&
-      memStatus !== 'CANCELLED' &&
-      accStatus !== 'INACTIVE' &&
-      accStatus !== 'EXPIRED' &&
-      accStatus !== 'CANCELLED'
-    ) {
+    if (expiry >= todayStr) {
       return true;
     }
   }
@@ -42,15 +58,32 @@ export function isClientActiveMembership(c: any): boolean {
  * Determines whether a client has an active Aerobics studio enrollment.
  */
 export function isClientActiveAerobics(c: any): boolean {
-  if (!c || c.isSelfDeleted) return false;
+  if (!c || c.isSelfDeleted || c.isDeletedByAdmin || c.status === 'archived' || c.status === 'deleted') return false;
 
   const status = String(c.aerobicsStatus || '').trim().toLowerCase();
-  if (status === 'active') return true;
+  if (
+    status === 'inactive' ||
+    status === 'rejected' ||
+    status === 'expired' ||
+    status === 'cancelled' ||
+    status === 'none' ||
+    status === 'pending'
+  ) {
+    return false;
+  }
+  if (status === 'active') {
+    const expiry = c.aerobicsEndDate || c.aerobicsExpiryDate;
+    if (expiry && expiry !== '-') {
+      const todayStr = new Date().toISOString().split('T')[0];
+      if (expiry < todayStr) return false;
+    }
+    return true;
+  }
 
   const expiry = c.aerobicsEndDate || c.aerobicsExpiryDate;
   if (expiry && expiry !== '-') {
     const todayStr = new Date().toISOString().split('T')[0];
-    if (expiry >= todayStr && status !== 'inactive' && status !== 'expired' && status !== 'cancelled') {
+    if (expiry >= todayStr) {
       return true;
     }
   }

@@ -197,6 +197,14 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
     const seenMembershipIds = new Set<string>();
 
     for (const tx of transactions) {
+      if (
+        tx.isDeletedByAdmin ||
+        (tx as any).deletedByAdmin ||
+        String(tx.status).toUpperCase() === 'DELETED' ||
+        String(tx.status).toUpperCase() === 'ARCHIVED'
+      ) {
+        continue;
+      }
       if (tx.membershipId) seenMembershipIds.add(tx.membershipId);
       const matchingMem = memberships.find(
         (m) => m.id === tx.membershipId || m.transactionId === tx.id
@@ -685,8 +693,10 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
       const finCollections = ['paymentTransactions', 'transactions', 'payments', 'invoices', 'bills', 'billing_history'];
       const archivePayload = {
         isDeletedByAdmin: true,
-        status: 'deleted',
+        status: 'DELETED',
         verificationStatus: 'DELETED',
+        amount: 0,
+        finalAmount: 0,
         deletedAt: serverTimestamp(),
         deletedBy: 'Master Admin',
         updatedAt: nowIso
@@ -696,7 +706,7 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
         ...finCollections.map((coll) => deleteDoc(doc(db, coll, txId)).catch(() => null))
       ]);
 
-      // 2. Remove/archive linked memberships
+      // 2. Remove/archive linked memberships and related records
       if (txToDelete.rawTx?.membershipId) {
         await Promise.allSettled([
           setDoc(doc(db, 'memberships', txToDelete.rawTx.membershipId), archivePayload, { merge: true }).catch(() => null),
@@ -713,6 +723,35 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
         }
       } catch {}
 
+      // Query and delete matching bills/receipts/invoices across root collections
+      try {
+        const queryPromises = [
+          getDocs(query(collection(db, 'invoices'), where('transactionId', '==', txId))),
+          getDocs(query(collection(db, 'bills'), where('transactionId', '==', txId))),
+          getDocs(query(collection(db, 'paymentTransactions'), where('transactionId', '==', txId)))
+        ];
+        if (txToDelete.receiptNumber) {
+          queryPromises.push(
+            getDocs(query(collection(db, 'invoices'), where('receiptNumber', '==', txToDelete.receiptNumber))),
+            getDocs(query(collection(db, 'bills'), where('receiptNumber', '==', txToDelete.receiptNumber)))
+          );
+        }
+        if (txToDelete.paymentId) {
+          queryPromises.push(
+            getDocs(query(collection(db, 'invoices'), where('paymentId', '==', txToDelete.paymentId))),
+            getDocs(query(collection(db, 'bills'), where('paymentId', '==', txToDelete.paymentId)))
+          );
+        }
+        const queryResults = await Promise.allSettled(queryPromises);
+        for (const res of queryResults) {
+          if (res.status === 'fulfilled' && !res.value.empty) {
+            await Promise.allSettled(res.value.docs.map((d) => deleteDoc(d.ref)));
+          }
+        }
+      } catch (e) {
+        console.warn('Error deleting linked invoices/bills:', e);
+      }
+
       // 3. Remove from client subcollections (transactions, invoices, bills, paymentHistory)
       if (clientId) {
         await Promise.allSettled([
@@ -721,6 +760,15 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
           deleteDoc(doc(db, 'clientProfiles', clientId, 'bills', txId)).catch(() => null),
           deleteDoc(doc(db, 'clientProfiles', clientId, 'paymentHistory', txId)).catch(() => null)
         ]);
+        try {
+          const subColls = ['transactions', 'invoices', 'bills', 'paymentHistory'];
+          for (const sub of subColls) {
+            const subSnap = await getDocs(query(collection(db, 'clientProfiles', clientId, sub), where('transactionId', '==', txId)));
+            if (!subSnap.empty) {
+              await Promise.allSettled(subSnap.docs.map((d) => deleteDoc(d.ref)));
+            }
+          }
+        } catch {}
       }
 
       // 4. Cascade Revocation of the Linked Service (MEMBERSHIP, PT, or AEROBICS)
@@ -756,6 +804,15 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
             aerobicsStatus: 'INACTIVE',
             currentAerobicsBatch: null,
             aerobicsExpiryDate: null,
+            aerobicsBatchId: null,
+            aerobicsBatchName: null,
+            aerobicsStartDate: null,
+            aerobicsEndDate: null,
+            queuedAerobicsBatch: null,
+            queuedAerobicsBatchId: null,
+            queuedAerobicsBatchName: null,
+            queuedAerobicsStartDate: null,
+            queuedAerobicsEndDate: null,
             pendingAerobicsRequest: false,
             aerobicsRequestStatus: 'inactive',
             pendingAerobicsRequestId: null,
@@ -778,6 +835,8 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
             assignedTrainerId: null,
             assignedTrainerName: null,
             ptApprovedByAdmin: false,
+            ptStartDate: null,
+            ptExpiryDate: null,
             ptPlanActive: false,
             pendingPtRequestId: null,
             updatedAt: nowIso
@@ -817,6 +876,11 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
             membershipStartDate: null,
             membershipEndDate: null,
             membershipExpiryDate: null,
+            queuedPlan: null,
+            queuedPlanId: null,
+            queuedPlanName: null,
+            queuedStartDate: null,
+            queuedEndDate: null,
             updatedAt: nowIso
           };
           await Promise.allSettled([
@@ -848,7 +912,7 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
 
       setFeedbackBanner({
         type: 'success',
-        text: 'Transaction, client bill, and linked plan/service permanently removed.'
+        text: 'Transaction deleted. Revenue, client bill, and linked plan/service removed.'
       });
     } catch (err: any) {
       alert('Error deleting transaction: ' + err.message);

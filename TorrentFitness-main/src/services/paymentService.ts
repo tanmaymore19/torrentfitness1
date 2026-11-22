@@ -2433,11 +2433,13 @@ export async function rejectOfflinePaymentRequest(
   const clientId = txData?.clientId || txData?.userId;
   const batch = writeBatch(db);
 
-  // 1. Update financial records
+  // 1. Update financial records: mark REJECTED and zero out amounts so they never count toward revenue
   const txRejectionPayload = {
     status: 'rejected',
     paymentStatus: 'REJECTED',
     verificationStatus: 'REJECTED',
+    amount: 0,
+    finalAmount: 0,
     rejectionReason: reason,
     rejectedAt: serverTimestamp(),
     updatedAt: nowIso
@@ -2459,6 +2461,7 @@ export async function rejectOfflinePaymentRequest(
   if (txData?.membershipId) {
     batch.set(doc(db, 'memberships', txData.membershipId), {
       status: 'rejected',
+      amountPaid: 0,
       rejectionReason: reason,
       rejectedAt: serverTimestamp(),
       updatedAt: nowIso
@@ -2466,9 +2469,27 @@ export async function rejectOfflinePaymentRequest(
   }
 
   // 4. Update client profile across users/{uid}, members/{uid}, clientProfiles/{uid}
+  // Enforces membershipStatus: 'INACTIVE', status: 'INACTIVE', isActive: false
   if (clientId) {
     const clientUpdates = {
+      membershipStatus: 'INACTIVE',
+      status: 'INACTIVE',
+      isActive: false,
       pendingMembershipRequest: false,
+      currentPlan: null,
+      planName: null,
+      planExpiryDate: null,
+      membershipPlan: null,
+      membershipPlanName: null,
+      membershipPlanId: null,
+      membershipStartDate: null,
+      membershipEndDate: null,
+      membershipExpiryDate: null,
+      queuedPlan: null,
+      queuedPlanId: null,
+      queuedPlanName: null,
+      queuedStartDate: null,
+      queuedEndDate: null,
       membershipRejectionAlert: true,
       offlineRequestStatus: 'rejected',
       offlineRejectionReason: reason,

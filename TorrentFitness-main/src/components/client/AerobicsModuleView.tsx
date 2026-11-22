@@ -595,9 +595,9 @@ export const AerobicsModuleView: React.FC<AerobicsModuleViewProps> = ({ onChecko
       {checkoutBatch && createPortal(
         <div
           style={{ zIndex: 999999 }}
-          className="fixed inset-0 z-[999999] bg-slate-950/75 backdrop-blur-sm flex flex-col items-center justify-start sm:justify-center overflow-y-auto p-2.5 sm:p-4 pt-3 sm:pt-6 pb-6 animate-fade-in overscroll-none"
+          className="fixed inset-0 z-[999999] bg-slate-950/80 backdrop-blur-md flex flex-col items-center justify-start overflow-y-auto p-2.5 sm:p-4 pt-4 sm:pt-6 pb-20 animate-fade-in overscroll-contain"
         >
-          <div className="w-full max-w-md max-h-[82dvh] sm:max-h-[85dvh] my-auto flex flex-col bg-white rounded-3xl border border-rose-100 shadow-2xl overflow-hidden text-slate-800 relative z-10 shrink-0">
+          <div className="w-full max-w-md max-h-[calc(100dvh-2.5rem)] sm:max-h-[88dvh] my-2 sm:my-auto flex flex-col bg-white rounded-3xl border border-rose-100 shadow-2xl overflow-hidden text-slate-800 relative z-10 shrink-0">
             {/* Modal Header (Fixed at Top) */}
             <div className="shrink-0 p-4 bg-gradient-to-r from-rose-500 via-fuchsia-600 to-pink-600 text-white flex items-center justify-between">
               <div>

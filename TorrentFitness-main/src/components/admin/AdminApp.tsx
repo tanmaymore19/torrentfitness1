@@ -1875,8 +1875,8 @@ export const AdminApp: React.FC = () => {
 
       const txnId = (req as any).transactionId || (reqId.startsWith('txn_') ? reqId : '');
       if (txnId) {
-        batch.set(doc(db, 'transactions', txnId), { status: 'rejected', paymentStatus: 'REJECTED', rejectedAt: serverTimestamp() }, { merge: true });
-        batch.set(doc(db, 'paymentTransactions', txnId), { status: 'rejected', paymentStatus: 'REJECTED', rejectedAt: serverTimestamp() }, { merge: true });
+        batch.set(doc(db, 'transactions', txnId), { status: 'rejected', paymentStatus: 'REJECTED', verificationStatus: 'REJECTED', amount: 0, finalAmount: 0, rejectedAt: serverTimestamp(), updatedAt: nowIso }, { merge: true });
+        batch.set(doc(db, 'paymentTransactions', txnId), { status: 'rejected', paymentStatus: 'REJECTED', verificationStatus: 'REJECTED', amount: 0, finalAmount: 0, rejectedAt: serverTimestamp(), updatedAt: nowIso }, { merge: true });
       }
 
       if (clientId) {
@@ -1884,6 +1884,12 @@ export const AdminApp: React.FC = () => {
           ptStatus: 'REJECTED',
           assignedTrainerId: null,
           assignedTrainerName: null,
+          ptApprovedByAdmin: false,
+          requestedTrainerId: null,
+          requestedTrainerName: null,
+          ptPlanActive: false,
+          ptStartDate: null,
+          ptExpiryDate: null,
           pendingPtRequestId: null,
           pendingOfflineRequestId: null,
           offlineRequestStatus: 'rejected',

@@ -573,11 +573,13 @@ export const AerobicsAdminManager: React.FC = () => {
       };
       batch.set(doc(db, 'aerobics_requests', req.id), reqUpdates, { merge: true });
 
-      // 2. If transaction doc exists
+      // 2. If transaction doc exists: mark REJECTED and zero out amounts
       const txUpdates = {
         status: 'rejected',
         paymentStatus: 'REJECTED',
         verificationStatus: 'REJECTED',
+        amount: 0,
+        finalAmount: 0,
         rejectedAt: serverTimestamp(),
         updatedAt: nowIso
       };
@@ -589,6 +591,17 @@ export const AerobicsAdminManager: React.FC = () => {
         const clientUpdates = {
           aerobicsStatus: 'REJECTED',
           pendingAerobicsRequest: false,
+          currentAerobicsBatch: null,
+          aerobicsExpiryDate: null,
+          aerobicsBatchId: null,
+          aerobicsBatchName: null,
+          aerobicsStartDate: null,
+          aerobicsEndDate: null,
+          queuedAerobicsBatch: null,
+          queuedAerobicsBatchId: null,
+          queuedAerobicsBatchName: null,
+          queuedAerobicsStartDate: null,
+          queuedAerobicsEndDate: null,
           aerobicsRequestStatus: 'rejected',
           pendingAerobicsRequestId: null,
           pendingAerobicsBatchId: null,

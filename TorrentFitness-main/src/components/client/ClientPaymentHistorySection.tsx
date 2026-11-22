@@ -166,7 +166,14 @@ export const ClientPaymentHistorySection: React.FC = () => {
     };
 
     for (const tx of transactions) {
-      if (tx.isDeletedByAdmin || tx.status === 'deleted' || tx.status === 'archived') continue;
+      if (
+        tx.isDeletedByAdmin ||
+        (tx as any).deletedByAdmin ||
+        String(tx.status).toLowerCase() === 'deleted' ||
+        String(tx.status).toLowerCase() === 'archived'
+      ) {
+        continue;
+      }
       if (tx.membershipId) linkedMembershipIds.add(tx.membershipId);
       const matchingMem = memberships.find(
         (m) => m.id === tx.membershipId || m.transactionId === tx.id
@@ -271,7 +278,14 @@ export const ClientPaymentHistorySection: React.FC = () => {
 
     // Include any historical membership records that didn't have a separate paymentTransactions row
     for (const mem of memberships) {
-      if ((mem as any).transactionDeleted || (mem as any).isDeletedByAdmin || mem.status === 'archived' || mem.status === 'deleted') continue;
+      if (
+        (mem as any).transactionDeleted ||
+        (mem as any).isDeletedByAdmin ||
+        String(mem.status).toLowerCase() === 'archived' ||
+        String(mem.status).toLowerCase() === 'deleted'
+      ) {
+        continue;
+      }
       if (linkedMembershipIds.has(mem.id)) continue;
 
       const isCash = mem.paymentMode === 'cash';
