@@ -7,7 +7,9 @@ import {
   updateDoc,
   deleteDoc,
   getDoc,
-  onSnapshot
+  onSnapshot,
+  serverTimestamp,
+  writeBatch
 } from 'firebase/firestore';
 import {
   AerobicsBatch,
@@ -558,28 +560,55 @@ export const AerobicsAdminManager: React.FC = () => {
     if (isProcessingAction) return;
     setIsProcessingAction(true);
     try {
-      await setDoc(
-        doc(db, 'aerobics_requests', req.id),
-        {
-          status: 'DECLINED',
-          queueStatus: 'DECLINED',
-          declinedAt: new Date().toISOString(),
-          verifiedBy: 'Master Admin'
-        },
-        { merge: true }
+      const nowIso = new Date().toISOString();
+      const batch = writeBatch(db);
+
+      // 1. Update aerobics_requests
+      const reqUpdates = {
+        status: 'REJECTED',
+        queueStatus: 'REJECTED',
+        rejectedAt: serverTimestamp(),
+        verifiedBy: 'Master Admin',
+        updatedAt: nowIso
+      };
+      batch.set(doc(db, 'aerobics_requests', req.id), reqUpdates, { merge: true });
+
+      // 2. If transaction doc exists
+      const txUpdates = {
+        status: 'rejected',
+        paymentStatus: 'REJECTED',
+        verificationStatus: 'REJECTED',
+        rejectedAt: serverTimestamp(),
+        updatedAt: nowIso
+      };
+      batch.set(doc(db, 'transactions', req.id), txUpdates, { merge: true });
+      batch.set(doc(db, 'paymentTransactions', req.id), txUpdates, { merge: true });
+
+      // 3. Update client profile (users/{uid}, members/{uid}, clientProfiles/{uid})
+      if (req.clientId) {
+        const clientUpdates = {
+          aerobicsStatus: 'REJECTED',
+          pendingAerobicsRequest: false,
+          aerobicsRequestStatus: 'rejected',
+          pendingAerobicsRequestId: null,
+          pendingAerobicsBatchId: null,
+          updatedAt: nowIso
+        };
+        batch.set(doc(db, 'users', req.clientId), clientUpdates, { merge: true });
+        batch.set(doc(db, 'members', req.clientId), clientUpdates, { merge: true });
+        batch.set(doc(db, 'clientProfiles', req.clientId), clientUpdates, { merge: true });
+      }
+
+      await batch.commit();
+
+      // 4. Remove immediately from Admin pending queue in local state
+      setAerobicsRequests((prev) =>
+        prev.map((r) => (r.id === req.id ? { ...r, status: 'REJECTED', queueStatus: 'REJECTED' } : r))
       );
 
-      await setDoc(
-        doc(db, 'clientProfiles', req.clientId),
-        {
-          aerobicsRequestStatus: 'declined',
-          pendingAerobicsRequestId: ''
-        },
-        { merge: true }
-      );
-
-      showToast(`Declined Aerobics request for ${req.clientName}.`);
+      showToast(`✓ Rejected Aerobics request for ${req.clientName || 'Client'}.`);
     } catch (err: any) {
+      console.error('Error rejecting aerobics request:', err);
       showToast('Error declining request: ' + err.message);
     } finally {
       setIsProcessingAction(false);

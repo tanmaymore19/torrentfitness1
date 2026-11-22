@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../../context/AuthContext';
 import { db } from '../../firebase';
 import {
@@ -70,6 +71,22 @@ export const AerobicsModuleView: React.FC = () => {
   const [isRazorpayOpen, setIsRazorpayOpen] = useState<boolean>(false);
   const [completedTxn, setCompletedTxn] = useState<PaymentTransaction | null>(null);
   const [enrollmentBanner, setEnrollmentBanner] = useState<string>('');
+
+  // Lock bottom navigation dock while Aerobics Buy Modal is open
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (checkoutBatch) {
+      document.body.classList.add('checkout-modal-open');
+      window.dispatchEvent(new CustomEvent('tf:checkout_modal_toggle', { detail: { active: true } }));
+    } else {
+      document.body.classList.remove('checkout-modal-open');
+      window.dispatchEvent(new CustomEvent('tf:checkout_modal_toggle', { detail: { active: false } }));
+    }
+    return () => {
+      document.body.classList.remove('checkout-modal-open');
+      window.dispatchEvent(new CustomEvent('tf:checkout_modal_toggle', { detail: { active: false } }));
+    };
+  }, [checkoutBatch]);
 
   useEffect(() => {
     if (!isFemaleClient || !currentUser) return;
@@ -564,10 +581,14 @@ export const AerobicsModuleView: React.FC = () => {
       </div>
 
       {/* Direct Batch Checkout Confirmation Modal */}
-      {checkoutBatch && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
-          <div className="w-full max-w-md bg-white rounded-3xl border border-rose-200 shadow-2xl overflow-hidden text-slate-800">
-            <div className="p-4 bg-gradient-to-r from-rose-500 via-fuchsia-600 to-pink-600 text-white flex items-center justify-between">
+      {checkoutBatch && createPortal(
+        <div
+          style={{ zIndex: 999999 }}
+          className="fixed inset-0 z-[999999] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-fade-in overscroll-none"
+        >
+          <div className="w-full max-w-md max-h-[88dvh] flex flex-col bg-white rounded-3xl border border-rose-100 shadow-2xl overflow-hidden text-slate-800 relative z-10">
+            {/* Modal Header (Fixed at Top) */}
+            <div className="shrink-0 p-4 bg-gradient-to-r from-rose-500 via-fuchsia-600 to-pink-600 text-white flex items-center justify-between">
               <div>
                 <span className="text-[10px] font-black uppercase tracking-wider text-rose-100 block">
                   Women&apos;s Studio Batch Enrollment
@@ -577,13 +598,14 @@ export const AerobicsModuleView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setCheckoutBatch(null)}
-                className="p-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white"
+                className="p-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="p-5 space-y-4 text-xs">
+            {/* Scrollable Middle Content */}
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain touch-pan-y px-5 py-4 space-y-4 text-xs">
               <div className="p-3.5 rounded-2xl bg-rose-50/80 border border-rose-200/80 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500 font-bold">Batch Timing:</span>
@@ -608,7 +630,7 @@ export const AerobicsModuleView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setCheckoutDuration('monthly')}
-                    className={`p-3 rounded-2xl border text-left ${
+                    className={`p-3 rounded-2xl border text-left cursor-pointer transition-all ${
                       checkoutDuration === 'monthly'
                         ? 'bg-rose-50 border-2 border-rose-500'
                         : 'bg-slate-50 border-slate-200'
@@ -622,7 +644,7 @@ export const AerobicsModuleView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setCheckoutDuration('quarterly')}
-                    className={`p-3 rounded-2xl border text-left ${
+                    className={`p-3 rounded-2xl border text-left cursor-pointer transition-all ${
                       checkoutDuration === 'quarterly'
                         ? 'bg-fuchsia-50 border-2 border-fuchsia-600'
                         : 'bg-slate-50 border-slate-200'
@@ -645,7 +667,7 @@ export const AerobicsModuleView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setPaymentTier('online')}
-                    className={`w-full p-2.5 rounded-xl border text-left flex items-center justify-between ${
+                    className={`w-full p-2.5 rounded-xl border text-left flex items-center justify-between cursor-pointer transition-all ${
                       paymentTier === 'online'
                         ? 'bg-indigo-50/90 border-indigo-500 font-bold'
                         : 'bg-slate-50 border-slate-200'
@@ -663,7 +685,7 @@ export const AerobicsModuleView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setPaymentTier('offline_cash')}
-                    className={`w-full p-2.5 rounded-xl border text-left flex items-center justify-between ${
+                    className={`w-full p-2.5 rounded-xl border text-left flex items-center justify-between cursor-pointer transition-all ${
                       paymentTier === 'offline_cash'
                         ? 'bg-amber-50/90 border-amber-500 font-bold'
                         : 'bg-slate-50 border-slate-200'
@@ -696,7 +718,7 @@ export const AerobicsModuleView: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleApplyAeroCoupon}
-                    className="px-3.5 py-1.5 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold text-xs"
+                    className="px-3.5 py-1.5 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold text-xs cursor-pointer"
                   >
                     Apply
                   </button>
@@ -726,12 +748,15 @@ export const AerobicsModuleView: React.FC = () => {
                     : 'Offline Cash Request: Your batch enrollment will activate once Admin verifies your cash payment at reception.'}
                 </span>
               </div>
+            </div>
 
+            {/* Non-scrollable Sticky Bottom Footer: Always 100% visible and tappable */}
+            <div className="shrink-0 p-4 bg-white border-t border-slate-100 pb-safe pb-[max(env(safe-area-inset-bottom,16px),16px)]">
               <button
                 type="button"
                 disabled={isProcessing || isRazorpayOpen}
                 onClick={handleProceedPayment}
-                className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-rose-500 via-fuchsia-600 to-pink-600 hover:from-rose-600 hover:to-fuchsia-700 text-white font-black text-xs shadow-lg flex items-center justify-center gap-2 disabled:opacity-50"
+                className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-rose-500 via-fuchsia-600 to-pink-600 hover:from-rose-600 hover:to-fuchsia-700 text-white font-black text-xs shadow-lg flex items-center justify-center gap-2 cursor-pointer pointer-events-auto disabled:opacity-50"
               >
                 {paymentTier === 'online' ? <CreditCard className="w-4 h-4" /> : <Banknote className="w-4 h-4" />}
                 <span>
@@ -744,7 +769,8 @@ export const AerobicsModuleView: React.FC = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Universal Online Gateway Checkout Modal */}

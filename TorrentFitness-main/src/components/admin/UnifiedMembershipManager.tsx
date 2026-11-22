@@ -268,6 +268,34 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
     }
   };
 
+  const handleRejectOfflineRequest = async (req: PaymentTransaction) => {
+    if (processingApprovalId === req.id) return;
+    setProcessingApprovalId(req.id);
+    try {
+      await rejectOfflinePaymentRequest(req.id);
+      setTransactions((prev) =>
+        prev.map((t) =>
+          t.id === req.id
+            ? { ...t, status: 'rejected', verificationStatus: 'REJECTED' }
+            : t
+        )
+      );
+      setFeedbackBanner({
+        type: 'success',
+        text: `✓ Offline request from ${req.clientName || 'Client'} has been rejected and removed.`
+      });
+    } catch (err: any) {
+      console.error('Error rejecting offline request:', err);
+      alert('Failed to reject request: ' + (err.message || 'Unknown error'));
+      setFeedbackBanner({
+        type: 'error',
+        text: 'Failed to reject request: ' + (err.message || 'Unknown error')
+      });
+    } finally {
+      setProcessingApprovalId(null);
+    }
+  };
+
   const confirmRevokeMember = async () => {
     if (!memberToRevoke) return;
     setIsRevokingMember(true);

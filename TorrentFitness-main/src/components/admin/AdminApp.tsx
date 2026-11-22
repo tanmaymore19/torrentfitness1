@@ -1880,43 +1880,31 @@ export const AdminApp: React.FC = () => {
       }
 
       if (clientId) {
-        batch.set(
-          doc(db, 'clientProfiles', clientId),
-          {
-            ptStatus: 'REJECTED',
-            assignedTrainerId: null,
-            assignedTrainerName: null,
-            pendingPtRequestId: null,
-            pendingOfflineRequestId: null,
-            offlineRequestStatus: 'rejected',
-            updatedAt: nowIso
-          },
-          { merge: true }
-        );
-        batch.set(
-          doc(db, 'members', clientId),
-          {
-            ptStatus: 'REJECTED',
-            assignedTrainerId: null,
-            assignedTrainerName: null,
-            pendingPtRequestId: null,
-            pendingOfflineRequestId: null,
-            offlineRequestStatus: 'rejected',
-            updatedAt: nowIso
-          },
-          { merge: true }
-        );
+        const ptRejectPayload = {
+          ptStatus: 'REJECTED',
+          assignedTrainerId: null,
+          assignedTrainerName: null,
+          pendingPtRequestId: null,
+          pendingOfflineRequestId: null,
+          offlineRequestStatus: 'rejected',
+          updatedAt: nowIso
+        };
+        batch.set(doc(db, 'users', clientId), ptRejectPayload, { merge: true });
+        batch.set(doc(db, 'members', clientId), ptRejectPayload, { merge: true });
+        batch.set(doc(db, 'clientProfiles', clientId), ptRejectPayload, { merge: true });
       }
 
       await batch.commit();
 
-      setPtRequests((prev) =>
-        prev.map((r) =>
+      setPtRequests((prev) => {
+        const updated = prev.map((r) =>
           r.id === reqId || (r as any).transactionId === txnId
-            ? ({ ...r, status: 'REJECTED' } as any)
+            ? ({ ...r, status: 'REJECTED', paymentStatus: 'REJECTED' } as any)
             : r
-        )
-      );
+        );
+        setCachedData('admin_pt_requests', updated);
+        return updated;
+      });
 
       if (clientId) {
         setClients((prev) =>

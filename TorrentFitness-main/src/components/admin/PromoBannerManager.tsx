@@ -10,6 +10,13 @@ import {
 } from 'firebase/firestore';
 import { PromoBanner } from '../../types';
 import { DEFAULT_PROMO_BANNERS, PromotionalCarousel } from '../client/PromotionalCarousel';
+import {
+  getStoredBanners,
+  saveStoredBanner,
+  deleteStoredBanner,
+  toggleStoredBannerActive,
+  updateStoredBannerOrder
+} from '../../services/bannerStorageService';
 import { GlobalDeleteConfirmModal } from '../common/GlobalDeleteConfirmModal';
 import { MediaUploadAdjustModal, MediaUploadResult } from '../common/MediaUploadAdjustModal';
 import {
@@ -131,19 +138,53 @@ export const PromoBannerManager: React.FC = () => {
     setTimeout(() => setStatusMessage(null), 4000);
   };
 
-  // Subscribe to real-time banners
+  // Subscribe to persistent IndexedDB banners & live updates
   useEffect(() => {
+    let isMounted = true;
+    const loadBanners = async () => {
+      try {
+        const stored = await getStoredBanners();
+        if (isMounted && stored && stored.length > 0) {
+          setBanners(stored);
+        }
+      } catch (err) {
+        console.warn('Load stored banners note:', err);
+      }
+    };
+
+    loadBanners();
+
+    const handleEvent = () => {
+      loadBanners();
+    };
+    window.addEventListener('tf:banners_updated', handleEvent);
+
     const unsub = onSnapshot(
       collection(db, 'promoBanners'),
       (snap) => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as PromoBanner));
-        list.sort((a, b) => (a.order || 0) - (b.order || 0));
-        setBanners(list);
+        if (!snap.empty && isMounted) {
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as PromoBanner));
+          list.sort((a, b) => (a.order || 0) - (b.order || 0));
+          setBanners((prev) => {
+            const map = new Map<string, PromoBanner>();
+            list.forEach(b => map.set(b.id, b));
+            prev.forEach(b => {
+              if (b.mediaUrl?.startsWith('blob:') || b.mediaUrl?.startsWith('data:')) {
+                map.set(b.id, b);
+              }
+            });
+            return Array.from(map.values()).sort((a, b) => (a.order || 0) - (b.order || 0));
+          });
+        }
       },
       (err) => console.warn('PromoBannerManager listener note:', err)
     );
 
-    return () => unsub();
+    return () => {
+      isMounted = false;
+      window.removeEventListener('tf:banners_updated', handleEvent);
+      unsub();
+    };
   }, []);
 
   // Subscribe to real-time gym photos
@@ -231,49 +272,24 @@ export const PromoBannerManager: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.type.startsWith('image/')) {
-      setIsUploadingMedia(true);
-      setUploadProgress(20);
-      setUploadStatusText('Compressing and preparing banner image...');
-      showNotice('Compressing banner image for high-speed mobile delivery...');
-      try {
-        setMediaType('image');
-        setUploadProgress(45);
-        setUploadStatusText('Uploading banner image to Storage...');
-        const uploadedUrl = await uploadBannerImage(file, file.name);
-        setMediaUrl(uploadedUrl);
-        setUploadProgress(100);
-        showNotice('✓ Banner image compressed and attached cleanly!');
-      } catch (err: any) {
-        console.error('Image upload error:', err);
-        showNotice('Failed to upload image: ' + (err.message || 'Please check file format'));
-      } finally {
-        setIsUploadingMedia(false);
-        setUploadProgress(0);
-      }
-    } else if (file.type.startsWith('video/') || file.name.match(/\.(mp4|webm|mov|m4v)$/i)) {
-      setIsUploadingMedia(true);
+    const isVideo = file.type.startsWith('video/') || Boolean(file.name.match(/\.(mp4|webm|mov|m4v)$/i));
+    setIsUploadingMedia(true);
+    setUploadProgress(40);
+    setMediaType(isVideo ? 'video' : 'image');
+    setUploadStatusText(isVideo ? 'Loading video clip into persistent storage...' : 'Loading image into persistent storage...');
+
+    try {
+      setSelectedMediaFile(file);
+      const objectUrl = URL.createObjectURL(file);
+      setMediaUrl(objectUrl);
+      setUploadProgress(100);
+      showNotice(`✓ ${isVideo ? 'Video' : 'Image'} file ready and attached! Save banner to lock into persistent storage.`);
+    } catch (err: any) {
+      console.error('File load error:', err);
+      showNotice('Failed to load media file: ' + (err.message || 'Please check file format'));
+    } finally {
+      setIsUploadingMedia(false);
       setUploadProgress(0);
-      setMediaType('video');
-      setUploadStatusText('Uploading video clip to Firebase Storage (0%)...');
-      showNotice('Uploading promotional video to Firebase Storage...');
-      try {
-        const uploadedVideoUrl = await uploadBannerVideo(file, (percent) => {
-          setUploadProgress(percent);
-          setUploadStatusText(`Uploading video clip to Firebase Storage (${percent}%)...`);
-        });
-        setMediaUrl(uploadedVideoUrl);
-        setUploadProgress(100);
-        showNotice('✓ Promotional video uploaded to Firebase Storage and attached!');
-      } catch (err: any) {
-        console.error('Video upload error:', err);
-        showNotice(err.message || 'Video upload failed. You can paste a direct video URL.');
-      } finally {
-        setIsUploadingMedia(false);
-        setUploadProgress(0);
-      }
-    } else {
-      showNotice('Please select a valid image (.jpg, .png, .webp) or video (.mp4, .webm) file.');
     }
     e.target.value = '';
   };
@@ -318,7 +334,7 @@ export const PromoBannerManager: React.FC = () => {
       showNotice('Banner title is required.');
       return;
     }
-    if (!mediaUrl.trim()) {
+    if (!mediaUrl.trim() && !selectedMediaFile) {
       showNotice('Banner image or video media URL is required.');
       return;
     }
@@ -328,24 +344,18 @@ export const PromoBannerManager: React.FC = () => {
       const bannerId = editingBanner ? editingBanner.id : `banner_${Date.now()}`;
       const order = editingBanner ? editingBanner.order : banners.length + 1;
 
-      // Ensure image is clean, compressed, and strictly below Firestore's 1MB limit
-      let safeMediaUrl = mediaUrl.trim();
-      if (mediaType === 'image' && safeMediaUrl.startsWith('data:')) {
-        safeMediaUrl = await uploadBannerImage(safeMediaUrl, `${bannerId}.jpg`);
-      }
-
-      const payload: any = {
+      const bannerData: any = {
         id: bannerId,
         title: title.trim(),
         subtitle: subtitle.trim(),
         tag: tag.trim().toUpperCase(),
         mediaType,
         type: mediaType,
-        mediaUrl: safeMediaUrl,
-        imageUrl: safeMediaUrl,
-        videoUrl: safeMediaUrl,
-        url: safeMediaUrl,
-        src: safeMediaUrl,
+        mediaUrl: mediaUrl.trim(),
+        imageUrl: mediaUrl.trim(),
+        videoUrl: mediaUrl.trim(),
+        url: mediaUrl.trim(),
+        src: mediaUrl.trim(),
         linkType,
         linkTarget: linkTarget.trim(),
         buttonText: buttonText.trim() || 'Explore Now',
@@ -359,16 +369,39 @@ export const PromoBannerManager: React.FC = () => {
         updatedAt: new Date().toISOString()
       };
 
-      // Save to primary promoBanners collection and mirror to banners
-      await setDoc(doc(db, 'promoBanners', bannerId), payload, { merge: true });
-      await setDoc(doc(db, 'banners', bannerId), payload, { merge: true }).catch(() => {});
+      // 1. Save to persistent browser IndexedDB (torrent_banners_db) + localStorage metadata
+      const saved = await saveStoredBanner(bannerData, selectedMediaFile || undefined);
+
+      // 2. Best-effort lightweight Firestore sync (doesn't block or fail on storage limits)
+      try {
+        const firestorePayload = {
+          id: bannerId,
+          title: bannerData.title,
+          subtitle: bannerData.subtitle,
+          tag: bannerData.tag,
+          mediaType: bannerData.mediaType,
+          mediaUrl: saved.mediaUrl?.startsWith('blob:') ? (editingBanner?.mediaUrl || '') : saved.mediaUrl,
+          linkType: bannerData.linkType,
+          linkTarget: bannerData.linkTarget,
+          buttonText: bannerData.buttonText,
+          badgeColor: bannerData.badgeColor,
+          active: bannerData.active,
+          order: bannerData.order,
+          updatedAt: new Date().toISOString()
+        };
+        await setDoc(doc(db, 'promoBanners', bannerId), firestorePayload, { merge: true }).catch(() => {});
+        await setDoc(doc(db, 'banners', bannerId), firestorePayload, { merge: true }).catch(() => {});
+      } catch {}
+
+      const updatedList = await getStoredBanners();
+      setBanners(updatedList);
 
       setIsModalOpen(false);
       resetForm();
-      showNotice(editingBanner ? '✓ Banner updated & synced to Client Home in real time!' : '✓ New banner published to Client Home in real time!');
+      showNotice(editingBanner ? '✓ Banner updated & permanently saved!' : '✓ New banner saved permanently into persistent storage!');
     } catch (err: any) {
       console.error('Failed to save banner:', err);
-      showNotice(`Failed to save banner: ${err.message || 'Please check attachment size'}`);
+      showNotice(`Failed to save banner: ${err.message || 'Please check attachment'}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -444,9 +477,12 @@ export const PromoBannerManager: React.FC = () => {
   const confirmDeleteBanner = async () => {
     if (!bannerToDelete) return;
     try {
-      await deleteDoc(doc(db, 'promoBanners', bannerToDelete.id));
+      await deleteStoredBanner(bannerToDelete.id);
+      await deleteDoc(doc(db, 'promoBanners', bannerToDelete.id)).catch(() => {});
       await deleteDoc(doc(db, 'banners', bannerToDelete.id)).catch(() => {});
-      showNotice(`✓ Banner "${bannerToDelete.title}" removed from carousel.`);
+      const updated = await getStoredBanners();
+      setBanners(updated);
+      showNotice(`✓ Banner "${bannerToDelete.title}" permanently deleted.`);
     } catch (err: any) {
       showNotice('Error deleting banner: ' + err.message);
     } finally {
@@ -457,13 +493,16 @@ export const PromoBannerManager: React.FC = () => {
   const handleToggleActive = async (banner: PromoBanner) => {
     try {
       const nextState = banner.active === false || banner.isActive === false ? true : false;
+      await toggleStoredBannerActive(banner.id, nextState);
       const updateData = {
         active: nextState,
         isActive: nextState,
         updatedAt: new Date().toISOString()
       };
-      await updateDoc(doc(db, 'promoBanners', banner.id), updateData);
+      await updateDoc(doc(db, 'promoBanners', banner.id), updateData).catch(() => {});
       await updateDoc(doc(db, 'banners', banner.id), updateData).catch(() => {});
+      const updated = await getStoredBanners();
+      setBanners(updated);
       showNotice(nextState ? `"${banner.title}" is now Active on Client Home.` : `"${banner.title}" is now Hidden.`);
     } catch (err: any) {
       console.error('Failed to update status:', err);
@@ -478,12 +517,16 @@ export const PromoBannerManager: React.FC = () => {
     const targetBanner = banners[targetIndex];
 
     try {
+      await updateStoredBannerOrder(currentBanner.id, targetIndex + 1);
+      await updateStoredBannerOrder(targetBanner.id, index + 1);
       await updateDoc(doc(db, 'promoBanners', currentBanner.id), {
         order: targetIndex + 1
-      });
+      }).catch(() => {});
       await updateDoc(doc(db, 'promoBanners', targetBanner.id), {
         order: index + 1
-      });
+      }).catch(() => {});
+      const updated = await getStoredBanners();
+      setBanners(updated);
       showNotice('Slide order updated.');
     } catch (err: any) {
       console.warn('Reorder failed:', err);

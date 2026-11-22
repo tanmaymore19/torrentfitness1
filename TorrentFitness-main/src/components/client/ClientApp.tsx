@@ -101,7 +101,7 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
   });
   const [scannerLockedAlert, setScannerLockedAlert] = useState<string | null>(null);
 
-  // Auto-detect checkout modal open state via body mutation observer as a failsafe
+  // Auto-detect checkout modal open state via body mutation observer and custom events
   useEffect(() => {
     if (typeof document === 'undefined') return;
     const checkModalState = () => {
@@ -111,7 +111,18 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
     checkModalState();
     const observer = new MutationObserver(checkModalState);
     observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
-    return () => observer.disconnect();
+
+    const handleCustomEvent = (e: any) => {
+      if (e && e.detail && typeof e.detail.active === 'boolean') {
+        setIsCheckoutModalActive(e.detail.active);
+      }
+    };
+    window.addEventListener('tf:checkout_modal_toggle', handleCustomEvent);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('tf:checkout_modal_toggle', handleCustomEvent);
+    };
   }, []);
 
   const handleOpenScannerWithGuards = () => {

@@ -2414,44 +2414,74 @@ export async function rejectOfflinePaymentRequest(
   transactionId: string,
   reason = 'Cash payment could not be verified at the reception desk.'
 ): Promise<void> {
-  const txRef = doc(db, 'paymentTransactions', transactionId);
-  const txSnap = await getDoc(txRef);
-  if (!txSnap.exists()) {
-    throw new Error('Payment request not found');
-  }
-
-  const tx = { id: txSnap.id, ...txSnap.data() } as PaymentTransaction;
+  const reqId = transactionId;
   const nowIso = new Date().toISOString();
 
-  await updateDoc(txRef, {
-    status: 'rejected',
-    verificationStatus: 'REJECTED',
-    rejectionReason: reason,
-    rejectedAt: nowIso
-  });
-
-  if (tx.membershipId) {
-    try {
-      await updateDoc(doc(db, 'memberships', tx.membershipId), {
-        status: 'rejected',
-        rejectionReason: reason,
-        rejectedAt: nowIso
-      });
-    } catch (e) {
-      console.warn('Could not mark membership record as rejected:', e);
+  let txData: any = null;
+  const txRef = doc(db, 'paymentTransactions', reqId);
+  const txSnap = await getDoc(txRef).catch(() => null);
+  if (txSnap && txSnap.exists()) {
+    txData = { id: txSnap.id, ...txSnap.data() };
+  } else {
+    const tRef = doc(db, 'transactions', reqId);
+    const tSnap = await getDoc(tRef).catch(() => null);
+    if (tSnap && tSnap.exists()) {
+      txData = { id: tSnap.id, ...tSnap.data() };
     }
   }
 
-  try {
-    await updateDoc(doc(db, 'clientProfiles', tx.clientId), {
+  const clientId = txData?.clientId || txData?.userId;
+  const batch = writeBatch(db);
+
+  // 1. Update financial records
+  const txRejectionPayload = {
+    status: 'rejected',
+    paymentStatus: 'REJECTED',
+    verificationStatus: 'REJECTED',
+    rejectionReason: reason,
+    rejectedAt: serverTimestamp(),
+    updatedAt: nowIso
+  };
+  batch.set(doc(db, 'paymentTransactions', reqId), txRejectionPayload, { merge: true });
+  batch.set(doc(db, 'transactions', reqId), txRejectionPayload, { merge: true });
+
+  // 2. Update membership_requests & membershipRequests
+  const memReqPayload = {
+    status: 'REJECTED',
+    rejectionReason: reason,
+    rejectedAt: serverTimestamp(),
+    updatedAt: nowIso
+  };
+  batch.set(doc(db, 'membership_requests', reqId), memReqPayload, { merge: true });
+  batch.set(doc(db, 'membershipRequests', reqId), memReqPayload, { merge: true });
+
+  // 3. Mark linked membership record as rejected if exists
+  if (txData?.membershipId) {
+    batch.set(doc(db, 'memberships', txData.membershipId), {
+      status: 'rejected',
+      rejectionReason: reason,
+      rejectedAt: serverTimestamp(),
+      updatedAt: nowIso
+    }, { merge: true });
+  }
+
+  // 4. Update client profile across users/{uid}, members/{uid}, clientProfiles/{uid}
+  if (clientId) {
+    const clientUpdates = {
+      pendingMembershipRequest: false,
+      membershipRejectionAlert: true,
       offlineRequestStatus: 'rejected',
       offlineRejectionReason: reason,
       offlineRejectedAt: nowIso,
-      pendingOfflineRequestId: ''
-    });
-  } catch (e) {
-    console.warn('Could not update clientProfile rejection notice:', e);
+      pendingOfflineRequestId: null,
+      updatedAt: nowIso
+    };
+    batch.set(doc(db, 'users', clientId), clientUpdates, { merge: true });
+    batch.set(doc(db, 'members', clientId), clientUpdates, { merge: true });
+    batch.set(doc(db, 'clientProfiles', clientId), clientUpdates, { merge: true });
   }
+
+  await batch.commit();
 }
 
 /**

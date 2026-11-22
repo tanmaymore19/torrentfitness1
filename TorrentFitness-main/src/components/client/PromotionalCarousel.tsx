@@ -3,6 +3,7 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, query, limit, getDocs } from 'firebase/firestore';
 import { PromoBanner } from '../../types';
 import { getCachedData, setCachedData, optimizeImageUrl } from '../../services/cacheService';
+import { getStoredBanners } from '../../services/bannerStorageService';
 import { ChevronLeft, ChevronRight, ArrowRight, Play, Sparkles, ImageOff } from 'lucide-react';
 
 interface PromotionalCarouselProps {
@@ -83,51 +84,69 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
   const touchEndXRef = useRef<number | null>(null);
   const isDraggingRef = useRef<boolean>(false);
 
-  // Load banners in real time from Firestore and cache results
+  // Load banners persistently from IndexedDB and listen for live updates
   useEffect(() => {
+    let isMounted = true;
+
+    const loadIndexedDbBanners = async () => {
+      try {
+        const stored = await getStoredBanners();
+        if (isMounted && stored && stored.length > 0) {
+          const activeList = stored
+            .filter((b) => b.active !== false && (b as any).isActive !== false)
+            .sort((a, b) => (a.order || 0) - (b.order || 0));
+          if (activeList.length > 0) {
+            setBanners(activeList);
+            setCachedData('promo_banners', activeList);
+          }
+        }
+      } catch (e) {
+        console.warn('Error loading stored banners:', e);
+      }
+    };
+
+    loadIndexedDbBanners();
+
+    const handleUpdate = () => {
+      loadIndexedDbBanners();
+    };
+    window.addEventListener('tf:banners_updated', handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+
+    // Secondary Firestore listener
     const qBanners = query(collection(db, 'promoBanners'), limit(30));
     const unsub = onSnapshot(
       qBanners,
-      async (snap) => {
-        if (snap.empty) {
-          // Check banners collection fallback before seeding
-          try {
-            const snapBanners = await getDocs(query(collection(db, 'banners'), limit(30)));
-            if (!snapBanners.empty) {
-              const list = snapBanners.docs
-                .map((d) => ({ id: d.id, ...d.data() } as PromoBanner))
-                .filter((b: any) => b.active !== false && b.isActive !== false)
-                .sort((a, b) => (a.order || 0) - (b.order || 0));
-              setBanners(list);
-              setCachedData('promo_banners', list);
-              return;
-            }
-          } catch {}
-
-          // Seed default banners in background so it's never empty
-          try {
-            await Promise.all(
-              DEFAULT_PROMO_BANNERS.map((b, i) => {
-                const id = `banner_seed_${i + 1}`;
-                return setDoc(doc(db, 'promoBanners', id), { id, ...b, active: true, isActive: true }, { merge: true });
-              })
-            );
-          } catch (e) {
-            console.warn('Seed banners note:', e);
-          }
-        } else {
+      (snap) => {
+        if (!snap.empty && isMounted) {
           const list = snap.docs
             .map((d) => ({ id: d.id, ...d.data() } as PromoBanner))
             .filter((b: any) => b.active !== false && b.isActive !== false)
             .sort((a, b) => (a.order || 0) - (b.order || 0));
-          setBanners(list);
-          setCachedData('promo_banners', list);
+          if (list.length > 0) {
+            setBanners((prev) => {
+              const map = new Map<string, PromoBanner>();
+              list.forEach((b) => map.set(b.id, b));
+              // Retain local IndexedDB media blobs/URLs if present
+              prev.forEach((b) => {
+                if (b.mediaUrl?.startsWith('blob:') || b.mediaUrl?.startsWith('data:')) {
+                  map.set(b.id, b);
+                }
+              });
+              return Array.from(map.values()).sort((a, b) => (a.order || 0) - (b.order || 0));
+            });
+          }
         }
       },
       (err) => console.warn('PromoBanners listener note:', err)
     );
 
-    return () => unsub();
+    return () => {
+      isMounted = false;
+      window.removeEventListener('tf:banners_updated', handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+      unsub();
+    };
   }, []);
 
   // Helper: Extract valid media URL across all schema aliases

@@ -679,69 +679,115 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
     try {
       const txId = txToDelete.id;
       const clientId = txToDelete.rawTx?.userId || txToDelete.rawTx?.clientId || txToDelete.clientId;
+      const nowIso = new Date().toISOString();
 
-      // 1. Universal Soft-Delete Rule: Archive transaction records instead of hard-deleting
+      // 1. Permanently remove / archive transaction records across all financial collections
       const finCollections = ['paymentTransactions', 'transactions', 'payments', 'invoices', 'bills', 'billing_history'];
       const archivePayload = {
         isDeletedByAdmin: true,
-        status: 'archived',
-        archivedAt: serverTimestamp(),
-        archivedBy: 'Master Admin'
+        status: 'deleted',
+        verificationStatus: 'DELETED',
+        deletedAt: serverTimestamp(),
+        deletedBy: 'Master Admin',
+        updatedAt: nowIso
       };
-      await Promise.allSettled(
-        finCollections.map((coll) => setDoc(doc(db, coll, txId), archivePayload, { merge: true }).catch(() => null))
-      );
+      await Promise.allSettled([
+        ...finCollections.map((coll) => setDoc(doc(db, coll, txId), archivePayload, { merge: true }).catch(() => null)),
+        ...finCollections.map((coll) => deleteDoc(doc(db, coll, txId)).catch(() => null))
+      ]);
 
-      // 2. Soft-delete linked memberships
+      // 2. Remove/archive linked memberships
       if (txToDelete.rawTx?.membershipId) {
-        await setDoc(doc(db, 'memberships', txToDelete.rawTx.membershipId), archivePayload, { merge: true }).catch(() => null);
+        await Promise.allSettled([
+          setDoc(doc(db, 'memberships', txToDelete.rawTx.membershipId), archivePayload, { merge: true }).catch(() => null),
+          deleteDoc(doc(db, 'memberships', txToDelete.rawTx.membershipId)).catch(() => null)
+        ]);
       }
       try {
         const memMatchSnap = await getDocs(query(collection(db, 'memberships'), where('transactionId', '==', txId)));
         if (!memMatchSnap.empty) {
-          await Promise.allSettled(memMatchSnap.docs.map((d) => setDoc(d.ref, archivePayload, { merge: true })));
+          await Promise.allSettled(memMatchSnap.docs.map((d) => Promise.allSettled([
+            setDoc(d.ref, archivePayload, { merge: true }),
+            deleteDoc(d.ref)
+          ])));
         }
       } catch {}
 
-      // 3. Soft-delete in client subcollections
+      // 3. Remove from client subcollections (transactions, invoices, bills, paymentHistory)
       if (clientId) {
         await Promise.allSettled([
-          setDoc(doc(db, 'clientProfiles', clientId, 'transactions', txId), archivePayload, { merge: true }),
-          setDoc(doc(db, 'clientProfiles', clientId, 'invoices', txId), archivePayload, { merge: true }),
-          setDoc(doc(db, 'clientProfiles', clientId, 'bills', txId), archivePayload, { merge: true })
+          deleteDoc(doc(db, 'clientProfiles', clientId, 'transactions', txId)).catch(() => null),
+          deleteDoc(doc(db, 'clientProfiles', clientId, 'invoices', txId)).catch(() => null),
+          deleteDoc(doc(db, 'clientProfiles', clientId, 'bills', txId)).catch(() => null),
+          deleteDoc(doc(db, 'clientProfiles', clientId, 'paymentHistory', txId)).catch(() => null)
         ]);
       }
 
-      // 4. Plan / PT Revocation based on what the transaction was for
-      const planNameLower = (txToDelete.planName || txToDelete.rawTx?.planName || txToDelete.rawTx?.itemTitle || '').toLowerCase();
-      const purpose = (txToDelete.rawTx?.purpose || '').toLowerCase();
+      // 4. Cascade Revocation of the Linked Service (MEMBERSHIP, PT, or AEROBICS)
+      const rawCat = String(txToDelete.rawTx?.category || txToDelete.rawTx?.categoryType || txToDelete.category || '').toUpperCase();
+      const planNameLower = String(txToDelete.planName || txToDelete.rawTx?.planName || txToDelete.rawTx?.itemTitle || '').toLowerCase();
+      const purpose = String(txToDelete.rawTx?.purpose || '').toLowerCase();
+      const type = String(txToDelete.rawTx?.type || '').toLowerCase();
+
+      const isAerobics =
+        rawCat.includes('AEROBIC') ||
+        purpose === 'aerobics' ||
+        type.includes('aerobics') ||
+        planNameLower.includes('aerobic') ||
+        planNameLower.includes('zumba') ||
+        planNameLower.includes('dance cardio');
+
       const isPtTransaction =
-        purpose === 'pt' ||
-        purpose === 'personal_training' ||
-        planNameLower.includes('pt') ||
-        planNameLower.includes('personal') ||
-        planNameLower.includes('trainer') ||
-        planNameLower.includes('coaching');
+        !isAerobics && (
+          rawCat.includes('PT') ||
+          rawCat.includes('TRAINING') ||
+          purpose === 'pt' ||
+          purpose === 'personal_training' ||
+          planNameLower.includes('pt') ||
+          planNameLower.includes('personal') ||
+          planNameLower.includes('trainer') ||
+          planNameLower.includes('coaching')
+        );
 
       if (clientId) {
-        if (isPtTransaction) {
-          // PT Package: revoke PT status and unassign coach
-          const trId = txToDelete.rawTx?.ptTrainerId || (txToDelete.rawTx as any)?.trainerId;
+        if (isAerobics) {
+          // Aerobics Batch Transaction: cancel and remove Aerobics from client profile
+          const aerobicsRevocationPayload = {
+            aerobicsStatus: 'INACTIVE',
+            currentAerobicsBatch: null,
+            aerobicsExpiryDate: null,
+            pendingAerobicsRequest: false,
+            aerobicsRequestStatus: 'inactive',
+            pendingAerobicsRequestId: null,
+            pendingAerobicsBatchId: null,
+            updatedAt: nowIso
+          };
           await Promise.allSettled([
-            setDoc(doc(db, 'clientProfiles', clientId), {
-              ptStatus: 'NONE',
-              assignedTrainerId: null,
-              assignedTrainerName: null,
-              ptApprovedByAdmin: false,
-              ptPlanActive: false,
-              pendingPtRequestId: null
-            }, { merge: true }),
-            setDoc(doc(db, 'members', clientId), {
-              ptStatus: 'NONE',
-              assignedTrainerId: null,
-              assignedTrainerName: null,
-              ptApprovedByAdmin: false
-            }, { merge: true })
+            setDoc(doc(db, 'users', clientId), aerobicsRevocationPayload, { merge: true }),
+            setDoc(doc(db, 'members', clientId), aerobicsRevocationPayload, { merge: true }),
+            setDoc(doc(db, 'clientProfiles', clientId), aerobicsRevocationPayload, { merge: true }),
+            deleteDoc(doc(db, 'aerobics_subscriptions', `aero_sub_${clientId}`)).catch(() => null),
+            deleteDoc(doc(db, 'aerobics_subscriptions', txId)).catch(() => null),
+            deleteDoc(doc(db, 'aerobics_requests', txId)).catch(() => null)
+          ]);
+        } else if (isPtTransaction) {
+          // Personal Training (PT) Transaction: cancel/remove PT and unassign coach
+          const trId = txToDelete.rawTx?.ptTrainerId || (txToDelete.rawTx as any)?.trainerId;
+          const ptRevocationPayload = {
+            ptStatus: 'NONE',
+            assignedTrainerId: null,
+            assignedTrainerName: null,
+            ptApprovedByAdmin: false,
+            ptPlanActive: false,
+            pendingPtRequestId: null,
+            updatedAt: nowIso
+          };
+          await Promise.allSettled([
+            setDoc(doc(db, 'users', clientId), ptRevocationPayload, { merge: true }),
+            setDoc(doc(db, 'members', clientId), ptRevocationPayload, { merge: true }),
+            setDoc(doc(db, 'clientProfiles', clientId), ptRevocationPayload, { merge: true }),
+            deleteDoc(doc(db, 'pt_requests', txId)).catch(() => null),
+            deleteDoc(doc(db, 'ptRequests', txId)).catch(() => null)
           ]);
 
           if (trId) {
@@ -749,38 +795,36 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
               updateDoc(doc(db, 'trainers', trId), {
                 assignedClients: arrayRemove(clientId),
                 assignedClientIds: arrayRemove(clientId)
-              }),
+              }).catch(() => null),
               updateDoc(doc(db, 'trainerProfiles', trId), {
                 assignedClients: arrayRemove(clientId),
                 assignedClientIds: arrayRemove(clientId)
-              })
+              }).catch(() => null)
             ]);
           }
         } else {
-          // Gym Membership Plan: deactivate membership completely
+          // Membership Transaction: deactivate/remove membership completely
+          const membershipRevocationPayload = {
+            membershipStatus: 'INACTIVE',
+            status: 'INACTIVE',
+            isActive: false,
+            currentPlan: null,
+            planName: null,
+            planExpiryDate: null,
+            membershipPlan: null,
+            membershipPlanName: null,
+            membershipPlanId: null,
+            membershipStartDate: null,
+            membershipEndDate: null,
+            membershipExpiryDate: null,
+            updatedAt: nowIso
+          };
           await Promise.allSettled([
-            setDoc(doc(db, 'clientProfiles', clientId), {
-              membershipStatus: 'INACTIVE',
-              currentPlan: null,
-              membershipPlan: null,
-              membershipPlanName: null,
-              membershipPlanId: null,
-              membershipStartDate: null,
-              membershipEndDate: null,
-              membershipExpiryDate: null,
-              planExpiryDate: null
-            }, { merge: true }),
-            setDoc(doc(db, 'members', clientId), {
-              membershipStatus: 'INACTIVE',
-              currentPlan: null,
-              membershipPlan: null,
-              membershipPlanName: null,
-              membershipPlanId: null,
-              membershipStartDate: null,
-              membershipEndDate: null,
-              membershipExpiryDate: null,
-              planExpiryDate: null
-            }, { merge: true })
+            setDoc(doc(db, 'users', clientId), membershipRevocationPayload, { merge: true }),
+            setDoc(doc(db, 'members', clientId), membershipRevocationPayload, { merge: true }),
+            setDoc(doc(db, 'clientProfiles', clientId), membershipRevocationPayload, { merge: true }),
+            deleteDoc(doc(db, 'membership_requests', txId)).catch(() => null),
+            deleteDoc(doc(db, 'membershipRequests', txId)).catch(() => null)
           ]);
         }
       }
@@ -804,7 +848,7 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
 
       setFeedbackBanner({
         type: 'success',
-        text: `Transaction ${txToDelete.receiptNumber} (${txToDelete.clientName}) permanently deleted. ${isPtTransaction ? 'Personal training revoked.' : 'Membership deactivated.'} Revenue updated.`
+        text: 'Transaction, client bill, and linked plan/service permanently removed.'
       });
     } catch (err: any) {
       alert('Error deleting transaction: ' + err.message);
