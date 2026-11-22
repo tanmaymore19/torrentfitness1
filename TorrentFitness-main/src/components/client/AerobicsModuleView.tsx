@@ -44,7 +44,11 @@ import {
   X
 } from 'lucide-react';
 
-export const AerobicsModuleView: React.FC = () => {
+interface AerobicsModuleViewProps {
+  onCheckoutModalToggle?: (active: boolean) => void;
+}
+
+export const AerobicsModuleView: React.FC<AerobicsModuleViewProps> = ({ onCheckoutModalToggle }) => {
   const { currentUser, clientProfile, updateClientProfile } = useAuth();
 
   // Strict Female-Only Access Guard (Male or Other profiles must NEVER see or access this module)
@@ -75,18 +79,25 @@ export const AerobicsModuleView: React.FC = () => {
   // Lock bottom navigation dock while Aerobics Buy Modal is open
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    if (checkoutBatch) {
+    const isModalOpen = Boolean(checkoutBatch);
+    if (isModalOpen) {
       document.body.classList.add('checkout-modal-open');
+      document.body.setAttribute('data-checkout-active', 'true');
       window.dispatchEvent(new CustomEvent('tf:checkout_modal_toggle', { detail: { active: true } }));
+      onCheckoutModalToggle?.(true);
     } else {
       document.body.classList.remove('checkout-modal-open');
+      document.body.removeAttribute('data-checkout-active');
       window.dispatchEvent(new CustomEvent('tf:checkout_modal_toggle', { detail: { active: false } }));
+      onCheckoutModalToggle?.(false);
     }
     return () => {
       document.body.classList.remove('checkout-modal-open');
+      document.body.removeAttribute('data-checkout-active');
       window.dispatchEvent(new CustomEvent('tf:checkout_modal_toggle', { detail: { active: false } }));
+      onCheckoutModalToggle?.(false);
     };
-  }, [checkoutBatch]);
+  }, [checkoutBatch, onCheckoutModalToggle]);
 
   useEffect(() => {
     if (!isFemaleClient || !currentUser) return;
@@ -584,9 +595,9 @@ export const AerobicsModuleView: React.FC = () => {
       {checkoutBatch && createPortal(
         <div
           style={{ zIndex: 999999 }}
-          className="fixed inset-0 z-[999999] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-fade-in overscroll-none"
+          className="fixed inset-0 z-[999999] bg-slate-950/75 backdrop-blur-sm flex flex-col items-center justify-start sm:justify-center overflow-y-auto p-2.5 sm:p-4 pt-3 sm:pt-6 pb-6 animate-fade-in overscroll-none"
         >
-          <div className="w-full max-w-md max-h-[88dvh] flex flex-col bg-white rounded-3xl border border-rose-100 shadow-2xl overflow-hidden text-slate-800 relative z-10">
+          <div className="w-full max-w-md max-h-[82dvh] sm:max-h-[85dvh] my-auto flex flex-col bg-white rounded-3xl border border-rose-100 shadow-2xl overflow-hidden text-slate-800 relative z-10 shrink-0">
             {/* Modal Header (Fixed at Top) */}
             <div className="shrink-0 p-4 bg-gradient-to-r from-rose-500 via-fuchsia-600 to-pink-600 text-white flex items-center justify-between">
               <div>
@@ -751,12 +762,12 @@ export const AerobicsModuleView: React.FC = () => {
             </div>
 
             {/* Non-scrollable Sticky Bottom Footer: Always 100% visible and tappable */}
-            <div className="shrink-0 p-4 bg-white border-t border-slate-100 pb-safe pb-[max(env(safe-area-inset-bottom,16px),16px)]">
+            <div className="shrink-0 p-3.5 sm:p-4 bg-white border-t border-slate-100 pb-safe pb-[max(env(safe-area-inset-bottom,16px),16px)]">
               <button
                 type="button"
                 disabled={isProcessing || isRazorpayOpen}
                 onClick={handleProceedPayment}
-                className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-rose-500 via-fuchsia-600 to-pink-600 hover:from-rose-600 hover:to-fuchsia-700 text-white font-black text-xs shadow-lg flex items-center justify-center gap-2 cursor-pointer pointer-events-auto disabled:opacity-50"
+                className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-rose-500 via-fuchsia-600 to-pink-600 hover:from-rose-600 hover:to-fuchsia-700 text-white font-black text-xs shadow-lg flex items-center justify-center gap-2 cursor-pointer pointer-events-auto disabled:opacity-50 active:scale-[0.98] transition-transform"
               >
                 {paymentTier === 'online' ? <CreditCard className="w-4 h-4" /> : <Banknote className="w-4 h-4" />}
                 <span>

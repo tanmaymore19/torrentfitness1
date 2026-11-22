@@ -724,9 +724,9 @@ export const MembershipPlansView: React.FC<MembershipPlansViewProps> = ({ onSucc
       {isCheckoutModalOpen && selectedPlan && createPortal(
         <div
           style={{ zIndex: 999999 }}
-          className="fixed inset-0 z-[999999] flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fade-in overscroll-none"
+          className="fixed inset-0 z-[999999] flex flex-col items-center justify-start sm:justify-center overflow-y-auto p-2.5 sm:p-4 pt-3 sm:pt-6 pb-6 bg-slate-950/75 backdrop-blur-sm animate-fade-in overscroll-none"
         >
-          <div className="w-full max-w-md max-h-[85dvh] sm:max-h-[88dvh] flex flex-col bg-white rounded-3xl border border-slate-100 shadow-2xl overflow-hidden text-slate-800 relative z-10">
+          <div className="w-full max-w-md max-h-[82dvh] sm:max-h-[85dvh] my-auto flex flex-col bg-white rounded-3xl border border-slate-100 shadow-2xl overflow-hidden text-slate-800 relative z-10 shrink-0">
             {/* Modal Header with 2-Step Progress Indicator (Fixed at Top) */}
             <div className="shrink-0 p-5 bg-white border-b border-slate-100 flex items-center justify-between">
               <div>

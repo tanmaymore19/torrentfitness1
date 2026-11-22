@@ -1247,8 +1247,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const uData = exists.data() as any;
         const isDeleted =
           uData?.status === 'deleted' ||
+          uData?.status === 'archived' ||
+          uData?.isDeletedByAdmin === true ||
+          uData?.isDeleted === true ||
           uData?.isSelfDeleted === true ||
           !!uData?.deletedAt ||
+          !!uData?.archivedAt ||
           uData?.status === 'inactive_deleted';
         if (!isDeleted) {
           throw new Error(`Username "${username}" is already taken. Please choose another.`);
@@ -1261,7 +1265,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const qSnap = await getDocs(qUsers);
         const activeDoc = qSnap.docs.find((d) => {
           const dData = d.data() as any;
-          return !(dData?.status === 'deleted' || dData?.isSelfDeleted === true || !!dData?.deletedAt);
+          return !(
+            dData?.status === 'deleted' ||
+            dData?.status === 'archived' ||
+            dData?.isDeletedByAdmin === true ||
+            dData?.isDeleted === true ||
+            dData?.isSelfDeleted === true ||
+            !!dData?.deletedAt ||
+            !!dData?.archivedAt
+          );
         });
         if (activeDoc && activeDoc.id !== cleanUser) {
           throw new Error(`Username "${username}" is already taken. Please choose another.`);
@@ -1482,8 +1494,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const uData = exists.data() as any;
         const isDeleted =
           uData?.status === 'deleted' ||
+          uData?.status === 'archived' ||
+          uData?.isDeletedByAdmin === true ||
+          uData?.isDeleted === true ||
           uData?.isSelfDeleted === true ||
-          !!uData?.deletedAt;
+          !!uData?.deletedAt ||
+          !!uData?.archivedAt;
         if (!isDeleted && uData?.status === 'active') {
           throw new Error(`Trainer Username "${cleanUser}" is already registered. Please choose another ID or switch to Log In.`);
         }
@@ -1494,7 +1510,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const qSnap = await getDocs(qUsers);
         const activeDoc = qSnap.docs.find((d) => {
           const dData = d.data() as any;
-          return !(dData?.status === 'deleted' || dData?.isSelfDeleted === true || !!dData?.deletedAt);
+          return !(
+            dData?.status === 'deleted' ||
+            dData?.status === 'archived' ||
+            dData?.isDeletedByAdmin === true ||
+            dData?.isDeleted === true ||
+            dData?.isSelfDeleted === true ||
+            !!dData?.deletedAt ||
+            !!dData?.archivedAt
+          );
         });
         if (activeDoc && activeDoc.id !== cleanUser && (activeDoc.data() as any)?.status === 'active') {
           throw new Error(`Trainer Username "${cleanUser}" is already registered. Please choose another ID or switch to Log In.`);

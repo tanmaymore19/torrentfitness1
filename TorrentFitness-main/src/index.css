@@ -335,6 +335,8 @@ body.chat-modal-open #root nav,
 body.checkout-modal-open nav.fixed,
 body.checkout-modal-open nav,
 body.checkout-modal-open #root nav,
+body[data-checkout-active="true"] nav,
+body[data-checkout-active="true"] #root nav,
 html:has(body.checkout-modal-open) nav,
 html:has(.checkout-modal-open) nav {
   display: none !important;

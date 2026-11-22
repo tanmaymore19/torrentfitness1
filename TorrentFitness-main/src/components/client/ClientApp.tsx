@@ -1055,7 +1055,10 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
           <Suspense fallback={<ViewSkeleton cards={3} />}>
             {/* Tab 2: WORKOUTS */}
             {activeTab === 'workouts' && (
-              <WorkoutLibraryView initialSubTab={workoutInitialSubTab} />
+              <WorkoutLibraryView
+                initialSubTab={workoutInitialSubTab}
+                onCheckoutModalToggle={setIsCheckoutModalActive}
+              />
             )}
 
             {/* Tab 3: QR ATTENDANCE */}

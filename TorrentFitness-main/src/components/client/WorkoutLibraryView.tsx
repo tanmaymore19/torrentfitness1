@@ -27,9 +27,13 @@ import {
 
 interface WorkoutLibraryViewProps {
   initialSubTab?: 'library' | 'myWorkout' | 'aerobics';
+  onCheckoutModalToggle?: (active: boolean) => void;
 }
 
-export const WorkoutLibraryView: React.FC<WorkoutLibraryViewProps> = ({ initialSubTab }) => {
+export const WorkoutLibraryView: React.FC<WorkoutLibraryViewProps> = ({
+  initialSubTab,
+  onCheckoutModalToggle
+}) => {
   const { currentUser, clientProfile } = useAuth();
   const isFemaleClient =
     currentUser?.role === 'client' &&
@@ -224,7 +228,7 @@ export const WorkoutLibraryView: React.FC<WorkoutLibraryViewProps> = ({ initialS
       {/* Main Tab Content */}
       {activeTab === 'aerobics' && isFemaleClient ? (
         <Suspense fallback={<ViewSkeleton cards={2} />}>
-          <AerobicsModuleView />
+          <AerobicsModuleView onCheckoutModalToggle={onCheckoutModalToggle} />
         </Suspense>
       ) : activeTab === 'library' ? (
         <div className="space-y-4">
