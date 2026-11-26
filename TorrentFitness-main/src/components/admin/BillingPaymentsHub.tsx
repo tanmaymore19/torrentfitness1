@@ -1,6 +1,20 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { db } from '../../firebase';
-import { collection, query, limit, onSnapshot, doc, deleteDoc, getDocs, updateDoc, writeBatch, setDoc, arrayRemove, where } from 'firebase/firestore';
+import {
+  collection,
+  query,
+  limit,
+  onSnapshot,
+  doc,
+  getDoc,
+  getDocs,
+  writeBatch,
+  setDoc,
+  arrayRemove,
+  where,
+  serverTimestamp
+} from 'firebase/firestore';
 import {
   ClientProfile,
   MembershipPlan,
@@ -16,7 +30,13 @@ import {
   exportBulkPaymentsLedgerPdf
 } from '../../services/pdfExportService';
 import { usePdfDownload } from '../../context/PdfDownloadContext';
-import { isClientActiveMembership } from '../../utils/memberStatus';
+import {
+  isClientActiveMembership,
+  isValidRevenueTx,
+  isDeletedTransaction,
+  normalizeLedgerStatus,
+  mergeTransactionLists
+} from '../../utils/memberStatus';
 import { PaymentGatewaysManager } from './PaymentGatewaysManager';
 import { UnifiedMembershipManager } from './UnifiedMembershipManager';
 import { PtPlansManager } from './PtPlansManager';
@@ -105,8 +125,11 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
       : 'd2_revenue_dashboard';
 
   const [transactions, setTransactions] = useState<PaymentTransaction[]>(() =>
-    getCachedData<PaymentTransaction[]>('admin_payment_tx', [])
+    getCachedData<PaymentTransaction[]>('admin_payment_tx', []).filter(
+      (t) => !isDeletedTransaction(t)
+    )
   );
+  const deletedTxIdsRef = useRef<Set<string>>(new Set());
   const [feedbackBanner, setFeedbackBanner] = useState<{
     type: 'success' | 'error';
     text: string;
@@ -148,26 +171,22 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
   >(null);
 
   useEffect(() => {
-    const mergeTx = (newDocs: PaymentTransaction[]) => {
-      setTransactions((prev) => {
-        const map = new Map<string, PaymentTransaction>();
-        prev.forEach((t) => map.set(t.id, t));
-        newDocs.forEach((t) => map.set(t.id, { ...map.get(t.id), ...t }));
-        const list = Array.from(map.values()).sort(
-          (a, b) =>
-            new Date(b.createdAt || b.timestamp || 0).getTime() -
-            new Date(a.createdAt || a.timestamp || 0).getTime()
-        );
-        setCachedData('admin_payment_tx', list);
-        return list;
-      });
+    let livePtList: PaymentTransaction[] = [];
+    let liveTxList: PaymentTransaction[] = [];
+
+    const syncCombinedTransactions = () => {
+      const merged = mergeTransactionLists(livePtList, liveTxList).filter(
+        (t) => !isDeletedTransaction(t) && !deletedTxIdsRef.current.has(t.id)
+      );
+      setTransactions(merged);
+      setCachedData('admin_payment_tx', merged);
     };
 
     const unsubTx = onSnapshot(
       query(collection(db, 'paymentTransactions'), limit(100)),
       (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentTransaction));
-        mergeTx(list);
+        livePtList = snap.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentTransaction));
+        syncCombinedTransactions();
       },
       (err) => console.warn('BillingPaymentsHub transactions listener note:', err)
     );
@@ -175,8 +194,8 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
     const unsubTx2 = onSnapshot(
       query(collection(db, 'transactions'), limit(100)),
       (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentTransaction));
-        mergeTx(list);
+        liveTxList = snap.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentTransaction));
+        syncCombinedTransactions();
       },
       (err) => console.warn('BillingPaymentsHub transactions alias listener note:', err)
     );
@@ -197,12 +216,7 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
     const seenMembershipIds = new Set<string>();
 
     for (const tx of transactions) {
-      if (
-        tx.isDeletedByAdmin ||
-        (tx as any).deletedByAdmin ||
-        String(tx.status).toUpperCase() === 'DELETED' ||
-        String(tx.status).toUpperCase() === 'ARCHIVED'
-      ) {
+      if (isDeletedTransaction(tx) || deletedTxIdsRef.current.has(tx.id)) {
         continue;
       }
       if (tx.membershipId) seenMembershipIds.add(tx.membershipId);
@@ -229,10 +243,12 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
         ? 'cash'
         : tx.gatewayProvider || 'razorpay';
 
+      const normalizedStatus = normalizeLedgerStatus(tx);
+
       const gwLabel = isCash
-        ? tx.status === 'pending'
+        ? normalizedStatus === 'Pending'
           ? 'Cash / Offline (Pending Approval)'
-          : tx.status === 'rejected'
+          : normalizedStatus === 'Rejected'
           ? 'Cash / Offline (Rejected)'
           : 'Cash / Offline Approved'
         : tx.gatewayProvider === 'cashfree'
@@ -303,21 +319,12 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
         discountAmount: discAmt,
         finalAmount: finalPaid,
         verificationStatus:
-          tx.status === 'success'
+          normalizedStatus === 'Success'
             ? 'Active'
-            : tx.status === 'pending'
+            : normalizedStatus === 'Pending'
             ? 'Pending Approval'
-            : 'Inactive',
-        status:
-          tx.status === 'success'
-            ? 'Success'
-            : tx.status === 'pending'
-            ? 'Pending'
-            : tx.status === 'rejected'
-            ? 'Rejected'
-            : tx.status === 'refunded'
-            ? 'Refunded'
-            : 'Failed',
+            : normalizedStatus,
+        status: normalizedStatus,
         rawTx: tx
       });
     }
@@ -328,7 +335,7 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
   // Advanced Date-Filtered Entries
   const dateFilteredEntries = useMemo(() => {
     return masterLedgerEntries.filter((entry) => {
-      if (datePresetFilter === 'all_time') return true;
+      if (datePresetFilter === 'all') return true;
       if (!entry.rawDate) return true;
       const d = new Date(entry.rawDate);
       if (isNaN(d.getTime())) return true;
@@ -376,7 +383,7 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
   }, [masterLedgerEntries, datePresetFilter, customStartDate, customEndDate]);
 
   const handleResetFilters = () => {
-    setDatePresetFilter('all_time');
+    setDatePresetFilter('all');
     setCustomStartDate('');
     setCustomEndDate('');
     setCategoryFilter('all');
@@ -466,11 +473,17 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
   const metricsSource = datePresetFilter === 'all' && categoryFilter === 'all' && modeFilter === 'all'
     ? masterLedgerEntries
     : filteredLedgerEntries;
-  const settledMetricsEntries = metricsSource.filter((e) => e.status === 'Success');
-  const settledThisMonthEntries = currentMonthEntries.filter((e) => e.status === 'Success');
+  const settledMetricsEntries = metricsSource.filter((e) => isValidRevenueTx(e.rawTx));
+  const settledThisMonthEntries = currentMonthEntries.filter((e) => isValidRevenueTx(e.rawTx));
 
-  const totalRevenueFiltered = settledMetricsEntries.reduce((sum, e) => sum + e.finalAmount, 0);
-  const totalRevenueThisMonth = settledThisMonthEntries.reduce((sum, e) => sum + e.finalAmount, 0);
+  const totalRevenueFiltered = settledMetricsEntries.reduce(
+    (sum, e) => sum + (Number(e.finalAmount) || 0),
+    0
+  );
+  const totalRevenueThisMonth = settledThisMonthEntries.reduce(
+    (sum, e) => sum + (Number(e.finalAmount) || 0),
+    0
+  );
 
   const totalActivePaidClients = clients.filter(
     (c) => isClientActiveMembership(c)
@@ -480,8 +493,9 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
   const pendingOfflineQueue = useMemo(() => {
     return transactions.filter(
       (t) =>
+        !isDeletedTransaction(t) &&
         (t.paymentMode === 'cash' || t.gatewayProvider === 'offline_cash') &&
-        t.status === 'pending'
+        String(t.status || '').toLowerCase() === 'pending'
     );
   }, [transactions]);
 
@@ -677,8 +691,11 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
   };
 
   const handleDeleteTransaction = (
+    e: React.MouseEvent,
     item: PaymentLedgerExportItem & { rawTx?: PaymentTransaction }
   ) => {
+    e.preventDefault();
+    e.stopPropagation();
     setTxToDelete(item);
   };
 
@@ -686,128 +703,179 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
     if (!txToDelete) return;
     try {
       const txId = txToDelete.id;
-      const clientId = txToDelete.rawTx?.userId || txToDelete.rawTx?.clientId || txToDelete.clientId;
+      const raw: any = txToDelete.rawTx || {};
+      const paymentId = String(raw.paymentId || raw.razorpayPaymentId || (txToDelete as any).paymentId || '').trim();
+      const receiptNumber = String(txToDelete.receiptNumber || raw.receiptNumber || '').trim();
+      const rawAmount = Number(raw.finalAmount ?? raw.amount ?? txToDelete.finalAmount ?? 0) || 0;
+      const rawClientId = String(raw.clientId || raw.userId || raw.uid || txToDelete.clientId || '').trim();
+      const matchedClient = clients.find(
+        (c) =>
+          c.userId === rawClientId ||
+          (c as any).uid === rawClientId ||
+          (c as any).username === rawClientId
+      );
+      const targetUids = Array.from(
+        new Set([rawClientId, matchedClient?.userId].filter((v): v is string => Boolean(v)))
+      );
+      const primaryClientId = targetUids[0] || '';
       const nowIso = new Date().toISOString();
 
-      // 1. Permanently remove / archive transaction records across all financial collections
-      const finCollections = ['paymentTransactions', 'transactions', 'payments', 'invoices', 'bills', 'billing_history'];
-      const archivePayload = {
+      const batch = writeBatch(db);
+
+      // 1. Soft-Archive Transaction & Zero Out Revenue across all canonical & alias financial collections
+      // (Preserves audit trail cleanly per zero-hard-delete rule)
+      const archivePayload: Record<string, any> = {
         isDeletedByAdmin: true,
+        deleted: true,
+        deletedByAdmin: true,
         status: 'DELETED',
+        paymentStatus: 'DELETED',
         verificationStatus: 'DELETED',
         amount: 0,
         finalAmount: 0,
+        archivedAt: serverTimestamp(),
         deletedAt: serverTimestamp(),
         deletedBy: 'Master Admin',
         updatedAt: nowIso
       };
-      await Promise.allSettled([
-        ...finCollections.map((coll) => setDoc(doc(db, coll, txId), archivePayload, { merge: true }).catch(() => null)),
-        ...finCollections.map((coll) => deleteDoc(doc(db, coll, txId)).catch(() => null))
-      ]);
 
-      // 2. Remove/archive linked memberships and related records
-      if (txToDelete.rawTx?.membershipId) {
-        await Promise.allSettled([
-          setDoc(doc(db, 'memberships', txToDelete.rawTx.membershipId), archivePayload, { merge: true }).catch(() => null),
-          deleteDoc(doc(db, 'memberships', txToDelete.rawTx.membershipId)).catch(() => null)
-        ]);
+      const finCollections = [
+        'transactions',
+        'paymentTransactions',
+        'payments',
+        'invoices',
+        'bills',
+        'billing_history'
+      ];
+      finCollections.forEach((coll) => {
+        batch.set(doc(db, coll, txId), archivePayload, { merge: true });
+      });
+
+      if (raw.membershipId) {
+        batch.set(
+          doc(db, 'memberships', raw.membershipId),
+          { ...archivePayload, transactionDeleted: true, amountPaid: 0 },
+          { merge: true }
+        );
       }
+
+      // Query & soft-archive linked memberships
       try {
-        const memMatchSnap = await getDocs(query(collection(db, 'memberships'), where('transactionId', '==', txId)));
-        if (!memMatchSnap.empty) {
-          await Promise.allSettled(memMatchSnap.docs.map((d) => Promise.allSettled([
-            setDoc(d.ref, archivePayload, { merge: true }),
-            deleteDoc(d.ref)
-          ])));
-        }
+        const memMatchSnap = await getDocs(
+          query(collection(db, 'memberships'), where('transactionId', '==', txId))
+        );
+        memMatchSnap.docs.forEach((d) => {
+          batch.set(
+            d.ref,
+            { ...archivePayload, transactionDeleted: true, amountPaid: 0 },
+            { merge: true }
+          );
+        });
       } catch {}
 
-      // Query and delete matching bills/receipts/invoices across root collections
+      // 2. Query and Soft-Archive Generated Bills / Receipts in `invoices` and `bills`
+      const matchesBillDoc = (docId: string, data: any): boolean => {
+        if (docId === txId) return true;
+        if (data?.transactionId && data.transactionId === txId) return true;
+        if (paymentId && (data?.paymentId === paymentId || data?.referenceId === paymentId)) return true;
+        if (receiptNumber && data?.receiptNumber === receiptNumber) return true;
+        // Fallback match by clientId + amount ONLY if no conflicting foreign transactionId is present
+        const hasForeignTxId =
+          Boolean(data?.transactionId && data.transactionId !== txId) ||
+          Boolean(paymentId && data?.paymentId && data.paymentId !== paymentId);
+        if (!hasForeignTxId && rawAmount > 0) {
+          const docAmt = Number(data?.finalAmount ?? data?.amount ?? 0);
+          if (docAmt === rawAmount) return true;
+        }
+        return false;
+      };
+
       try {
-        const queryPromises = [
-          getDocs(query(collection(db, 'invoices'), where('transactionId', '==', txId))),
-          getDocs(query(collection(db, 'bills'), where('transactionId', '==', txId))),
-          getDocs(query(collection(db, 'paymentTransactions'), where('transactionId', '==', txId)))
-        ];
-        if (txToDelete.receiptNumber) {
-          queryPromises.push(
-            getDocs(query(collection(db, 'invoices'), where('receiptNumber', '==', txToDelete.receiptNumber))),
-            getDocs(query(collection(db, 'bills'), where('receiptNumber', '==', txToDelete.receiptNumber)))
-          );
-        }
-        if (txToDelete.paymentId) {
-          queryPromises.push(
-            getDocs(query(collection(db, 'invoices'), where('paymentId', '==', txToDelete.paymentId))),
-            getDocs(query(collection(db, 'bills'), where('paymentId', '==', txToDelete.paymentId)))
-          );
-        }
-        const queryResults = await Promise.allSettled(queryPromises);
-        for (const res of queryResults) {
-          if (res.status === 'fulfilled' && !res.value.empty) {
-            await Promise.allSettled(res.value.docs.map((d) => deleteDoc(d.ref)));
+        const billCollections = ['invoices', 'bills'];
+        const queryTasks: Promise<any>[] = [];
+        for (const coll of billCollections) {
+          queryTasks.push(getDocs(query(collection(db, coll), where('transactionId', '==', txId))));
+          if (paymentId) {
+            queryTasks.push(getDocs(query(collection(db, coll), where('paymentId', '==', paymentId))));
+          }
+          if (receiptNumber) {
+            queryTasks.push(getDocs(query(collection(db, coll), where('receiptNumber', '==', receiptNumber))));
+          }
+          for (const uid of targetUids) {
+            queryTasks.push(getDocs(query(collection(db, coll), where('clientId', '==', uid))));
           }
         }
-      } catch (e) {
-        console.warn('Error deleting linked invoices/bills:', e);
-      }
-
-      // 3. Remove from client subcollections (transactions, invoices, bills, paymentHistory)
-      if (clientId) {
-        await Promise.allSettled([
-          deleteDoc(doc(db, 'clientProfiles', clientId, 'transactions', txId)).catch(() => null),
-          deleteDoc(doc(db, 'clientProfiles', clientId, 'invoices', txId)).catch(() => null),
-          deleteDoc(doc(db, 'clientProfiles', clientId, 'bills', txId)).catch(() => null),
-          deleteDoc(doc(db, 'clientProfiles', clientId, 'paymentHistory', txId)).catch(() => null)
-        ]);
-        try {
-          const subColls = ['transactions', 'invoices', 'bills', 'paymentHistory'];
-          for (const sub of subColls) {
-            const subSnap = await getDocs(query(collection(db, 'clientProfiles', clientId, sub), where('transactionId', '==', txId)));
-            if (!subSnap.empty) {
-              await Promise.allSettled(subSnap.docs.map((d) => deleteDoc(d.ref)));
-            }
+        const results = await Promise.allSettled(queryTasks);
+        const queuedRefs = new Set<string>();
+        results.forEach((res) => {
+          if (res.status === 'fulfilled' && res.value && !res.value.empty) {
+            res.value.docs.forEach((d: any) => {
+              const pathKey = d.ref.path;
+              if (!queuedRefs.has(pathKey) && matchesBillDoc(d.id, d.data())) {
+                queuedRefs.add(pathKey);
+                batch.set(
+                  d.ref,
+                  {
+                    isDeletedByAdmin: true,
+                    deleted: true,
+                    status: 'DELETED',
+                    verificationStatus: 'DELETED',
+                    amount: 0,
+                    finalAmount: 0,
+                    archivedAt: serverTimestamp(),
+                    updatedAt: nowIso
+                  },
+                  { merge: true }
+                );
+              }
+            });
           }
-        } catch {}
+        });
+      } catch (billErr) {
+        console.warn('Linked bill lookup note:', billErr);
       }
 
-      // 4. Cascade Revocation of the Linked Service (MEMBERSHIP, PT, or AEROBICS)
-      const rawCat = String(txToDelete.rawTx?.category || txToDelete.rawTx?.categoryType || txToDelete.category || '').toUpperCase();
-      const planNameLower = String(txToDelete.planName || txToDelete.rawTx?.planName || txToDelete.rawTx?.itemTitle || '').toLowerCase();
-      const purpose = String(txToDelete.rawTx?.purpose || '').toLowerCase();
-      const type = String(txToDelete.rawTx?.type || '').toLowerCase();
+      // 3. Cascade-Revoke Linked Service (MEMBERSHIP, PT, or AEROBICS) from Client Account
+      const rawCat = String(raw.category || raw.categoryType || (txToDelete as any).category || '').toUpperCase();
+      const planType = String(raw.planType || raw.type || '').toLowerCase();
+      const planNameLower = String(txToDelete.planName || raw.planName || raw.itemTitle || '').toLowerCase();
+      const purpose = String(raw.purpose || '').toLowerCase();
 
       const isAerobics =
         rawCat.includes('AEROBIC') ||
         purpose === 'aerobics' ||
-        type.includes('aerobics') ||
+        planType.includes('aerobic') ||
         planNameLower.includes('aerobic') ||
         planNameLower.includes('zumba') ||
         planNameLower.includes('dance cardio');
 
       const isPtTransaction =
-        !isAerobics && (
-          rawCat.includes('PT') ||
-          rawCat.includes('TRAINING') ||
+        !isAerobics &&
+        (rawCat === 'PT' ||
+          rawCat === 'PERSONAL_TRAINING' ||
+          rawCat.includes('PERSONAL') ||
           purpose === 'pt' ||
           purpose === 'personal_training' ||
-          planNameLower.includes('pt') ||
-          planNameLower.includes('personal') ||
+          planType === 'pt' ||
+          planType.includes('personal') ||
+          /\bpt\b/.test(planNameLower) ||
+          planNameLower.includes('personal train') ||
           planNameLower.includes('trainer') ||
-          planNameLower.includes('coaching')
-        );
+          planNameLower.includes('coaching') ||
+          planNameLower.includes('1-on-1'));
 
-      if (clientId) {
+      const ptIncludedBundle = !isAerobics && !isPtTransaction && Boolean(raw.ptIncluded);
+
+      if (targetUids.length > 0) {
         if (isAerobics) {
-          // Aerobics Batch Transaction: cancel and remove Aerobics from client profile
-          const aerobicsRevocationPayload = {
+          const aerobicsRevocationPayload: Record<string, any> = {
             aerobicsStatus: 'INACTIVE',
             currentAerobicsBatch: null,
+            aerobicsStartDate: null,
+            aerobicsEndDate: null,
             aerobicsExpiryDate: null,
             aerobicsBatchId: null,
             aerobicsBatchName: null,
-            aerobicsStartDate: null,
-            aerobicsEndDate: null,
             queuedAerobicsBatch: null,
             queuedAerobicsBatchId: null,
             queuedAerobicsBatchName: null,
@@ -819,109 +887,205 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
             pendingAerobicsBatchId: null,
             updatedAt: nowIso
           };
-          await Promise.allSettled([
-            setDoc(doc(db, 'users', clientId), aerobicsRevocationPayload, { merge: true }),
-            setDoc(doc(db, 'members', clientId), aerobicsRevocationPayload, { merge: true }),
-            setDoc(doc(db, 'clientProfiles', clientId), aerobicsRevocationPayload, { merge: true }),
-            deleteDoc(doc(db, 'aerobics_subscriptions', `aero_sub_${clientId}`)).catch(() => null),
-            deleteDoc(doc(db, 'aerobics_subscriptions', txId)).catch(() => null),
-            deleteDoc(doc(db, 'aerobics_requests', txId)).catch(() => null)
-          ]);
-        } else if (isPtTransaction) {
-          // Personal Training (PT) Transaction: cancel/remove PT and unassign coach
-          const trId = txToDelete.rawTx?.ptTrainerId || (txToDelete.rawTx as any)?.trainerId;
-          const ptRevocationPayload = {
-            ptStatus: 'NONE',
-            assignedTrainerId: null,
-            assignedTrainerName: null,
-            ptApprovedByAdmin: false,
-            ptStartDate: null,
-            ptExpiryDate: null,
-            ptPlanActive: false,
-            pendingPtRequestId: null,
-            updatedAt: nowIso
-          };
-          await Promise.allSettled([
-            setDoc(doc(db, 'users', clientId), ptRevocationPayload, { merge: true }),
-            setDoc(doc(db, 'members', clientId), ptRevocationPayload, { merge: true }),
-            setDoc(doc(db, 'clientProfiles', clientId), ptRevocationPayload, { merge: true }),
-            deleteDoc(doc(db, 'pt_requests', txId)).catch(() => null),
-            deleteDoc(doc(db, 'ptRequests', txId)).catch(() => null)
-          ]);
+          for (const uid of targetUids) {
+            batch.set(doc(db, 'users', uid), aerobicsRevocationPayload, { merge: true });
+            batch.set(doc(db, 'members', uid), aerobicsRevocationPayload, { merge: true });
+            batch.set(doc(db, 'clientProfiles', uid), aerobicsRevocationPayload, { merge: true });
+            batch.set(doc(db, 'aerobicsSubscriptions', `aero_sub_${uid}`), archivePayload, { merge: true });
+          }
+          batch.set(doc(db, 'aerobicsSubscriptions', txId), archivePayload, { merge: true });
+          batch.set(doc(db, 'aerobics_requests', txId), archivePayload, { merge: true });
+          batch.set(doc(db, 'aerobicsRequests', txId), archivePayload, { merge: true });
 
-          if (trId) {
-            await Promise.allSettled([
-              updateDoc(doc(db, 'trainers', trId), {
-                assignedClients: arrayRemove(clientId),
-                assignedClientIds: arrayRemove(clientId)
-              }).catch(() => null),
-              updateDoc(doc(db, 'trainerProfiles', trId), {
-                assignedClients: arrayRemove(clientId),
-                assignedClientIds: arrayRemove(clientId)
-              }).catch(() => null)
-            ]);
+          try {
+            const aeroLookupTasks: Promise<any>[] = [
+              getDocs(query(collection(db, 'aerobics_requests'), where('transactionId', '==', txId))),
+              getDocs(query(collection(db, 'aerobicsRequests'), where('transactionId', '==', txId))),
+              getDocs(query(collection(db, 'aerobicsSubscriptions'), where('transactionId', '==', txId)))
+            ];
+            if (paymentId) {
+              aeroLookupTasks.push(
+                getDocs(query(collection(db, 'aerobics_requests'), where('transactionId', '==', paymentId))),
+                getDocs(query(collection(db, 'aerobics_requests'), where('paymentId', '==', paymentId)))
+              );
+            }
+            const aeroSnaps = await Promise.allSettled(aeroLookupTasks);
+            aeroSnaps.forEach((res) => {
+              if (res.status === 'fulfilled' && res.value && !res.value.empty) {
+                res.value.docs.forEach((d: any) => batch.set(d.ref, archivePayload, { merge: true }));
+              }
+            });
+          } catch {}
+
+          const batchIdToClean = String(
+            raw.metadata?.batchId || raw.planId || matchedClient?.aerobicsBatchId || ''
+          ).trim();
+          if (batchIdToClean) {
+            try {
+              const abRef = doc(db, 'aerobicsBatches', batchIdToClean);
+              const abSnap = await getDoc(abRef);
+              if (abSnap.exists()) {
+                for (const uid of targetUids) {
+                  batch.update(abRef, { enrolledClientIds: arrayRemove(uid) });
+                }
+              }
+            } catch {}
           }
         } else {
-          // Membership Transaction: deactivate/remove membership completely
-          const membershipRevocationPayload = {
-            membershipStatus: 'INACTIVE',
-            status: 'INACTIVE',
-            isActive: false,
-            currentPlan: null,
-            planName: null,
-            planExpiryDate: null,
-            membershipPlan: null,
-            membershipPlanName: null,
-            membershipPlanId: null,
-            membershipStartDate: null,
-            membershipEndDate: null,
-            membershipExpiryDate: null,
-            queuedPlan: null,
-            queuedPlanId: null,
-            queuedPlanName: null,
-            queuedStartDate: null,
-            queuedEndDate: null,
-            updatedAt: nowIso
-          };
-          await Promise.allSettled([
-            setDoc(doc(db, 'users', clientId), membershipRevocationPayload, { merge: true }),
-            setDoc(doc(db, 'members', clientId), membershipRevocationPayload, { merge: true }),
-            setDoc(doc(db, 'clientProfiles', clientId), membershipRevocationPayload, { merge: true }),
-            deleteDoc(doc(db, 'membership_requests', txId)).catch(() => null),
-            deleteDoc(doc(db, 'membershipRequests', txId)).catch(() => null)
-          ]);
+          if (isPtTransaction || ptIncludedBundle) {
+            const trId = String(
+              raw.ptTrainerId || raw.trainerId || raw.assignedTrainerId || matchedClient?.assignedTrainerId || ''
+            ).trim();
+            const ptRevocationPayload: Record<string, any> = {
+              ptStatus: 'NONE',
+              assignedTrainerId: null,
+              assignedTrainerName: null,
+              ptApprovedByAdmin: false,
+              ptStartDate: null,
+              ptExpiryDate: null,
+              ptPlanActive: false,
+              pendingPtRequestId: null,
+              updatedAt: nowIso
+            };
+            for (const uid of targetUids) {
+              batch.set(doc(db, 'users', uid), ptRevocationPayload, { merge: true });
+              batch.set(doc(db, 'members', uid), ptRevocationPayload, { merge: true });
+              batch.set(doc(db, 'clientProfiles', uid), ptRevocationPayload, { merge: true });
+            }
+            batch.set(doc(db, 'pt_requests', txId), archivePayload, { merge: true });
+            batch.set(doc(db, 'ptRequests', txId), archivePayload, { merge: true });
+
+            try {
+              const ptLookupTasks: Promise<any>[] = [
+                getDocs(query(collection(db, 'pt_requests'), where('transactionId', '==', txId))),
+                getDocs(query(collection(db, 'ptRequests'), where('transactionId', '==', txId)))
+              ];
+              if (paymentId) {
+                ptLookupTasks.push(
+                  getDocs(query(collection(db, 'pt_requests'), where('transactionId', '==', paymentId))),
+                  getDocs(query(collection(db, 'pt_requests'), where('paymentId', '==', paymentId)))
+                );
+              }
+              const ptReqSnaps = await Promise.allSettled(ptLookupTasks);
+              ptReqSnaps.forEach((res) => {
+                if (res.status === 'fulfilled' && res.value && !res.value.empty) {
+                  res.value.docs.forEach((d: any) => batch.set(d.ref, archivePayload, { merge: true }));
+                }
+              });
+            } catch {}
+
+            if (trId) {
+              for (const trColl of ['trainers', 'trainerProfiles']) {
+                try {
+                  const trRef = doc(db, trColl, trId);
+                  const trSnap = await getDoc(trRef);
+                  if (trSnap.exists()) {
+                    for (const uid of targetUids) {
+                      batch.update(trRef, {
+                        assignedClients: arrayRemove(uid),
+                        assignedClientIds: arrayRemove(uid)
+                      });
+                    }
+                  }
+                } catch {}
+              }
+            }
+          }
+
+          if (!isPtTransaction) {
+            const membershipRevocationPayload: Record<string, any> = {
+              membershipStatus: 'INACTIVE',
+              status: 'INACTIVE',
+              isActive: false,
+              currentPlan: null,
+              planName: null,
+              planStartDate: null,
+              planExpiryDate: null,
+              membershipPlan: null,
+              membershipPlanName: null,
+              membershipPlanId: null,
+              membershipStartDate: null,
+              membershipEndDate: null,
+              membershipExpiryDate: null,
+              queuedPlan: null,
+              queuedPlanId: null,
+              queuedPlanName: null,
+              queuedStartDate: null,
+              queuedEndDate: null,
+              pendingMembershipRequest: false,
+              updatedAt: nowIso
+            };
+            for (const uid of targetUids) {
+              batch.set(doc(db, 'users', uid), membershipRevocationPayload, { merge: true });
+              batch.set(doc(db, 'members', uid), membershipRevocationPayload, { merge: true });
+              batch.set(doc(db, 'clientProfiles', uid), membershipRevocationPayload, { merge: true });
+            }
+            batch.set(doc(db, 'membership_requests', txId), archivePayload, { merge: true });
+            batch.set(doc(db, 'membershipRequests', txId), archivePayload, { merge: true });
+          }
         }
       }
 
-      // 5. Update local state and purge localStorage caches
+      // Execute atomic Firestore commit
+      await batch.commit();
+
+      // Best-effort secondary cleanup on optional collections / subcollections (never blocks core batch)
+      await Promise.allSettled([
+        setDoc(doc(db, 'paymentHistory', txId), archivePayload, { merge: true }).catch(() => null),
+        ...targetUids.flatMap((uid) => [
+          setDoc(doc(db, 'clientProfiles', uid, 'transactions', txId), archivePayload, { merge: true }).catch(() => null),
+          setDoc(doc(db, 'clientProfiles', uid, 'invoices', txId), archivePayload, { merge: true }).catch(() => null),
+          setDoc(doc(db, 'clientProfiles', uid, 'bills', txId), archivePayload, { merge: true }).catch(() => null),
+          setDoc(doc(db, 'clientProfiles', uid, 'paymentHistory', txId), archivePayload, { merge: true }).catch(() => null)
+        ])
+      ]);
+
+      try {
+        const optPayHistSnap = await getDocs(
+          query(collection(db, 'paymentHistory'), where('transactionId', '==', txId))
+        );
+        if (!optPayHistSnap.empty) {
+          await Promise.allSettled(
+            optPayHistSnap.docs.map((d) => setDoc(d.ref, archivePayload, { merge: true }).catch(() => null))
+          );
+        }
+      } catch {}
+
+      // 4. Immediately remove from local React state, ref guard, and localStorage caches
+      deletedTxIdsRef.current.add(txId);
       setTransactions((prev) => {
-        const updated = prev.filter((t) => t.id !== txToDelete.id);
+        const updated = prev.filter((t) => t.id !== txId);
         setCachedData('admin_payment_transactions', updated);
         setCachedData('admin_payment_tx', updated);
         return updated;
       });
-      setSelectedLedgerIds((prev) => prev.filter((id) => id !== txToDelete.id));
+      setSelectedLedgerIds((prev) => prev.filter((id) => id !== txId));
 
       if (typeof window !== 'undefined') {
         try {
-          if (clientId) {
-            localStorage.removeItem(`pay_tx_${clientId}`);
+          for (const uid of targetUids) {
+            localStorage.removeItem(`pay_tx_${uid}`);
+            localStorage.removeItem(`mem_rec_${uid}`);
+          }
+          if (primaryClientId) {
+            localStorage.removeItem(`pay_tx_${primaryClientId}`);
           }
         } catch {}
       }
 
+      setTxToDelete(null);
       setFeedbackBanner({
         type: 'success',
         text: 'Transaction deleted. Revenue, client bill, and linked plan/service removed.'
       });
     } catch (err: any) {
-      alert('Error deleting transaction: ' + err.message);
+      const errMessage = err?.message || String(err);
+      alert('Delete failed: ' + errMessage);
       setFeedbackBanner({
         type: 'error',
-        text: `Error deleting transaction: ${err.message}`
+        text: `Delete failed: ${errMessage}`
       });
-    } finally {
-      setTxToDelete(null);
+      throw err;
     }
   };
 
@@ -1608,8 +1772,8 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleDeleteTransaction(item)}
-                                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-[11px] font-bold transition-all inline-flex items-center gap-1 shadow-2xs"
+                                onClick={(e) => handleDeleteTransaction(e, item)}
+                                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-[11px] font-bold transition-all inline-flex items-center gap-1 shadow-2xs cursor-pointer pointer-events-auto"
                                 title="Delete Transaction"
                               >
                                 <Trash2 className="w-3 h-3 text-rose-600" />
@@ -1696,6 +1860,29 @@ export const BillingPaymentsHub: React.FC<BillingPaymentsHubProps> = ({
         onClose={() => setTxToDelete(null)}
         onConfirm={confirmDeleteTransaction}
       />
+      {/* Floating Global Action Toast (Always visible even when scrolled down long tables) */}
+      {feedbackBanner &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            style={{ zIndex: 9998 }}
+            className={`fixed bottom-5 right-5 max-w-md px-4 py-3 rounded-2xl border shadow-2xl text-xs font-bold flex items-center justify-between gap-3 animate-fade-in ${
+              feedbackBanner.type === 'error'
+                ? 'bg-rose-50 border-rose-300 text-rose-900'
+                : 'bg-emerald-50 border-emerald-300 text-emerald-900'
+            }`}
+          >
+            <span>{feedbackBanner.text}</span>
+            <button
+              type="button"
+              onClick={() => setFeedbackBanner(null)}
+              className="text-slate-500 hover:text-slate-900 cursor-pointer shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

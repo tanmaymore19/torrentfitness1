@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle, Trash2, Loader2, X } from 'lucide-react';
 
 export interface GlobalDeleteConfirmModalProps {
@@ -33,9 +34,19 @@ export const GlobalDeleteConfirmModal: React.FC<GlobalDeleteConfirmModalProps> =
   const [isDeleting, setIsDeleting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (isOpen) {
+      setErrorMsg(null);
+      setIsDeleting(false);
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
-  const handleConfirm = async () => {
+  const handleConfirm = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (isDeleting) return;
     setIsDeleting(true);
     setErrorMsg(null);
     try {
@@ -48,9 +59,16 @@ export const GlobalDeleteConfirmModal: React.FC<GlobalDeleteConfirmModalProps> =
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-md animate-fade-in">
-      <div className="w-full max-w-md vision-surface bg-white/95 border border-white/90 rounded-3xl p-6 shadow-2xl text-slate-800 space-y-4">
+  const modalNode = (
+    <div
+      style={{ zIndex: 9999 }}
+      onClick={(e) => e.stopPropagation()}
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/55 backdrop-blur-md animate-fade-in"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md vision-surface bg-white/95 border border-white/90 rounded-3xl p-6 shadow-2xl text-slate-800 space-y-4"
+      >
         {/* Header */}
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-3.5">
@@ -68,8 +86,11 @@ export const GlobalDeleteConfirmModal: React.FC<GlobalDeleteConfirmModalProps> =
           <button
             type="button"
             disabled={isDeleting}
-            onClick={onClose}
-            className="p-1 text-slate-400 hover:text-slate-700 rounded-lg transition-colors"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            className="p-1 text-slate-400 hover:text-slate-700 rounded-lg transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -105,8 +126,11 @@ export const GlobalDeleteConfirmModal: React.FC<GlobalDeleteConfirmModalProps> =
           <button
             type="button"
             disabled={isDeleting}
-            onClick={onClose}
-            className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-colors border border-slate-200"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-colors border border-slate-200 cursor-pointer"
           >
             {cancelLabel}
           </button>
@@ -114,7 +138,7 @@ export const GlobalDeleteConfirmModal: React.FC<GlobalDeleteConfirmModalProps> =
             type="button"
             disabled={isDeleting}
             onClick={handleConfirm}
-            className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-md disabled:opacity-50"
+            className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-md disabled:opacity-50 cursor-pointer"
           >
             {isDeleting ? (
               <>
@@ -132,4 +156,6 @@ export const GlobalDeleteConfirmModal: React.FC<GlobalDeleteConfirmModalProps> =
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalNode, document.body) : modalNode;
 };

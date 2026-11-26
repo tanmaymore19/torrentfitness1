@@ -20,6 +20,7 @@ import {
   TrainerProfile
 } from '../../types';
 import { INITIAL_AEROBICS_BATCHES, INITIAL_TRAINERS } from '../../services/db';
+import { isDeletedTransaction } from '../../utils/memberStatus';
 import { GlobalDeleteConfirmModal } from '../common/GlobalDeleteConfirmModal';
 import {
   Music,
@@ -114,7 +115,9 @@ export const AerobicsAdminManager: React.FC = () => {
     const unsubSubs = onSnapshot(
       collection(db, 'aerobicsSubscriptions'),
       (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as AerobicsSubscription));
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as AerobicsSubscription))
+          .filter((sub) => !isDeletedTransaction(sub));
         list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         setSubscriptions(list);
       },
@@ -144,7 +147,9 @@ export const AerobicsAdminManager: React.FC = () => {
     const unsubRequests = onSnapshot(
       collection(db, 'aerobics_requests'),
       (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .filter((req) => !isDeletedTransaction(req));
         list.sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
         setAerobicsRequests(list);
       },

@@ -134,7 +134,12 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { formatHeight, parseHeight } from '../../utils/heightUtils';
-import { isClientActiveMembership } from '../../utils/memberStatus';
+import {
+  isClientActiveMembership,
+  isValidRevenueTx,
+  isDeletedTransaction,
+  mergeTransactionLists
+} from '../../utils/memberStatus';
 
 export type DomainId =
   | 'domain_01'
@@ -239,7 +244,9 @@ export const AdminApp: React.FC = () => {
     getCachedData<AerobicsBatch[]>('admin_aerobics_batches', INITIAL_AEROBICS_BATCHES)
   );
   const [paymentTransactions, setPaymentTransactions] = useState<PaymentTransaction[]>(() =>
-    getCachedData<PaymentTransaction[]>('admin_payment_tx', [])
+    getCachedData<PaymentTransaction[]>('admin_payment_tx', []).filter(
+      (t) => !isDeletedTransaction(t)
+    )
   );
 
   // Password management & Modals
@@ -502,14 +509,32 @@ export const AdminApp: React.FC = () => {
       (err) => console.warn('Admin clients listener note:', err)
     );
 
+    let livePtList: PaymentTransaction[] = [];
+    let liveTxList: PaymentTransaction[] = [];
+    const syncMergedAdminTx = () => {
+      const merged = mergeTransactionLists(livePtList, liveTxList).filter(
+        (t) => !isDeletedTransaction(t)
+      );
+      setPaymentTransactions(merged);
+      setCachedData('admin_payment_tx', merged);
+    };
+
     const unsubPayTx = onSnapshot(
-      query(collection(db, 'paymentTransactions'), limit(40)),
+      query(collection(db, 'paymentTransactions'), limit(100)),
       (s) => {
-        const list = s.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentTransaction));
-        setPaymentTransactions(list);
-        setCachedData('admin_payment_tx', list);
+        livePtList = s.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentTransaction));
+        syncMergedAdminTx();
       },
       (err) => console.warn('Admin paymentTransactions listener note:', err)
+    );
+
+    const unsubAliasTx = onSnapshot(
+      query(collection(db, 'transactions'), limit(100)),
+      (s) => {
+        liveTxList = s.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentTransaction));
+        syncMergedAdminTx();
+      },
+      (err) => console.warn('Admin transactions listener note:', err)
     );
 
     let initialPtLoadDone = false;
@@ -591,6 +616,7 @@ export const AdminApp: React.FC = () => {
     return () => {
       unsubClients();
       unsubPayTx();
+      unsubAliasTx();
       unsubPtRequests();
       unsubPtLegacy();
     };
@@ -2492,14 +2518,12 @@ export const AdminApp: React.FC = () => {
     return attendance.filter(a => a.entryDate === today).length;
   }, [attendance]);
 
-  // Domain 02 & Top Quick-Action Bar Real-time Financial Metrics
-  // Domain 02 & Top Quick-Action Bar Real-time Financial Metrics (Strictly Real Transactions Baseline)
+  // Domain 02 & Top Quick-Action Bar Real-time Financial Metrics (Strict Revenue Whitelist)
   const settledPaymentsRevenue = React.useMemo(() => {
     let total = 0;
     paymentTransactions.forEach((tx) => {
-      const s = String(tx.status || '').toLowerCase();
-      if ((s === 'success' || s === 'completed' || s === 'active') && !tx.isTest) {
-        total += tx.finalAmount ?? tx.amount ?? 0;
+      if (isValidRevenueTx(tx)) {
+        total += Number(tx.finalAmount ?? tx.amount ?? 0) || 0;
       }
     });
     return total;
@@ -2512,11 +2536,10 @@ export const AdminApp: React.FC = () => {
     let monthTotal = 0;
 
     paymentTransactions.forEach((tx) => {
-      const s = String(tx.status || '').toLowerCase();
-      if ((s === 'success' || s === 'completed' || s === 'active') && !tx.isTest) {
-        const dt = new Date(tx.createdAt || '');
+      if (isValidRevenueTx(tx)) {
+        const dt = new Date(tx.createdAt || (tx as any).timestamp || '');
         if (!isNaN(dt.getTime()) && dt.getFullYear() === curYear && dt.getMonth() === curMonth) {
-          monthTotal += tx.finalAmount ?? tx.amount ?? 0;
+          monthTotal += Number(tx.finalAmount ?? tx.amount ?? 0) || 0;
         }
       }
     });
@@ -2526,8 +2549,9 @@ export const AdminApp: React.FC = () => {
 
   const pendingOfflineApprovalsCount = React.useMemo(() => paymentTransactions.filter(
     (t) =>
+      !isDeletedTransaction(t) &&
       (t.paymentMode === 'cash' || t.gatewayProvider === 'offline_cash') &&
-      t.status === 'pending'
+      String(t.status || '').toLowerCase() === 'pending'
   ).length, [paymentTransactions]);
 
   const pendingPtRequestsCount = React.useMemo(() => ptRequests.filter(
@@ -2542,12 +2566,15 @@ export const AdminApp: React.FC = () => {
   ).length, [ptRequests]);
 
   const totalLedgerRecordsCount = React.useMemo(() => {
+    const activeTx = paymentTransactions.filter((tx) => !isDeletedTransaction(tx));
     const seenMemIds = new Set<string>();
-    paymentTransactions.forEach((tx) => {
+    activeTx.forEach((tx) => {
       if (tx.membershipId) seenMemIds.add(tx.membershipId);
     });
-    const extraMems = memberships.filter((m) => !seenMemIds.has(m.id)).length;
-    return paymentTransactions.length + extraMems;
+    const extraMems = memberships.filter(
+      (m) => !isDeletedTransaction(m) && !seenMemIds.has(m.id)
+    ).length;
+    return activeTx.length + extraMems;
   }, [paymentTransactions, memberships]);
 
   const coreDomains: CoreDomainConfig[] = React.useMemo(() => [

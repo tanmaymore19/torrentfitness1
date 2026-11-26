@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { doc, setDoc, updateDoc, deleteDoc, collection, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, deleteDoc, collection, onSnapshot, query, limit } from 'firebase/firestore';
 import { useAuth } from '../../context/AuthContext';
 import {
   MembershipPlan,
@@ -21,7 +21,13 @@ import {
   exportBulkPaymentsLedgerPdf
 } from '../../services/pdfExportService';
 import { usePdfDownload } from '../../context/PdfDownloadContext';
-import { isClientActiveMembership } from '../../utils/memberStatus';
+import {
+  isClientActiveMembership,
+  isValidRevenueTx,
+  isDeletedTransaction,
+  normalizeLedgerStatus,
+  mergeTransactionLists
+} from '../../utils/memberStatus';
 import { GlobalDeleteConfirmModal } from '../common/GlobalDeleteConfirmModal';
 import {
   CreditCard,
@@ -107,16 +113,37 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
   }, [defaultSubTab]);
 
   useEffect(() => {
-    const unsubTx = onSnapshot(
-      collection(db, 'paymentTransactions'),
+    let livePt: PaymentTransaction[] = [];
+    let liveTx: PaymentTransaction[] = [];
+    const syncTx = () => {
+      const merged = mergeTransactionLists(livePt, liveTx).filter(
+        (t) => !isDeletedTransaction(t)
+      );
+      setTransactions(merged);
+    };
+
+    const unsubPt = onSnapshot(
+      query(collection(db, 'paymentTransactions'), limit(100)),
       (snap) => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as PaymentTransaction));
-        list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        setTransactions(list);
+        livePt = snap.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentTransaction));
+        syncTx();
       },
       (err) => console.warn('UnifiedMembershipManager paymentTransactions listener note:', err)
     );
-    return () => unsubTx();
+
+    const unsubAlias = onSnapshot(
+      query(collection(db, 'transactions'), limit(100)),
+      (snap) => {
+        liveTx = snap.docs.map((d) => ({ id: d.id, ...d.data() } as PaymentTransaction));
+        syncTx();
+      },
+      (err) => console.warn('UnifiedMembershipManager transactions listener note:', err)
+    );
+
+    return () => {
+      unsubPt();
+      unsubAlias();
+    };
   }, []);
 
   // Cancellation Modal State
@@ -357,7 +384,10 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
 
   const pendingOfflineQueue = useMemo(() => {
     return transactions.filter(
-      t => (t.paymentMode === 'cash' || t.gatewayProvider === 'offline_cash') && t.status === 'pending'
+      (t) =>
+        !isDeletedTransaction(t) &&
+        (t.paymentMode === 'cash' || t.gatewayProvider === 'offline_cash') &&
+        String(t.status || '').toLowerCase() === 'pending'
     );
   }, [transactions]);
 
@@ -367,6 +397,7 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
     const seenMembershipIds = new Set<string>();
 
     for (const tx of transactions) {
+      if (isDeletedTransaction(tx)) continue;
       if (tx.membershipId) seenMembershipIds.add(tx.membershipId);
       const matchingMem = memberships.find(
         m => m.id === tx.membershipId || m.transactionId === tx.id
@@ -425,6 +456,9 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
             : rawCode
           : 'NONE';
 
+      const normalizedStatus = normalizeLedgerStatus(tx);
+      const safeFinalPaid = isValidRevenueTx(tx) ? finalPaid : 0;
+
       items.push({
         id: tx.id,
         receiptNumber: tx.receiptNumber || `TF-REC-${tx.id.slice(-6).toUpperCase()}`,
@@ -442,28 +476,20 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
         couponCode: formattedCoupon,
         discountPercent: resolvedPct,
         discountAmount: discAmt,
-        finalAmount: finalPaid,
+        finalAmount: normalizedStatus === 'Success' ? safeFinalPaid : finalPaid,
         verificationStatus:
-          tx.status === 'success'
+          normalizedStatus === 'Success'
             ? 'Active'
-            : tx.status === 'pending'
+            : normalizedStatus === 'Pending'
             ? 'Pending Approval'
-            : 'Inactive',
-        status:
-          tx.status === 'success'
-            ? 'Success'
-            : tx.status === 'pending'
-            ? 'Pending'
-            : tx.status === 'rejected'
-            ? 'Rejected'
-            : tx.status === 'refunded'
-            ? 'Refunded'
-            : 'Failed'
+            : normalizedStatus,
+        status: normalizedStatus
       });
     }
 
     // Include any seeded/legacy memberships that didn't have a separate paymentTransaction document
     for (const m of memberships) {
+      if (isDeletedTransaction(m)) continue;
       if (seenMembershipIds.has(m.id)) continue;
       const isCash = m.paymentMode === 'cash';
       const rawCreated = m.createdAt || `${m.startDate}T10:00:00.000Z`;
@@ -1174,15 +1200,19 @@ export const UnifiedMembershipManager: React.FC<UnifiedMembershipManagerProps> =
 
   const filteredMemberships = filteredDeduplicatedMembers;
 
-  // Financial KPI Totals from Master Ledger
-  const settledLedger = masterLedgerEntries.filter(e => e.status === 'Success');
-  const totalSettledRevenue = settledLedger.reduce((sum, e) => sum + e.finalAmount, 0);
+  // Financial KPI Totals from Master Ledger (Strictly Valid Settled Transactions)
+  const settledLedger = masterLedgerEntries.filter((e) => {
+    const matchingRawTx = transactions.find((t) => t.id === e.id);
+    if (matchingRawTx) return isValidRevenueTx(matchingRawTx);
+    return e.status === 'Success';
+  });
+  const totalSettledRevenue = settledLedger.reduce((sum, e) => sum + (Number(e.finalAmount) || 0), 0);
   const onlineGatewayRevenue = settledLedger
     .filter(e => e.paymentModeType === 'online')
-    .reduce((sum, e) => sum + e.finalAmount, 0);
+    .reduce((sum, e) => sum + (Number(e.finalAmount) || 0), 0);
   const offlineApprovedRevenue = settledLedger
     .filter(e => e.paymentModeType === 'cash')
-    .reduce((sum, e) => sum + e.finalAmount, 0);
+    .reduce((sum, e) => sum + (Number(e.finalAmount) || 0), 0);
 
   return (
     <div className="space-y-5">

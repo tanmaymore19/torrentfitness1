@@ -6,6 +6,7 @@ import { PaymentTransaction, MembershipRecord } from '../../types';
 import { getCachedData, setCachedData } from '../../services/cacheService';
 import { exportSinglePaymentInvoicePdf } from '../../services/pdfExportService';
 import { usePdfDownload } from '../../context/PdfDownloadContext';
+import { isDeletedTransaction, mergeTransactionLists } from '../../utils/memberStatus';
 import {
   Receipt,
   Download,
@@ -77,14 +78,9 @@ export const ClientPaymentHistorySection: React.FC = () => {
     let liveTx2: PaymentTransaction[] = [];
 
     const updateCombinedTransactions = () => {
-      const map = new Map<string, PaymentTransaction>();
-      liveTx1.forEach((t) => map.set(t.id, t));
-      liveTx2.forEach((t) => map.set(t.id, { ...map.get(t.id), ...t }));
-      const list = Array.from(map.values()).sort((a, b) => {
-        const tA = new Date(a.timestamp || a.approvedAt || a.createdAt || 0).getTime();
-        const tB = new Date(b.timestamp || b.approvedAt || b.createdAt || 0).getTime();
-        return tB - tA;
-      });
+      const list = mergeTransactionLists(liveTx1, liveTx2).filter(
+        (t) => !isDeletedTransaction(t)
+      );
       setTransactions(list);
       setCachedData(`pay_tx_${currentUser.uid}`, list);
       setIsLoading(false);
@@ -166,29 +162,28 @@ export const ClientPaymentHistorySection: React.FC = () => {
     };
 
     for (const tx of transactions) {
-      if (
-        tx.isDeletedByAdmin ||
-        (tx as any).deletedByAdmin ||
-        String(tx.status).toLowerCase() === 'deleted' ||
-        String(tx.status).toLowerCase() === 'archived'
-      ) {
+      if (isDeletedTransaction(tx)) {
         continue;
       }
       if (tx.membershipId) linkedMembershipIds.add(tx.membershipId);
       const matchingMem = memberships.find(
         (m) => m.id === tx.membershipId || m.transactionId === tx.id
       );
-      if (matchingMem) linkedMembershipIds.add(matchingMem.id);
+      if (matchingMem) {
+        linkedMembershipIds.add(matchingMem.id);
+        if (isDeletedTransaction(matchingMem)) continue;
+      }
 
       const isCash =
         tx.paymentMode === 'cash' ||
         tx.gatewayProvider === 'offline_cash' ||
         tx.gatewayProvider === 'cash';
 
+      const stLow = String(tx.status || '').toLowerCase();
       const paymentModeLabel = isCash
-        ? tx.status === 'pending'
+        ? stLow === 'pending'
           ? 'Offline Cash (Pending Approval)'
-          : tx.status === 'rejected'
+          : stLow === 'rejected'
           ? 'Offline Cash (Declined)'
           : 'Offline Cash Approved'
         : `${
@@ -278,12 +273,7 @@ export const ClientPaymentHistorySection: React.FC = () => {
 
     // Include any historical membership records that didn't have a separate paymentTransactions row
     for (const mem of memberships) {
-      if (
-        (mem as any).transactionDeleted ||
-        (mem as any).isDeletedByAdmin ||
-        String(mem.status).toLowerCase() === 'archived' ||
-        String(mem.status).toLowerCase() === 'deleted'
-      ) {
+      if (isDeletedTransaction(mem)) {
         continue;
       }
       if (linkedMembershipIds.has(mem.id)) continue;

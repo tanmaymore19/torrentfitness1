@@ -2445,7 +2445,11 @@ export async function rejectOfflinePaymentRequest(
     updatedAt: nowIso
   };
   batch.set(doc(db, 'paymentTransactions', reqId), txRejectionPayload, { merge: true });
-  batch.set(doc(db, 'transactions', reqId), txRejectionPayload, { merge: true });
+  batch.set(
+    doc(db, 'transactions', reqId),
+    { ...txRejectionPayload, status: 'REJECTED' },
+    { merge: true }
+  );
 
   // 2. Update membership_requests & membershipRequests
   const memReqPayload = {

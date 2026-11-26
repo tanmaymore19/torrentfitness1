@@ -17,6 +17,7 @@ import {
   ONLINE_PROVIDERS
 } from '../../services/paymentService';
 import { useAuth } from '../../context/AuthContext';
+import { isValidRevenueTx, isDeletedTransaction } from '../../utils/memberStatus';
 import { PaymentReceiptModal } from '../common/PaymentReceiptModal';
 import { GlobalDeleteConfirmModal } from '../common/GlobalDeleteConfirmModal';
 import {
@@ -652,7 +653,10 @@ export const PaymentGatewaysManager: React.FC = () => {
   };
 
   const pendingOfflineRequests = transactions.filter(
-    t => (t.paymentMode === 'cash' || t.gatewayProvider === 'offline_cash') && t.status === 'pending'
+    (t) =>
+      !isDeletedTransaction(t) &&
+      (t.paymentMode === 'cash' || t.gatewayProvider === 'offline_cash') &&
+      String(t.status || '').toLowerCase() === 'pending'
   );
 
   const activeDefaultGw = gateways.find(g => g.isDefault && g.isEnabled) || gateways.find(g => g.isEnabled);
@@ -788,12 +792,12 @@ export const PaymentGatewaysManager: React.FC = () => {
           <span className="text-xl font-black text-emerald-700 mt-0.5 block">
             ₹
             {transactions
-              .filter(t => t.status === 'success')
-              .reduce((acc, t) => acc + (t.finalAmount ?? t.amount ?? 0), 0)
+              .filter((t) => isValidRevenueTx(t))
+              .reduce((acc, t) => acc + (Number(t.finalAmount ?? t.amount ?? 0) || 0), 0)
               .toLocaleString('en-IN')}
           </span>
           <span className="text-[10px] text-slate-500 font-medium">
-            {transactions.filter(t => t.status === 'success').length} verified payments
+            {transactions.filter((t) => isValidRevenueTx(t)).length} verified payments
           </span>
         </div>
       </div>
