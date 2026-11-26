@@ -44,14 +44,13 @@ import {
   INITIAL_AEROBICS_BATCHES,
   INITIAL_TRAINERS,
   INITIAL_WORKOUTS,
-  INITIAL_ANNOUNCEMENTS,
   INITIAL_EVENTS,
   INITIAL_CHALLENGES,
   INITIAL_OFFERS,
   INITIAL_GYM_CONFIG,
   INITIAL_SETTINGS
 } from '../../services/db';
-import { getCachedData, setCachedData } from '../../services/cacheService';
+import { getCachedData, setCachedData, clearCachedData } from '../../services/cacheService';
 import { TrainerIdentityBadge } from '../common/Badge';
 import { GymDeskQrDisplay } from '../common/GymDeskQrDisplay';
 import { BirthdayAlertBanner } from '../common/BirthdayAlertBanner';
@@ -138,7 +137,9 @@ import {
   isClientActiveMembership,
   isValidRevenueTx,
   isDeletedTransaction,
-  mergeTransactionLists
+  mergeTransactionLists,
+  isActiveAnnouncement,
+  getAnnouncementTimeMs
 } from '../../utils/memberStatus';
 
 export type DomainId =
@@ -228,9 +229,10 @@ export const AdminApp: React.FC = () => {
   const [events, setEvents] = useState<GymEvent[]>(() =>
     getCachedData<GymEvent[]>('gym_events', INITIAL_EVENTS)
   );
-  const [announcements, setAnnouncements] = useState<Announcement[]>(() =>
-    getCachedData<Announcement[]>('announcements_client', INITIAL_ANNOUNCEMENTS)
-  );
+  const [announcements, setAnnouncements] = useState<Announcement[]>(() => {
+    clearCachedData('announcements_client');
+    return getCachedData<Announcement[]>('announcements_live_v2', []).filter(isActiveAnnouncement);
+  });
   const [offers, setOffers] = useState<PromotionalOffer[]>(() =>
     getCachedData<PromotionalOffer[]>('admin_offers', INITIAL_OFFERS)
   );
@@ -613,12 +615,26 @@ export const AdminApp: React.FC = () => {
       (err) => console.warn('Admin ptRequests legacy listener note:', err)
     );
 
+    const unsubAnn = onSnapshot(
+      query(collection(db, 'announcements'), limit(25)),
+      (s) => {
+        const list = s.docs
+          .map((d) => ({ id: d.id, ...d.data() } as Announcement))
+          .filter(isActiveAnnouncement);
+        setAnnouncements(list);
+        setCachedData('announcements_live_v2', list);
+        clearCachedData('announcements_client');
+      },
+      (err) => console.warn('Admin announcements listener note:', err)
+    );
+
     return () => {
       unsubClients();
       unsubPayTx();
       unsubAliasTx();
       unsubPtRequests();
       unsubPtLegacy();
+      unsubAnn();
     };
   }, []);
 
@@ -762,15 +778,6 @@ export const AdminApp: React.FC = () => {
     } else if (selectedDomain === 'domain_04') {
       // Domain 04: Operations, Media & CMS Hub
       unsubs.push(
-        onSnapshot(
-          query(collection(db, 'announcements'), limit(25)),
-          (s) => {
-            const list = s.docs.map((d) => ({ id: d.id, ...d.data() } as Announcement));
-            setAnnouncements(list);
-            setCachedData('announcements_client', list);
-          },
-          (err) => console.warn('Admin announcements listener note:', err)
-        ),
         onSnapshot(
           query(collection(db, 'events'), limit(25)),
           (s) => {
@@ -2280,14 +2287,17 @@ export const AdminApp: React.FC = () => {
     if (!newAnnTitle.trim() || !newAnnContent.trim()) return;
     try {
       const id = `ann_${Date.now()}`;
+      const messageText = newAnnContent.trim();
       await setDoc(doc(db, 'announcements', id), {
         id,
         title: newAnnTitle.trim(),
-        content: newAnnContent.trim(),
+        content: messageText,
+        message: messageText,
         targetRole: newAnnTarget,
         priority: newAnnPriority,
         isUrgent: newAnnPriority === 'urgent',
         isActive: true,
+        isDeletedByAdmin: false,
         createdAt: serverTimestamp(),
         createdAtIso: new Date().toISOString()
       });
@@ -2301,16 +2311,38 @@ export const AdminApp: React.FC = () => {
   };
 
   const handleDeleteAnnouncement = (id: string) => {
-    const ann = announcements.find(a => a.id === id);
+    const ann = announcements.find((a) => a.id === id);
     setGlobalDeletePending({
       title: 'Delete Broadcast Announcement',
-      itemName: ann ? `${ann.title} (${ann.targetRole.toUpperCase()})` : id,
+      itemName: ann ? `${ann.title} (${(ann.targetRole || 'all').toUpperCase()})` : id,
       itemType: 'Announcement',
       description: 'Are you sure you want to permanently delete this broadcast announcement?',
       warningNote: 'This notice will be immediately removed from the Client and Trainer portals.',
       confirmLabel: 'Yes, Delete Announcement',
       onConfirm: async () => {
-        await deleteDoc(doc(db, 'announcements', id));
+        const nowIso = new Date().toISOString();
+        await setDoc(
+          doc(db, 'announcements', id),
+          {
+            isDeletedByAdmin: true,
+            isActive: false,
+            deletedAt: serverTimestamp(),
+            updatedAt: nowIso
+          },
+          { merge: true }
+        );
+        setAnnouncements((prev) => {
+          const updated = prev.filter((a) => a.id !== id);
+          setCachedData('announcements_live_v2', updated);
+          return updated;
+        });
+        clearCachedData('announcements_client');
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.removeItem('announcements');
+            localStorage.removeItem('tf_cache_v2_announcements_client');
+          } catch {}
+        }
         showAdminNotice('Announcement deleted.', 'success');
       }
     });
@@ -5989,9 +6021,10 @@ export const AdminApp: React.FC = () => {
                   </span>
                 </div>
                 {[...announcements]
-                  .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+                  .sort((a, b) => getAnnouncementTimeMs(b) - getAnnouncementTimeMs(a))
                   .map((ann) => {
                     const isUrgent = ann.priority === 'urgent' || (ann as any).isUrgent;
+                    const tsMs = getAnnouncementTimeMs(ann);
                     return (
                       <div
                         key={ann.id}
@@ -6005,7 +6038,7 @@ export const AdminApp: React.FC = () => {
                           <div className="flex items-center gap-2 flex-wrap">
                             <strong className="text-sm font-black text-slate-900">{ann.title}</strong>
                             <span className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase bg-indigo-50 text-indigo-700 border border-indigo-200">
-                              {ann.targetRole}
+                              {ann.targetRole || 'all'}
                             </span>
                             <span
                               className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase border ${
@@ -6016,18 +6049,31 @@ export const AdminApp: React.FC = () => {
                                   : 'bg-slate-100 text-slate-600 border-slate-200'
                               }`}
                             >
-                              {isUrgent ? '🚨 URGENT' : ann.priority}
+                              {isUrgent ? '🚨 URGENT' : ann.priority || 'normal'}
                             </span>
                             <span className="text-[10px] text-slate-400 font-mono">
-                              {ann.createdAt ? new Date(ann.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Recent'}
+                              {tsMs > 0
+                                ? new Date(tsMs).toLocaleString([], {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit'
+                                  })
+                                : 'Recent'}
                             </span>
                           </div>
-                          <p className="text-slate-600 leading-relaxed font-medium">{ann.content}</p>
+                          <p className="text-slate-600 leading-relaxed font-medium">
+                            {ann.content || ann.message}
+                          </p>
                         </div>
                         <button
                           type="button"
-                          onClick={() => handleDeleteAnnouncement(ann.id)}
-                          className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl border border-rose-200 shrink-0 cursor-pointer"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleDeleteAnnouncement(ann.id);
+                          }}
+                          className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl border border-rose-200 shrink-0 cursor-pointer pointer-events-auto"
                           title="Delete Notice"
                         >
                           <Trash2 className="w-3.5 h-3.5" />

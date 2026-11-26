@@ -26,9 +26,13 @@ import {
   AerobicsCategory,
   AerobicsIntensity
 } from '../../types';
-import { INITIAL_AEROBICS_BATCHES, INITIAL_ANNOUNCEMENTS } from '../../services/db';
-import { getCachedData, setCachedData } from '../../services/cacheService';
-import { isClientActiveMembership } from '../../utils/memberStatus';
+import { INITIAL_AEROBICS_BATCHES } from '../../services/db';
+import { getCachedData, setCachedData, clearCachedData } from '../../services/cacheService';
+import {
+  isClientActiveMembership,
+  isActiveAnnouncement,
+  getAnnouncementTimeMs
+} from '../../utils/memberStatus';
 import { Header } from '../common/Header';
 import { TrainerIdentityBadge } from '../common/Badge';
 import { PhotoUploader } from '../common/PhotoUploader';
@@ -259,9 +263,10 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
   const [attendanceLogs, setAttendanceLogs] = useState<AttendanceRecord[]>(() =>
     getCachedData<AttendanceRecord[]>('admin_attendance', [])
   );
-  const [announcements, setAnnouncements] = useState<Announcement[]>(() =>
-    getCachedData<Announcement[]>('announcements_client', INITIAL_ANNOUNCEMENTS)
-  );
+  const [announcements, setAnnouncements] = useState<Announcement[]>(() => {
+    clearCachedData('announcements_client');
+    return getCachedData<Announcement[]>('announcements_trainer_v2', []).filter(isActiveAnnouncement);
+  });
   const [aerobicsBatches, setAerobicsBatches] = useState<AerobicsBatch[]>(() =>
     getCachedData<AerobicsBatch[]>('admin_aerobics_batches', INITIAL_AEROBICS_BATCHES)
   );
@@ -522,11 +527,19 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
     );
 
     const unsubAnn = onSnapshot(
-      query(collection(db, 'announcements'), limit(15)),
+      query(collection(db, 'announcements'), limit(25)),
       (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Announcement));
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as Announcement))
+          .filter(
+            (a) =>
+              isActiveAnnouncement(a) &&
+              (!a.targetRole || a.targetRole === 'all' || a.targetRole === 'trainers')
+          )
+          .sort((a, b) => getAnnouncementTimeMs(b) - getAnnouncementTimeMs(a));
         setAnnouncements(list);
-        setCachedData('announcements_client', list);
+        setCachedData('announcements_trainer_v2', list);
+        clearCachedData('announcements_client');
       },
       (err) => console.warn('Trainer announcements listener note:', err)
     );
@@ -1934,20 +1947,26 @@ export const TrainerApp: React.FC<TrainerAppProps> = () => {
             </h3>
 
             <div className="space-y-2">
-              {announcements.map((ann) => (
-                <div
-                  key={ann.id}
-                  className="clay-surface rounded-2xl p-4 border border-white/80 space-y-1 shadow-sm"
-                >
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-xs font-bold text-slate-800">{ann.title}</h4>
-                    <span className="text-[10px] font-bold uppercase text-orange-500 font-bold bg-cyan-950/80 border border-cyan-500/30 px-2 py-0.5 rounded-md">
-                      {ann.priority}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-600 leading-relaxed">{ann.content}</p>
+              {announcements.length === 0 ? (
+                <div className="clay-surface rounded-2xl p-6 border border-white/80 text-center text-xs text-slate-500">
+                  No active operational announcements.
                 </div>
-              ))}
+              ) : (
+                announcements.map((ann) => (
+                  <div
+                    key={ann.id}
+                    className="clay-surface rounded-2xl p-4 border border-white/80 space-y-1 shadow-sm"
+                  >
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold text-slate-800">{ann.title}</h4>
+                      <span className="text-[10px] font-bold uppercase text-orange-500 bg-cyan-950/80 border border-cyan-500/30 px-2 py-0.5 rounded-md">
+                        {ann.priority || 'normal'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-600 leading-relaxed">{ann.content || ann.message}</p>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         )}

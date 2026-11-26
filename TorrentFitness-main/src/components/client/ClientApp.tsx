@@ -3,8 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { db } from '../../firebase';
 import { collection, doc, setDoc, onSnapshot, query, where, limit } from 'firebase/firestore';
 import { Announcement, AttendanceRecord } from '../../types';
-import { INITIAL_ANNOUNCEMENTS } from '../../services/db';
-import { getCachedData, setCachedData } from '../../services/cacheService';
+import { getCachedData, setCachedData, clearCachedData } from '../../services/cacheService';
 import {
   closeAttendanceSession,
   isSessionExpired,
@@ -16,7 +15,11 @@ import {
 } from '../../services/attendanceService';
 import { Header } from '../common/Header';
 import { verifyAndActivateOnlinePayment, calculateExpiryFromPaymentDate } from '../../services/paymentService';
-import { isQrScannerUnlocked } from '../../utils/memberStatus';
+import {
+  isQrScannerUnlocked,
+  isActiveAnnouncement,
+  getAnnouncementTimeMs
+} from '../../utils/memberStatus';
 import { PromotionalCarousel } from './PromotionalCarousel';
 import { GymPhotoGallery } from './GymPhotoGallery';
 import { QRScannerModal } from '../common/QRScannerModal';
@@ -275,9 +278,10 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
   }, [payuAlert, currentUser]);
 
   // Relative timestamp calculator for notifications and announcement feeds
-  const getRelativeTime = (dateString?: string) => {
-    if (!dateString) return 'Just now';
-    const date = new Date(dateString);
+  const getRelativeTime = (dateInput?: any) => {
+    const ms = getAnnouncementTimeMs(dateInput);
+    if (!ms) return 'Just now';
+    const date = new Date(ms);
     const now = new Date();
     const diffSec = Math.floor((now.getTime() - date.getTime()) / 1000);
 
@@ -293,10 +297,11 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
-  // Announcements hydrated from cache immediately
-  const [announcements, setAnnouncements] = useState<Announcement[]>(() =>
-    getCachedData<Announcement[]>('announcements_client', INITIAL_ANNOUNCEMENTS)
-  );
+  // Announcements hydrated strictly from verified live cache (empty [] by default — zero demo seeds)
+  const [announcements, setAnnouncements] = useState<Announcement[]>(() => {
+    clearCachedData('announcements_client');
+    return getCachedData<Announcement[]>('announcements_live_v2', []).filter(isActiveAnnouncement);
+  });
   const [showAnnouncementsModal, setShowAnnouncementsModal] = useState(false);
 
   // Read Announcements Persistence (localStorage keyed by client ID)
@@ -321,11 +326,9 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
 
   // Strict Reverse-Chronological Ordering: Most recently published appears first
   const sortedAnnouncements = React.useMemo(() => {
-    return [...announcements].sort((a, b) => {
-      const timeA = new Date(a.createdAt || 0).getTime();
-      const timeB = new Date(b.createdAt || 0).getTime();
-      return timeB - timeA;
-    });
+    return announcements
+      .filter(isActiveAnnouncement)
+      .sort((a, b) => getAnnouncementTimeMs(b) - getAnnouncementTimeMs(a));
   }, [announcements]);
 
   // Exact Unread Counter for Notification Bell
@@ -471,16 +474,21 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
   ]);
 
   useEffect(() => {
-    // 1. Load recent Announcements (bounded by limit(15))
-    const annQuery = query(collection(db, 'announcements'), limit(15));
+    // 1. Load live Announcements from single Cloud Firestore source of truth (bounded by limit(25))
+    const annQuery = query(collection(db, 'announcements'), limit(25));
     const unsubAnn = onSnapshot(
       annQuery,
       (snap) => {
         const list = snap.docs
           .map((d) => ({ id: d.id, ...d.data() } as Announcement))
-          .filter((a) => a.targetRole === 'all' || a.targetRole === 'clients');
+          .filter(
+            (a) =>
+              isActiveAnnouncement(a) &&
+              (!a.targetRole || a.targetRole === 'all' || a.targetRole === 'clients')
+          );
         setAnnouncements(list);
-        setCachedData('announcements_client', list);
+        setCachedData('announcements_live_v2', list);
+        clearCachedData('announcements_client');
       },
       (err) => console.warn('Announcements listener note:', err)
     );
@@ -785,14 +793,14 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
                           CRITICAL ALERT
                         </span>
                         <span className="text-[10px] font-bold text-rose-700">
-                          {getRelativeTime(activeUrgentAnnouncement.createdAt)}
+                          {getRelativeTime(activeUrgentAnnouncement)}
                         </span>
                       </div>
                       <h3 className="text-sm font-black text-slate-900 mt-1 leading-snug line-clamp-1">
                         {activeUrgentAnnouncement.title}
                       </h3>
                       <p className="text-xs text-slate-700 font-medium mt-1 line-clamp-2 leading-relaxed">
-                        {activeUrgentAnnouncement.content}
+                        {activeUrgentAnnouncement.content || activeUrgentAnnouncement.message}
                       </p>
                       <div className="mt-2.5 flex items-center gap-1.5 text-[11px] font-black text-rose-600 group-hover:text-rose-700 transition-colors">
                         <span>Tap to Read Notice</span>
@@ -897,7 +905,7 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
                                   : 'bg-indigo-50 text-indigo-700 border-indigo-200'
                               }`}
                             >
-                              {isUrgent ? '🚨 URGENT' : ann.priority.toUpperCase()}
+                              {isUrgent ? '🚨 URGENT' : (ann.priority || 'normal').toUpperCase()}
                             </span>
                             {!isRead && (
                               <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" title="Unread notice" />
@@ -907,11 +915,11 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
                             </h4>
                           </div>
                           <span className="text-[10px] text-slate-400 font-semibold shrink-0">
-                            {getRelativeTime(ann.createdAt)}
+                            {getRelativeTime(ann)}
                           </span>
                         </div>
                         <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
-                          {ann.content}
+                          {ann.content || ann.message}
                         </p>
                       </div>
                     );
@@ -1299,14 +1307,14 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
                                 : 'bg-indigo-50 text-indigo-700 border-indigo-200'
                             }`}
                           >
-                            {isUrgent ? '🚨 URGENT NOTICE' : ann.priority.toUpperCase()}
+                            {isUrgent ? '🚨 URGENT NOTICE' : (ann.priority || 'normal').toUpperCase()}
                           </span>
                           <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                            Audience: {ann.targetRole}
+                            Audience: {ann.targetRole || 'all'}
                           </span>
                         </div>
                         <span className="text-[10px] text-slate-400 font-semibold font-mono">
-                          {getRelativeTime(ann.createdAt)}
+                          {getRelativeTime(ann)}
                         </span>
                       </div>
 
@@ -1314,7 +1322,7 @@ export const ClientApp: React.FC<ClientAppProps> = () => {
                         {ann.title}
                       </h4>
                       <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-line font-medium">
-                        {ann.content}
+                        {ann.content || ann.message}
                       </p>
                     </div>
                   );

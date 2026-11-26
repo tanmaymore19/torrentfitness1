@@ -469,24 +469,8 @@ export const INITIAL_WORKOUTS: WorkoutPlan[] = [
   }
 ];
 
-export const INITIAL_ANNOUNCEMENTS: Announcement[] = [
-  {
-    id: 'ann_1',
-    title: 'Gym Timings Notice',
-    content: 'Torrent Fitness is open Monday to Sunday from 5:30 AM to 10:30 PM. Please scan the QR at the reception gate for contactless attendance.',
-    targetRole: 'all',
-    priority: 'normal',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'ann_2',
-    title: 'New High-Performance Lifting Racks Added',
-    content: 'We have upgraded our powerlifting stations with olympic competition bars and bumper plates. Train hard and re-rack your weights!',
-    targetRole: 'clients',
-    priority: 'high',
-    createdAt: new Date().toISOString()
-  }
-];
+// No hardcoded demo or fallback announcements — Admin-created Cloud Firestore records are the single source of truth
+export const INITIAL_ANNOUNCEMENTS: Announcement[] = [];
 
 export const INITIAL_EVENTS: GymEvent[] = [
   {
@@ -954,11 +938,10 @@ export async function initializeDatabaseSeed(force: boolean = false): Promise<vo
         }
       })(),
 
-      // 6. Announcements, Events, Challenges, Offers, Popups
+      // 6. Events, Challenges, Offers, Popups (Never auto-seed demo announcements)
       (async () => {
-        const [announcementsSnap, eventsSnap, challengesSnap, offersSnap, popupDoc] =
+        const [eventsSnap, challengesSnap, offersSnap, popupDoc] =
           await Promise.all([
-            getDocs(query(collection(db, 'announcements'), limit(1))),
             getDocs(query(collection(db, 'events'), limit(1))),
             getDocs(query(collection(db, 'challenges'), limit(1))),
             getDocs(query(collection(db, 'offers'), limit(1))),
@@ -966,11 +949,6 @@ export async function initializeDatabaseSeed(force: boolean = false): Promise<vo
           ]);
 
         const writes: Promise<any>[] = [];
-        if (announcementsSnap.empty) {
-          INITIAL_ANNOUNCEMENTS.forEach((ann) =>
-            writes.push(setDoc(doc(db, 'announcements', ann.id), ann))
-          );
-        }
         if (eventsSnap.empty) {
           INITIAL_EVENTS.forEach((evt) => writes.push(setDoc(doc(db, 'events', evt.id), evt)));
         }

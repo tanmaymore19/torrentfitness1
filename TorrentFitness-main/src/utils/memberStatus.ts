@@ -280,3 +280,29 @@ export function mergeTransactionLists<T extends { id: string }>(
     return tB - tA;
   });
 }
+
+/**
+ * Determines whether an announcement document is active and not soft-deleted by Admin.
+ */
+export function isActiveAnnouncement(ann: any): boolean {
+  if (!ann) return false;
+  if (ann.isDeletedByAdmin === true || ann.deleted === true) return false;
+  if (ann.isActive === false) return false;
+  return true;
+}
+
+/**
+ * Resolves numeric timestamp in milliseconds for sorting and rendering announcements
+ * across Firestore Timestamp objects, serialized timestamps, and ISO strings.
+ */
+export function getAnnouncementTimeMs(annOrDate: any): number {
+  const raw =
+    annOrDate && typeof annOrDate === 'object' && ('createdAt' in annOrDate || 'createdAtIso' in annOrDate)
+      ? annOrDate.createdAtIso || annOrDate.createdAt
+      : annOrDate;
+  if (!raw) return 0;
+  if (typeof raw?.toDate === 'function') return raw.toDate().getTime();
+  if (typeof raw?.seconds === 'number') return raw.seconds * 1000;
+  const parsed = new Date(raw).getTime();
+  return isNaN(parsed) ? 0 : parsed;
+}

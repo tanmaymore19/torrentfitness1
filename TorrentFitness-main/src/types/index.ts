@@ -430,9 +430,14 @@ export interface Announcement {
   id: string;
   title: string;
   content: string;
+  message?: string;
   targetRole: 'all' | 'clients' | 'trainers';
   priority: 'normal' | 'high' | 'urgent';
-  createdAt: string;
+  isUrgent?: boolean;
+  isActive?: boolean;
+  isDeletedByAdmin?: boolean;
+  createdAt: any;
+  createdAtIso?: string;
 }
 
 export interface PromotionalOffer {
