@@ -6,7 +6,7 @@
 export async function compressImageToDataUrl(
   input: File | Blob | string,
   maxWidth = 1200,
-  initialQuality = 0.80
+  initialQuality = 0.78
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     let sourceUrl = '';
@@ -65,26 +65,37 @@ export async function compressImageToDataUrl(
         let quality = initialQuality;
         let result = canvas.toDataURL('image/jpeg', quality);
 
-        // Firestore document size limit is 1,048,576 bytes.
-        // If string exceeds 750,000 characters (~550KB binary), step down quality
-        if (result.length > 750000) {
+        // Firestore document limit is 1,048,576 bytes; keep compressed banner images strictly < 450KB.
+        const MAX_DOC_DATA_URL_LENGTH = 445000;
+        if (result.length > MAX_DOC_DATA_URL_LENGTH) {
           quality = 0.65;
           result = canvas.toDataURL('image/jpeg', quality);
         }
 
-        if (result.length > 750000) {
-          // Downscale dimensions to 900px width
-          const targetW = Math.min(width, 900);
-          const targetH = Math.round((height * targetW) / width);
-          const smallCanvas = document.createElement('canvas');
-          smallCanvas.width = targetW;
-          smallCanvas.height = targetH;
-          const sCtx = smallCanvas.getContext('2d');
-          if (sCtx) {
-            sCtx.imageSmoothingEnabled = true;
-            sCtx.imageSmoothingQuality = 'high';
-            sCtx.drawImage(canvas, 0, 0, targetW, targetH);
-            result = smallCanvas.toDataURL('image/jpeg', 0.60);
+        if (result.length > MAX_DOC_DATA_URL_LENGTH) {
+          quality = 0.52;
+          result = canvas.toDataURL('image/jpeg', quality);
+        }
+
+        if (result.length > MAX_DOC_DATA_URL_LENGTH) {
+          // Downscale dimensions progressively so string payload stays strictly < 450KB
+          for (const targetMaxW of [960, 760, 600]) {
+            const targetW = Math.min(width, targetMaxW);
+            const targetH = Math.max(1, Math.round((height * targetW) / width));
+            const smallCanvas = document.createElement('canvas');
+            smallCanvas.width = targetW;
+            smallCanvas.height = targetH;
+            const sCtx = smallCanvas.getContext('2d');
+            if (sCtx) {
+              sCtx.imageSmoothingEnabled = true;
+              sCtx.imageSmoothingQuality = 'high';
+              sCtx.drawImage(canvas, 0, 0, targetW, targetH);
+              for (const q of [0.68, 0.56, 0.45]) {
+                result = smallCanvas.toDataURL('image/jpeg', q);
+                if (result.length <= MAX_DOC_DATA_URL_LENGTH) break;
+              }
+            }
+            if (result.length <= MAX_DOC_DATA_URL_LENGTH) break;
           }
         }
 

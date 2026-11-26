@@ -5,64 +5,8 @@ export const BANNER_DB_VERSION = 1;
 export const BANNER_STORE_NAME = 'banners';
 export const BANNER_METADATA_STORAGE_KEY = 'torrent_home_banners_v1';
 
-export const INITIAL_DEFAULT_BANNERS: PromoBanner[] = [
-  {
-    id: 'default_promo_1',
-    title: 'New Year Revolution: 40% OFF',
-    subtitle: 'Annual Platinum All-Access pass with unlimited steam & group classes.',
-    tag: 'MEGA OFFER',
-    mediaType: 'image',
-    mediaUrl: 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&w=1200&q=80',
-    linkType: 'plans',
-    buttonText: 'View Discount Plans',
-    badgeColor: 'from-amber-500 to-orange-500',
-    active: true,
-    order: 1,
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'default_promo_2',
-    title: 'Transform with Elite Personal Trainers',
-    subtitle: '1-on-1 personalized biomechanics, custom macros & weekly check-ins.',
-    tag: 'CERTIFIED COACHES',
-    mediaType: 'image',
-    mediaUrl: 'https://images.unsplash.com/photo-1571019614242-c5c5dee9f50b?auto=format&fit=crop&w=1200&q=80',
-    linkType: 'pt',
-    buttonText: 'Find Your Coach',
-    badgeColor: 'from-indigo-500 to-purple-500',
-    active: true,
-    order: 2,
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'default_promo_3',
-    title: 'Master Your Form & Exercise Library',
-    subtitle: 'Explore 50+ muscle-specific workouts with rep tempos and form guides.',
-    tag: 'WORKOUT HUB',
-    mediaType: 'image',
-    mediaUrl: 'https://images.unsplash.com/photo-1517838277536-f5f99be501cd?auto=format&fit=crop&w=1200&q=80',
-    linkType: 'workouts',
-    buttonText: 'Browse Exercises',
-    badgeColor: 'from-sky-500 to-blue-600',
-    active: true,
-    order: 3,
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'default_promo_4',
-    title: 'Torrent 30-Day Summer Shred',
-    subtitle: 'Compete with gym members, log attendance streaks and win cash prizes.',
-    tag: 'CHALLENGE',
-    mediaType: 'image',
-    mediaUrl: 'https://images.unsplash.com/photo-1549060279-7e168fcee0c2?auto=format&fit=crop&w=1200&q=80',
-    linkType: 'events',
-    buttonText: 'Join Challenge',
-    badgeColor: 'from-emerald-500 to-teal-500',
-    active: true,
-    order: 4,
-    createdAt: new Date().toISOString()
-  }
-];
+// Never auto-seed hardcoded demo banners when empty.
+export const INITIAL_DEFAULT_BANNERS: PromoBanner[] = [];
 
 export interface StoredBannerRecord extends PromoBanner {
   mediaDataUrl?: string;
@@ -122,26 +66,33 @@ export async function getStoredBanners(): Promise<PromoBanner[]> {
     });
 
     if (records && records.length > 0) {
-      // Resolve playback URLs
-      const resolved = records.map((record) => {
-        let finalMediaUrl = record.mediaUrl;
-        if (record.mediaBlob instanceof Blob) {
-          if (!objectUrlRegistry.has(record.id)) {
-            objectUrlRegistry.set(record.id, URL.createObjectURL(record.mediaBlob));
+      // Resolve playback URLs and exclude soft-deleted or legacy auto-seeded default slides
+      const resolved = records
+        .filter((record: any) => (
+          record &&
+          record.isDeletedByAdmin !== true &&
+          record.deleted !== true &&
+          !String(record.id || '').startsWith('default_')
+        ))
+        .map((record) => {
+          let finalMediaUrl = record.mediaUrl;
+          if (record.mediaBlob instanceof Blob) {
+            if (!objectUrlRegistry.has(record.id)) {
+              objectUrlRegistry.set(record.id, URL.createObjectURL(record.mediaBlob));
+            }
+            finalMediaUrl = objectUrlRegistry.get(record.id)!;
+          } else if (record.mediaDataUrl) {
+            finalMediaUrl = record.mediaDataUrl;
           }
-          finalMediaUrl = objectUrlRegistry.get(record.id)!;
-        } else if (record.mediaDataUrl) {
-          finalMediaUrl = record.mediaDataUrl;
-        }
-        return {
-          ...record,
-          mediaUrl: finalMediaUrl || record.mediaUrl
-        };
-      });
+          return {
+            ...record,
+            mediaUrl: finalMediaUrl || record.mediaUrl
+          };
+        });
 
-      resolved.sort((a, b) => (a.order || 0) - (b.order || 0));
+      resolved.sort((a: any, b: any) => (a.displayOrder ?? a.order ?? 9999) - (b.displayOrder ?? b.order ?? 9999));
 
-      // Sync metadata to localStorage
+      // Sync clean metadata to localStorage
       try {
         const metadata = resolved.map(({ mediaBlob, ...rest }) => rest);
         localStorage.setItem(BANNER_METADATA_STORAGE_KEY, JSON.stringify(metadata));
@@ -158,26 +109,17 @@ export async function getStoredBanners(): Promise<PromoBanner[]> {
     const cached = localStorage.getItem(BANNER_METADATA_STORAGE_KEY);
     if (cached) {
       const parsed = JSON.parse(cached);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        parsed.sort((a, b) => (a.order || 0) - (b.order || 0));
-        return parsed;
+      if (Array.isArray(parsed)) {
+        const clean = parsed
+          .filter((b: any) => b && b.isDeletedByAdmin !== true && b.deleted !== true && !String(b.id || '').startsWith('default_'))
+          .sort((a: any, b: any) => (a.displayOrder ?? a.order ?? 9999) - (b.displayOrder ?? b.order ?? 9999));
+        return clean;
       }
     }
   } catch {}
 
-  // Initial Seed: Save default curated banners into IndexedDB & localStorage
-  try {
-    const db = await openBannerDb();
-    const tx = db.transaction(BANNER_STORE_NAME, 'readwrite');
-    const store = tx.objectStore(BANNER_STORE_NAME);
-    INITIAL_DEFAULT_BANNERS.forEach((b) => store.put(b));
-  } catch {}
-
-  try {
-    localStorage.setItem(BANNER_METADATA_STORAGE_KEY, JSON.stringify(INITIAL_DEFAULT_BANNERS));
-  } catch {}
-
-  return INITIAL_DEFAULT_BANNERS;
+  // Never seed hardcoded or demo banners when empty.
+  return [];
 }
 
 /**
@@ -403,4 +345,43 @@ export async function updateStoredBannerOrder(bannerId: string, newOrder: number
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('tf:banners_updated', { detail: { id: bannerId, order: newOrder } }));
   }
+}
+
+/**
+ * Replaces local IndexedDB and localStorage banner caches strictly with the current
+ * Cloud Firestore snapshot (including empty arrays when all banners are deleted).
+ */
+export async function replaceStoredBannersCache(banners: PromoBanner[]): Promise<void> {
+  const cleanList = (Array.isArray(banners) ? banners : [])
+    .filter((b: any) => b && b.isDeletedByAdmin !== true && b.deleted !== true)
+    .sort((a: any, b: any) => (a.displayOrder ?? a.order ?? 9999) - (b.displayOrder ?? b.order ?? 9999));
+
+  try {
+    const db = await openBannerDb();
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(BANNER_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(BANNER_STORE_NAME);
+      const clearReq = store.clear();
+      clearReq.onsuccess = () => {
+        cleanList.forEach((item) => {
+          try {
+            store.put({
+              ...item,
+              order: item.displayOrder ?? item.order ?? 0,
+              displayOrder: item.displayOrder ?? item.order ?? 0
+            });
+          } catch {}
+        });
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch (err) {
+    console.warn('[BannerStorage] Cache replace notice:', err);
+  }
+
+  try {
+    localStorage.setItem(BANNER_METADATA_STORAGE_KEY, JSON.stringify(cleanList));
+    localStorage.removeItem('tf_cache_v2_promo_banners');
+  } catch {}
 }

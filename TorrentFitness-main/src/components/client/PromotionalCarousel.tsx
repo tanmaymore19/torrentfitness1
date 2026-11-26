@@ -1,78 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, doc, setDoc, query, limit, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot, query, limit } from 'firebase/firestore';
 import { PromoBanner } from '../../types';
-import { getCachedData, setCachedData, optimizeImageUrl } from '../../services/cacheService';
-import { getStoredBanners } from '../../services/bannerStorageService';
+import { getCachedData, setCachedData } from '../../services/cacheService';
+import { getStoredBanners, replaceStoredBannersCache } from '../../services/bannerStorageService';
 import { ChevronLeft, ChevronRight, ArrowRight, Play, Sparkles, ImageOff } from 'lucide-react';
 
 interface PromotionalCarouselProps {
   onNavigateTab: (tab: 'home' | 'workouts' | 'qr' | 'pt' | 'analysis' | 'events' | 'plans' | 'profile') => void;
 }
 
-// Curated initial seed banners with high-definition fitness imagery
-export const DEFAULT_PROMO_BANNERS: Omit<PromoBanner, 'id'>[] = [
-  {
-    title: 'New Year Revolution: 40% OFF',
-    subtitle: 'Annual Platinum All-Access pass with unlimited steam & group classes.',
-    tag: 'MEGA OFFER',
-    mediaType: 'image',
-    mediaUrl: 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&w=1200&q=80',
-    linkType: 'plans',
-    buttonText: 'View Discount Plans',
-    badgeColor: 'from-amber-500 to-orange-500',
-    active: true,
-    order: 1,
-    createdAt: new Date().toISOString()
-  },
-  {
-    title: 'Transform with Elite Personal Trainers',
-    subtitle: '1-on-1 personalized biomechanics, custom macros & weekly check-ins.',
-    tag: 'CERTIFIED COACHES',
-    mediaType: 'image',
-    mediaUrl: 'https://images.unsplash.com/photo-1571019614242-c5c5dee9f50b?auto=format&fit=crop&w=1200&q=80',
-    linkType: 'pt',
-    buttonText: 'Find Your Coach',
-    badgeColor: 'from-indigo-500 to-purple-500',
-    active: true,
-    order: 2,
-    createdAt: new Date().toISOString()
-  },
-  {
-    title: 'Master Your Form & Exercise Library',
-    subtitle: 'Explore 50+ muscle-specific workouts with rep tempos and form guides.',
-    tag: 'WORKOUT HUB',
-    mediaType: 'image',
-    mediaUrl: 'https://images.unsplash.com/photo-1517838277536-f5f99be501cd?auto=format&fit=crop&w=1200&q=80',
-    linkType: 'workouts',
-    buttonText: 'Browse Exercises',
-    badgeColor: 'from-sky-500 to-blue-600',
-    active: true,
-    order: 3,
-    createdAt: new Date().toISOString()
-  },
-  {
-    title: 'Torrent 30-Day Summer Shred',
-    subtitle: 'Compete with gym members, log attendance streaks and win cash prizes.',
-    tag: 'CHALLENGE',
-    mediaType: 'image',
-    mediaUrl: 'https://images.unsplash.com/photo-1549060279-7e168fcee0c2?auto=format&fit=crop&w=1200&q=80',
-    linkType: 'events',
-    buttonText: 'Join Challenge',
-    badgeColor: 'from-emerald-500 to-teal-500',
-    active: true,
-    order: 4,
-    createdAt: new Date().toISOString()
-  }
-];
+// Never re-seed hardcoded demo banners.
+export const DEFAULT_PROMO_BANNERS: Omit<PromoBanner, 'id'>[] = [];
 
 export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavigateTab }) => {
-  const [banners, setBanners] = useState<PromoBanner[]>(() =>
-    getCachedData<PromoBanner[]>(
-      'promo_banners',
-      DEFAULT_PROMO_BANNERS.map((b, i) => ({ id: `default_${i}`, ...b }))
-    )
-  );
+  const [banners, setBanners] = useState<PromoBanner[]>(() => {
+    const cached = getCachedData<PromoBanner[]>('promo_banners_live_v2', []);
+    if (!Array.isArray(cached)) return [];
+    return cached
+      .filter((b: any) => b && b.isDeletedByAdmin !== true && b.deleted !== true && b.active !== false && b.isActive !== false)
+      .sort((a: any, b: any) => (a.displayOrder ?? a.order ?? 9999) - (b.displayOrder ?? b.order ?? 9999));
+  });
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
@@ -84,21 +32,25 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
   const touchEndXRef = useRef<number | null>(null);
   const isDraggingRef = useRef<boolean>(false);
 
-  // Load banners persistently from IndexedDB and listen for live updates
+  // Listen to Cloud Firestore promotional_banners as single source of truth; use IndexedDB only as fast pre-hydration cache.
   useEffect(() => {
     let isMounted = true;
+    let hasFirestoreSynced = false;
+
+    try {
+      localStorage.removeItem('tf_cache_v2_promo_banners');
+    } catch {}
 
     const loadIndexedDbBanners = async () => {
+      if (hasFirestoreSynced) return;
       try {
         const stored = await getStoredBanners();
-        if (isMounted && stored && stored.length > 0) {
-          const activeList = stored
-            .filter((b) => b.active !== false && (b as any).isActive !== false)
-            .sort((a, b) => (a.order || 0) - (b.order || 0));
-          if (activeList.length > 0) {
-            setBanners(activeList);
-            setCachedData('promo_banners', activeList);
-          }
+        if (isMounted && !hasFirestoreSynced) {
+          const activeList = (stored || [])
+            .filter((b: any) => b && b.isDeletedByAdmin !== true && b.deleted !== true && b.active !== false && b.isActive !== false)
+            .sort((a: any, b: any) => (a.displayOrder ?? a.order ?? 9999) - (b.displayOrder ?? b.order ?? 9999));
+          setBanners(activeList);
+          setCachedData('promo_banners_live_v2', activeList);
         }
       } catch (e) {
         console.warn('Error loading stored banners:', e);
@@ -107,44 +59,30 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
 
     loadIndexedDbBanners();
 
-    const handleUpdate = () => {
-      loadIndexedDbBanners();
-    };
-    window.addEventListener('tf:banners_updated', handleUpdate);
-    window.addEventListener('storage', handleUpdate);
-
-    // Secondary Firestore listener
-    const qBanners = query(collection(db, 'promoBanners'), limit(30));
+    const qBanners = query(collection(db, 'promotional_banners'), limit(50));
     const unsub = onSnapshot(
       qBanners,
       (snap) => {
-        if (!snap.empty && isMounted) {
-          const list = snap.docs
-            .map((d) => ({ id: d.id, ...d.data() } as PromoBanner))
-            .filter((b: any) => b.active !== false && b.isActive !== false)
-            .sort((a, b) => (a.order || 0) - (b.order || 0));
-          if (list.length > 0) {
-            setBanners((prev) => {
-              const map = new Map<string, PromoBanner>();
-              list.forEach((b) => map.set(b.id, b));
-              // Retain local IndexedDB media blobs/URLs if present
-              prev.forEach((b) => {
-                if (b.mediaUrl?.startsWith('blob:') || b.mediaUrl?.startsWith('data:')) {
-                  map.set(b.id, b);
-                }
-              });
-              return Array.from(map.values()).sort((a, b) => (a.order || 0) - (b.order || 0));
-            });
-          }
-        }
+        if (!isMounted) return;
+        hasFirestoreSynced = true;
+
+        const allDocs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as PromoBanner));
+        const nonDeletedDocs = allDocs
+          .filter((b: any) => b && b.isDeletedByAdmin !== true && b.deleted !== true)
+          .sort((a: any, b: any) => (a.displayOrder ?? a.order ?? 9999) - (b.displayOrder ?? b.order ?? 9999));
+        const activeList = nonDeletedDocs.filter(
+          (b: any) => b.isActive !== false && b.active !== false
+        );
+
+        setBanners(activeList);
+        setCachedData('promo_banners_live_v2', activeList);
+        void replaceStoredBannersCache(nonDeletedDocs);
       },
-      (err) => console.warn('PromoBanners listener note:', err)
+      (err) => console.warn('PromotionalBanners listener note:', err)
     );
 
     return () => {
       isMounted = false;
-      window.removeEventListener('tf:banners_updated', handleUpdate);
-      window.removeEventListener('storage', handleUpdate);
       unsub();
     };
   }, []);
@@ -161,14 +99,14 @@ export const PromotionalCarousel: React.FC<PromotionalCarouselProps> = ({ onNavi
   };
 
   // Use local fallback if banners not yet retrieved or all inactive; filter out empty/broken media
-  const activeBanners: PromoBanner[] = (
-    banners.length > 0
-      ? banners
-      : DEFAULT_PROMO_BANNERS.map((b, i) => ({ id: `default_${i}`, ...b }))
-  ).filter((b: any) => {
-    const url = getBannerUrl(b);
-    return Boolean(url && !failedImages[b.id]);
-  });
+  const activeBanners: PromoBanner[] = banners
+    .filter((b: any) => {
+      if (!b || b.isDeletedByAdmin === true || b.deleted === true) return false;
+      if (b.active === false || b.isActive === false) return false;
+      const url = getBannerUrl(b);
+      return Boolean(url && !failedImages[b.id]);
+    })
+    .sort((a: any, b: any) => (a.displayOrder ?? a.order ?? 9999) - (b.displayOrder ?? b.order ?? 9999));
 
   // Keep index bounded
   useEffect(() => {

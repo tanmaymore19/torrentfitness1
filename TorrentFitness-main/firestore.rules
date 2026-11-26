@@ -284,6 +284,10 @@ service cloud.firestore {
       allow read, write, delete: if true;
     }
 
+    match /promotional_banners/{bannerId} {
+      allow read, write, delete: if true;
+    }
+
     match /gymPhotos/{photoId} {
       allow read, write: if true;
     }

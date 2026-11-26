@@ -6,16 +6,20 @@ import {
   doc,
   setDoc,
   deleteDoc,
-  updateDoc
+  updateDoc,
+  query,
+  limit,
+  serverTimestamp
 } from 'firebase/firestore';
 import { PromoBanner } from '../../types';
-import { DEFAULT_PROMO_BANNERS, PromotionalCarousel } from '../client/PromotionalCarousel';
+import { PromotionalCarousel } from '../client/PromotionalCarousel';
 import {
   getStoredBanners,
   saveStoredBanner,
   deleteStoredBanner,
   toggleStoredBannerActive,
-  updateStoredBannerOrder
+  updateStoredBannerOrder,
+  replaceStoredBannersCache
 } from '../../services/bannerStorageService';
 import { GlobalDeleteConfirmModal } from '../common/GlobalDeleteConfirmModal';
 import { MediaUploadAdjustModal, MediaUploadResult } from '../common/MediaUploadAdjustModal';
@@ -30,7 +34,6 @@ import {
   Image as ImageIcon,
   Video,
   Upload,
-  Sparkles,
   Check,
   X,
   Layers,
@@ -41,49 +44,6 @@ import {
 import { uploadMediaOrDataUrl, uploadBannerImage, uploadBannerVideo } from '../../services/mediaUploadService';
 import { compressImageToDataUrl } from '../../utils/imageCompressor';
 import { GymPhoto, DEFAULT_GYM_PHOTOS } from '../client/GymPhotoGallery';
-
-const PRESET_BANNERS = [
-  {
-    title: 'Torrent 30-Day Summer Shred',
-    subtitle: 'Compete with gym members, log attendance streaks and win cash prizes.',
-    tag: 'CHALLENGE',
-    mediaType: 'image' as const,
-    mediaUrl: 'https://images.unsplash.com/photo-1549060279-7e168fcee0c2?auto=format&fit=crop&w=1200&q=80',
-    linkType: 'events' as const,
-    buttonText: 'Join Challenge',
-    badgeColor: 'from-emerald-500 to-teal-500'
-  },
-  {
-    title: 'Summer Shred Bootcamp: 30% Off',
-    subtitle: 'High energy fat-loss classes with coach led accountability.',
-    tag: 'OFFER',
-    mediaType: 'image' as const,
-    mediaUrl: 'https://images.unsplash.com/photo-1518611012118-696072aa579a?auto=format&fit=crop&w=1200&q=80',
-    linkType: 'plans' as const,
-    buttonText: 'View Plans',
-    badgeColor: 'from-amber-500 to-orange-500'
-  },
-  {
-    title: 'Transform with Elite Personal Trainers',
-    subtitle: 'Certified trainers with custom nutritional macro plans.',
-    tag: 'COACHING',
-    mediaType: 'image' as const,
-    mediaUrl: 'https://images.unsplash.com/photo-1571019614242-c5c5dee9f50b?auto=format&fit=crop&w=1200&q=80',
-    linkType: 'pt' as const,
-    buttonText: 'Book PT Coach',
-    badgeColor: 'from-indigo-500 to-purple-500'
-  },
-  {
-    title: 'Gym Floor HIIT Sprint Highlight',
-    subtitle: 'Experience our turf track & heart-rate paced cardio zone.',
-    tag: 'VIDEO CLIP',
-    mediaType: 'video' as const,
-    mediaUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-    linkType: 'workouts' as const,
-    buttonText: 'Watch & Train',
-    badgeColor: 'from-rose-500 to-pink-500'
-  }
-];
 
 const QUICK_TAGS = ['CHALLENGE', 'OFFER', 'MEGA OFFER', 'WORKOUT HUB', 'COACHING', 'NEW EVENT'];
 const GYM_PHOTO_CATEGORIES = ['Free Weights', 'Cardio Zone', 'Women Studio', 'Recovery & Spa', 'Floor Arena'];
@@ -138,14 +98,20 @@ export const PromoBannerManager: React.FC = () => {
     setTimeout(() => setStatusMessage(null), 4000);
   };
 
-  // Subscribe to persistent IndexedDB banners & live updates
+  // Subscribe to Cloud Firestore promotional_banners as single source of truth; use IndexedDB only as initial cache.
   useEffect(() => {
     let isMounted = true;
+    let hasFirestoreSynced = false;
+
     const loadBanners = async () => {
+      if (hasFirestoreSynced) return;
       try {
         const stored = await getStoredBanners();
-        if (isMounted && stored && stored.length > 0) {
-          setBanners(stored);
+        if (isMounted && !hasFirestoreSynced) {
+          const cleanStored = (stored || [])
+            .filter((b: any) => b && b.isDeletedByAdmin !== true && b.deleted !== true)
+            .sort((a: any, b: any) => (a.displayOrder ?? a.order ?? 9999) - (b.displayOrder ?? b.order ?? 9999));
+          setBanners(cleanStored);
         }
       } catch (err) {
         console.warn('Load stored banners note:', err);
@@ -154,35 +120,24 @@ export const PromoBannerManager: React.FC = () => {
 
     loadBanners();
 
-    const handleEvent = () => {
-      loadBanners();
-    };
-    window.addEventListener('tf:banners_updated', handleEvent);
-
     const unsub = onSnapshot(
-      collection(db, 'promoBanners'),
+      query(collection(db, 'promotional_banners'), limit(50)),
       (snap) => {
-        if (!snap.empty && isMounted) {
-          const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as PromoBanner));
-          list.sort((a, b) => (a.order || 0) - (b.order || 0));
-          setBanners((prev) => {
-            const map = new Map<string, PromoBanner>();
-            list.forEach(b => map.set(b.id, b));
-            prev.forEach(b => {
-              if (b.mediaUrl?.startsWith('blob:') || b.mediaUrl?.startsWith('data:')) {
-                map.set(b.id, b);
-              }
-            });
-            return Array.from(map.values()).sort((a, b) => (a.order || 0) - (b.order || 0));
-          });
-        }
+        if (!isMounted) return;
+        hasFirestoreSynced = true;
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as PromoBanner))
+          .filter((b: any) => b && b.isDeletedByAdmin !== true && b.deleted !== true)
+          .sort((a: any, b: any) => (a.displayOrder ?? a.order ?? 9999) - (b.displayOrder ?? b.order ?? 9999));
+
+        setBanners(list);
+        void replaceStoredBannersCache(list);
       },
       (err) => console.warn('PromoBannerManager listener note:', err)
     );
 
     return () => {
       isMounted = false;
-      window.removeEventListener('tf:banners_updated', handleEvent);
       unsub();
     };
   }, []);
@@ -212,6 +167,9 @@ export const PromoBannerManager: React.FC = () => {
     setTag('CHALLENGE');
     setMediaType('image');
     setMediaUrl('');
+    setSelectedMediaFile(null);
+    setUploadProgress(0);
+    setUploadStatusText('');
     setLinkType('plans');
     setLinkTarget('');
     setButtonText('Explore Now');
@@ -243,11 +201,12 @@ export const PromoBannerManager: React.FC = () => {
     setTag(b.tag || 'CHALLENGE');
     setMediaType((b.mediaType || (b as any).type || 'image') as 'image' | 'video');
     setMediaUrl(b.mediaUrl || (b as any).imageUrl || (b as any).videoUrl || (b as any).url || (b as any).src || '');
+    setSelectedMediaFile(null);
     setLinkType(b.linkType || 'plans');
     setLinkTarget(b.linkTarget || '');
     setButtonText(b.buttonText || 'Explore Now');
     setBadgeColor(b.badgeColor || 'from-emerald-500 to-teal-500');
-    setActive(b.active !== false);
+    setActive(b.active !== false && b.isActive !== false);
     setImageFocalAlign(b.imageFocalAlign || 'object-center');
     setImageFitMode(b.imageFitMode || 'object-cover');
     setIsModalOpen(true);
@@ -274,22 +233,45 @@ export const PromoBannerManager: React.FC = () => {
 
     const isVideo = file.type.startsWith('video/') || Boolean(file.name.match(/\.(mp4|webm|mov|m4v)$/i));
     setIsUploadingMedia(true);
-    setUploadProgress(40);
+    setUploadProgress(15);
     setMediaType(isVideo ? 'video' : 'image');
-    setUploadStatusText(isVideo ? 'Loading video clip into persistent storage...' : 'Loading image into persistent storage...');
+    setUploadStatusText(
+      isVideo
+        ? 'Uploading video to Firebase Storage...'
+        : 'Compressing banner image cleanly (< 450KB)...'
+    );
 
     try {
-      setSelectedMediaFile(file);
-      const objectUrl = URL.createObjectURL(file);
-      setMediaUrl(objectUrl);
-      setUploadProgress(100);
-      showNotice(`✓ ${isVideo ? 'Video' : 'Image'} file ready and attached! Save banner to lock into persistent storage.`);
+      setSelectedMediaFile(null);
+
+      if (isVideo) {
+        const downloadUrl = await uploadBannerVideo(file, (pct) => {
+          setUploadProgress(pct);
+          setUploadStatusText(`Uploading video to Storage... ${pct}%`);
+        });
+        setMediaUrl(downloadUrl);
+        setUploadProgress(100);
+        showNotice('✓ Video uploaded to cloud storage! Click Save Banner to publish live.');
+      } else {
+        setUploadProgress(45);
+        let compressedDataUrl = await compressImageToDataUrl(file, 1200, 0.78);
+        if (compressedDataUrl.length > 450000) {
+          compressedDataUrl = await compressImageToDataUrl(compressedDataUrl, 900, 0.65);
+        }
+        if (!compressedDataUrl || compressedDataUrl.startsWith('blob:') || compressedDataUrl.length > 450000) {
+          throw new Error('Compressed image exceeded 450KB Firestore document limit. Try a smaller image.');
+        }
+        setMediaUrl(compressedDataUrl);
+        setUploadProgress(100);
+        showNotice('✓ Image compressed & attached! Click Save Banner to publish live.');
+      }
     } catch (err: any) {
-      console.error('File load error:', err);
-      showNotice('Failed to load media file: ' + (err.message || 'Please check file format'));
+      console.error('Banner media upload error:', err);
+      showNotice(err?.message || 'Failed to upload banner media. Try a smaller file or paste a direct URL.');
     } finally {
       setIsUploadingMedia(false);
       setUploadProgress(0);
+      setUploadStatusText('');
     }
     e.target.value = '';
   };
@@ -317,88 +299,89 @@ export const PromoBannerManager: React.FC = () => {
     e.target.value = '';
   };
 
-  const handleApplyPreset = (preset: typeof PRESET_BANNERS[0]) => {
-    setTitle(preset.title);
-    setSubtitle(preset.subtitle);
-    setTag(preset.tag);
-    setMediaType(preset.mediaType);
-    setMediaUrl(preset.mediaUrl);
-    setLinkType(preset.linkType);
-    setButtonText(preset.buttonText);
-    setBadgeColor(preset.badgeColor);
-  };
-
   const handleSaveBanner = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
       showNotice('Banner title is required.');
       return;
     }
-    if (!mediaUrl.trim() && !selectedMediaFile) {
+    if (!mediaUrl.trim()) {
       showNotice('Banner image or video media URL is required.');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      const bannerId = editingBanner ? editingBanner.id : `banner_${Date.now()}`;
-      const order = editingBanner ? editingBanner.order : banners.length + 1;
+      let finalMediaUrl = mediaUrl.trim();
+      if (finalMediaUrl.startsWith('blob:')) {
+        if (mediaType === 'image') {
+          finalMediaUrl = await compressImageToDataUrl(finalMediaUrl, 1200, 0.78);
+        }
+        if (finalMediaUrl.startsWith('blob:')) {
+          throw new Error('Temporary browser URL cannot sync across clients. Please re-upload media or paste a valid URL.');
+        }
+      }
 
-      const bannerData: any = {
+      if (mediaType === 'image' && finalMediaUrl.startsWith('data:') && finalMediaUrl.length > 450000) {
+        finalMediaUrl = await compressImageToDataUrl(finalMediaUrl, 1200, 0.78);
+        if (finalMediaUrl.length > 450000) {
+          throw new Error('Compressed banner image exceeds 450KB limit. Please choose a smaller image.');
+        }
+      }
+
+      const bannerId = editingBanner ? editingBanner.id : `banner_${Date.now()}`;
+      const displayOrder = editingBanner
+        ? (editingBanner.displayOrder ?? editingBanner.order ?? 1)
+        : banners.length > 0
+          ? Math.max(...banners.map((b) => b.displayOrder ?? b.order ?? 0)) + 1
+          : 1;
+      const nowIso = new Date().toISOString();
+
+      const firestorePayload: Record<string, any> = {
         id: bannerId,
         title: title.trim(),
         subtitle: subtitle.trim(),
         tag: tag.trim().toUpperCase(),
         mediaType,
-        type: mediaType,
-        mediaUrl: mediaUrl.trim(),
-        imageUrl: mediaUrl.trim(),
-        videoUrl: mediaUrl.trim(),
-        url: mediaUrl.trim(),
-        src: mediaUrl.trim(),
+        mediaUrl: finalMediaUrl,
         linkType,
         linkTarget: linkTarget.trim(),
         buttonText: buttonText.trim() || 'Explore Now',
         badgeColor,
         active,
         isActive: active,
-        order,
-        imageFocalAlign: mediaType === 'image' ? imageFocalAlign : undefined,
-        imageFitMode: mediaType === 'image' ? imageFitMode : undefined,
-        createdAt: editingBanner?.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        order: displayOrder,
+        displayOrder,
+        isDeletedByAdmin: false,
+        deleted: false,
+        imageFocalAlign: mediaType === 'image' ? imageFocalAlign : 'object-center',
+        imageFitMode: mediaType === 'image' ? imageFitMode : 'object-cover',
+        createdAt: editingBanner?.createdAt || serverTimestamp(),
+        createdAtIso: editingBanner?.createdAtIso || nowIso,
+        updatedAt: serverTimestamp()
       };
 
-      // 1. Save to persistent browser IndexedDB (torrent_banners_db) + localStorage metadata
-      const saved = await saveStoredBanner(bannerData, selectedMediaFile || undefined);
+      // 1. Write directly to Cloud Firestore promotional_banners as single source of truth
+      await setDoc(doc(db, 'promotional_banners', bannerId), firestorePayload, { merge: true });
 
-      // 2. Best-effort lightweight Firestore sync (doesn't block or fail on storage limits)
-      try {
-        const firestorePayload = {
-          id: bannerId,
-          title: bannerData.title,
-          subtitle: bannerData.subtitle,
-          tag: bannerData.tag,
-          mediaType: bannerData.mediaType,
-          mediaUrl: saved.mediaUrl?.startsWith('blob:') ? (editingBanner?.mediaUrl || '') : saved.mediaUrl,
-          linkType: bannerData.linkType,
-          linkTarget: bannerData.linkTarget,
-          buttonText: bannerData.buttonText,
-          badgeColor: bannerData.badgeColor,
-          active: bannerData.active,
-          order: bannerData.order,
-          updatedAt: new Date().toISOString()
-        };
-        await setDoc(doc(db, 'promoBanners', bannerId), firestorePayload, { merge: true }).catch(() => {});
-        await setDoc(doc(db, 'banners', bannerId), firestorePayload, { merge: true }).catch(() => {});
-      } catch {}
+      // 2. Mirror locally for instant cache feedback without re-seeding
+      const localBanner: PromoBanner = {
+        ...(firestorePayload as PromoBanner),
+        createdAt: editingBanner?.createdAtIso || (typeof editingBanner?.createdAt === 'string' ? editingBanner.createdAt : nowIso),
+        updatedAt: nowIso
+      };
+      await saveStoredBanner(localBanner).catch(() => {});
 
-      const updatedList = await getStoredBanners();
-      setBanners(updatedList);
+      setBanners((prev) => {
+        const next = editingBanner
+          ? prev.map((b) => (b.id === bannerId ? localBanner : b))
+          : [...prev, localBanner];
+        return next.sort((a, b) => (a.displayOrder ?? a.order ?? 9999) - (b.displayOrder ?? b.order ?? 9999));
+      });
 
       setIsModalOpen(false);
       resetForm();
-      showNotice(editingBanner ? '✓ Banner updated & permanently saved!' : '✓ New banner saved permanently into persistent storage!');
+      showNotice(editingBanner ? '✓ Banner updated & synced to Cloud Firestore!' : '✓ New banner published & synced across all clients!');
     } catch (err: any) {
       console.error('Failed to save banner:', err);
       showNotice(`Failed to save banner: ${err.message || 'Please check attachment'}`);
@@ -476,13 +459,31 @@ export const PromoBannerManager: React.FC = () => {
 
   const confirmDeleteBanner = async () => {
     if (!bannerToDelete) return;
+    const targetId = bannerToDelete.id;
+    const targetTitle = bannerToDelete.title;
     try {
-      await deleteStoredBanner(bannerToDelete.id);
-      await deleteDoc(doc(db, 'promoBanners', bannerToDelete.id)).catch(() => {});
-      await deleteDoc(doc(db, 'banners', bannerToDelete.id)).catch(() => {});
-      const updated = await getStoredBanners();
-      setBanners(updated);
-      showNotice(`✓ Banner "${bannerToDelete.title}" permanently deleted.`);
+      // Soft-lock permanent deletion in Firestore so deleted demo/admin banners never return
+      await setDoc(
+        doc(db, 'promotional_banners', targetId),
+        {
+          id: targetId,
+          isDeletedByAdmin: true,
+          deleted: true,
+          isActive: false,
+          active: false,
+          deletedAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        },
+        { merge: true }
+      );
+      await deleteDoc(doc(db, 'promoBanners', targetId)).catch(() => {});
+      await deleteDoc(doc(db, 'banners', targetId)).catch(() => {});
+      await deleteStoredBanner(targetId).catch(() => {});
+
+      const remaining = banners.filter((b) => b.id !== targetId);
+      setBanners(remaining);
+      await replaceStoredBannersCache(remaining);
+      showNotice(`✓ Banner "${targetTitle}" permanently deleted.`);
     } catch (err: any) {
       showNotice('Error deleting banner: ' + err.message);
     } finally {
@@ -492,20 +493,28 @@ export const PromoBannerManager: React.FC = () => {
 
   const handleToggleActive = async (banner: PromoBanner) => {
     try {
-      const nextState = banner.active === false || banner.isActive === false ? true : false;
-      await toggleStoredBannerActive(banner.id, nextState);
-      const updateData = {
-        active: nextState,
-        isActive: nextState,
-        updatedAt: new Date().toISOString()
-      };
-      await updateDoc(doc(db, 'promoBanners', banner.id), updateData).catch(() => {});
-      await updateDoc(doc(db, 'banners', banner.id), updateData).catch(() => {});
-      const updated = await getStoredBanners();
+      const currentlyActive = banner.active !== false && banner.isActive !== false;
+      const nextState = !currentlyActive;
+      await setDoc(
+        doc(db, 'promotional_banners', banner.id),
+        {
+          active: nextState,
+          isActive: nextState,
+          updatedAt: serverTimestamp()
+        },
+        { merge: true }
+      );
+      await toggleStoredBannerActive(banner.id, nextState).catch(() => {});
+
+      const updated = banners.map((b) =>
+        b.id === banner.id ? { ...b, active: nextState, isActive: nextState } : b
+      );
       setBanners(updated);
+      await replaceStoredBannersCache(updated);
       showNotice(nextState ? `"${banner.title}" is now Active on Client Home.` : `"${banner.title}" is now Hidden.`);
     } catch (err: any) {
       console.error('Failed to update status:', err);
+      showNotice('Failed to update banner visibility: ' + (err.message || 'Please retry'));
     }
   };
 
@@ -513,36 +522,39 @@ export const PromoBannerManager: React.FC = () => {
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= banners.length) return;
 
-    const currentBanner = banners[index];
-    const targetBanner = banners[targetIndex];
+    const reordered = [...banners];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIndex, 0, moved);
+
+    const normalized = reordered.map((item, idx) => ({
+      ...item,
+      order: idx + 1,
+      displayOrder: idx + 1
+    }));
 
     try {
-      await updateStoredBannerOrder(currentBanner.id, targetIndex + 1);
-      await updateStoredBannerOrder(targetBanner.id, index + 1);
-      await updateDoc(doc(db, 'promoBanners', currentBanner.id), {
-        order: targetIndex + 1
-      }).catch(() => {});
-      await updateDoc(doc(db, 'promoBanners', targetBanner.id), {
-        order: index + 1
-      }).catch(() => {});
-      const updated = await getStoredBanners();
-      setBanners(updated);
-      showNotice('Slide order updated.');
+      setBanners(normalized);
+      await Promise.all(
+        normalized.map((item) =>
+          Promise.all([
+            setDoc(
+              doc(db, 'promotional_banners', item.id),
+              {
+                order: item.order,
+                displayOrder: item.displayOrder,
+                updatedAt: serverTimestamp()
+              },
+              { merge: true }
+            ),
+            updateStoredBannerOrder(item.id, item.order).catch(() => {})
+          ])
+        )
+      );
+      await replaceStoredBannersCache(normalized);
+      showNotice('Slide order updated & synced.');
     } catch (err: any) {
       console.warn('Reorder failed:', err);
-    }
-  };
-
-  const handleResetToDefaults = async () => {
-    try {
-      for (let i = 0; i < DEFAULT_PROMO_BANNERS.length; i++) {
-        const b = DEFAULT_PROMO_BANNERS[i];
-        const id = `banner_seed_${i + 1}`;
-        await setDoc(doc(db, 'promoBanners', id), { id, ...b, order: i + 1 });
-      }
-      showNotice('Default promotional banners restored & synced!');
-    } catch (e: any) {
-      console.error('Error re-seeding:', e);
+      showNotice('Failed to reorder slides: ' + (err.message || 'Please retry'));
     }
   };
 
@@ -579,15 +591,6 @@ export const PromoBannerManager: React.FC = () => {
               >
                 <Smartphone className="w-3.5 h-3.5" />
                 <span>{showLivePreview ? 'Hide Client Preview' : 'Show Client Preview'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleResetToDefaults}
-                className="px-3.5 py-2 vision-card text-xs font-bold text-slate-700 hover:text-indigo-600 rounded-xl border border-white/90 transition-all flex items-center gap-1.5"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
-                <span>Load Presets</span>
               </button>
 
               <button
@@ -668,7 +671,7 @@ export const PromoBannerManager: React.FC = () => {
               </h3>
             </div>
             <span className="text-[11px] text-slate-500 font-medium">
-              Showing {banners.filter(b => b.active !== false).length} active slides
+              Showing {banners.filter(b => b.active !== false && b.isActive !== false).length} active slides
             </span>
           </div>
           <div className="max-w-md mx-auto">
@@ -687,7 +690,7 @@ export const PromoBannerManager: React.FC = () => {
         <div className="vision-card p-4 rounded-2xl border border-white/90">
           <span className="text-[10px] uppercase font-bold text-slate-500 block">Active Live</span>
           <span className="text-2xl font-black text-emerald-600 mt-1 block">
-            {banners.filter(b => b.active !== false).length}
+            {banners.filter(b => b.active !== false && b.isActive !== false).length}
           </span>
           <span className="text-[10px] text-slate-500 mt-0.5 block">Visible on Client Home</span>
         </div>
@@ -701,7 +704,7 @@ export const PromoBannerManager: React.FC = () => {
         <div className="vision-card p-4 rounded-2xl border border-white/90">
           <span className="text-[10px] uppercase font-bold text-slate-500 block">Hidden / Inactive</span>
           <span className="text-2xl font-black text-amber-600 mt-1 block">
-            {banners.filter(b => b.active === false).length}
+            {banners.filter(b => b.active === false || b.isActive === false).length}
           </span>
           <span className="text-[10px] text-slate-500 mt-0.5 block">Paused from client view</span>
         </div>
@@ -724,7 +727,7 @@ export const PromoBannerManager: React.FC = () => {
             <ImageIcon className="w-8 h-8 text-slate-400 mx-auto" />
             <p className="text-sm font-bold text-slate-700">No promotional banners yet</p>
             <p className="text-xs text-slate-500 max-w-sm mx-auto">
-              Click "Upload / Create Banner" or "Load Presets" to populate the client home screen carousel.
+              Click "Upload / Create Banner" to publish an image or video banner to the client home screen carousel.
             </p>
             <button
               onClick={handleOpenAdd}
@@ -739,7 +742,7 @@ export const PromoBannerManager: React.FC = () => {
               <div
                 key={b.id}
                 className={`p-3.5 sm:p-4 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
-                  b.active !== false
+                  b.active !== false && b.isActive !== false
                     ? 'vision-card border-white/90'
                     : 'bg-slate-100/75 border-dashed border-slate-300 opacity-75'
                 }`}
@@ -797,7 +800,7 @@ export const PromoBannerManager: React.FC = () => {
                       <span>·</span>
                       <span>Target: <strong className="text-indigo-600 capitalize">{b.linkType || 'plans'}</strong></span>
                       <span>·</span>
-                      <span>Status: <strong className={b.active !== false ? 'text-emerald-600' : 'text-amber-600'}>{b.active !== false ? 'Active (Shown)' : 'Inactive (Hidden)'}</strong></span>
+                      <span>Status: <strong className={b.active !== false && b.isActive !== false ? 'text-emerald-600' : 'text-amber-600'}>{b.active !== false && b.isActive !== false ? 'Active (Shown)' : 'Inactive (Hidden)'}</strong></span>
                     </div>
                   </div>
                 </div>
@@ -830,14 +833,14 @@ export const PromoBannerManager: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => handleToggleActive(b)}
-                    title={b.active !== false ? 'Click to Hide from Client Home' : 'Click to Show on Client Home'}
+                    title={b.active !== false && b.isActive !== false ? 'Click to Hide from Client Home' : 'Click to Show on Client Home'}
                     className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 shadow-2xs ${
-                      b.active !== false
+                      b.active !== false && b.isActive !== false
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                         : 'bg-slate-200/80 text-slate-600 border-slate-300 hover:bg-slate-300/80'
                     }`}
                   >
-                    {b.active !== false ? (
+                    {b.active !== false && b.isActive !== false ? (
                       <>
                         <Eye className="w-3.5 h-3.5" />
                         <span>Active</span>
@@ -1038,28 +1041,6 @@ export const PromoBannerManager: React.FC = () => {
                 <X className="w-5 h-5" />
               </button>
             </div>
-
-            {/* Quick Presets Picker */}
-            {!editingBanner && (
-              <div className="p-3 bg-slate-50/90 border border-slate-200/80 rounded-2xl space-y-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-                  Quick High-Definition Templates
-                </span>
-                <div className="grid grid-cols-2 gap-2">
-                  {PRESET_BANNERS.map((preset, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => handleApplyPreset(preset)}
-                      className="p-2 bg-white border border-slate-200/90 rounded-xl text-left hover:border-indigo-500 transition-all text-xs shadow-2xs"
-                    >
-                      <span className="font-bold text-slate-900 block truncate">{preset.title}</span>
-                      <span className="text-[10px] text-indigo-600 font-semibold block truncate">{preset.tag} · {preset.mediaType}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
 
             <form onSubmit={handleSaveBanner} className="space-y-3.5">
               {/* Title & Tag */}
@@ -1590,21 +1571,6 @@ export const PromoBannerManager: React.FC = () => {
         onClose={() => setPhotoToDelete(null)}
         onConfirm={confirmDeletePhoto}
       />
-
-      {/* Media Upload Adjuster Modal for Banners */}
-      {selectedMediaFile && (
-        <MediaUploadAdjustModal
-          file={selectedMediaFile}
-          defaultAspect="16:9"
-          title="Adjust Carousel Media (Image Crop or Video Seeker)"
-          onComplete={(res: MediaUploadResult) => {
-            setMediaType(res.mediaType);
-            setMediaUrl(res.mediaUrl);
-            setSelectedMediaFile(null);
-          }}
-          onCancel={() => setSelectedMediaFile(null)}
-        />
-      )}
 
       {/* Media Upload Adjuster Modal for Gym Facility Photos */}
       {selectedGymPhotoFile && (

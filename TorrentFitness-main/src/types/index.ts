@@ -475,6 +475,7 @@ export interface PromoBanner {
   tag?: string; // e.g. "MEGA OFFER", "HOT DEAL", "NEW CLASS"
   mediaType: 'image' | 'video';
   mediaUrl: string;
+  thumbnailUrl?: string;
   linkType?: 'plans' | 'workouts' | 'pt' | 'analysis' | 'events' | 'custom';
   linkTarget?: string;
   buttonText?: string;
@@ -482,10 +483,15 @@ export interface PromoBanner {
   active: boolean;
   isActive?: boolean;
   order: number;
+  displayOrder?: number;
+  isDeletedByAdmin?: boolean;
+  deleted?: boolean;
+  deletedAt?: any;
   imageFocalAlign?: 'object-top' | 'object-center' | 'object-bottom';
   imageFitMode?: 'object-cover' | 'object-contain';
-  createdAt: string;
-  updatedAt?: string;
+  createdAt: any;
+  createdAtIso?: string;
+  updatedAt?: any;
 }
 
 export interface GymFeedback {
